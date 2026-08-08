@@ -160,18 +160,23 @@ struct MatcherTests {
         #expect(try Matcher(.regexp, "a", "b").inverse().type == .notRegexp)
     }
 
-    @Test("unsupported regexes throw rather than matching incorrectly")
-    func unsupportedRegexThrows() {
-        // ADR-6: silently substituting ICU semantics for RE2 would be both wrong
-        // and a DoS surface, so Phase 1 refuses anything it cannot do exactly.
-        for pattern in ["a.*", "a+", "[abc]", "(a)", "a{2}", "^a$"] {
-            #expect(throws: (any Error).self) {
-                try Matcher(.regexp, "job", pattern)
-            }
+    @Test("real regexes now work, and matching is fully anchored")
+    func realRegexes() throws {
+        // Phase 2 replaced the literal-only stand-in with PromRegex, so these
+        // compile instead of throwing.
+        for pattern in ["a.*", "a+", "[abc]", "(a)", "a{2}", "^a$", "(?i)foo", "\\d+"] {
+            #expect(throws: Never.self, "\(pattern)") { try Matcher(.regexp, "job", pattern) }
         }
-        // Literals and literal alternations are exact, so they are allowed.
-        #expect(throws: Never.self) { try Matcher(.regexp, "job", "abc") }
-        #expect(throws: Never.self) { try Matcher(.regexp, "job", "a|b|c") }
+        // Anchored: Go compiles ^(?s:...)$, so a substring must not match.
+        let m = try Matcher(.regexp, "job", "foo")
+        #expect(m.matches("foo"))
+        #expect(!m.matches("foobar"))
+        // Negation inverts.
+        let n = try Matcher(.notRegexp, "job", "foo")
+        #expect(!n.matches("foo"))
+        #expect(n.matches("foobar"))
+        // Malformed patterns still throw, with Go's message.
+        #expect(throws: (any Error).self) { try Matcher(.regexp, "job", "a**") }
     }
 }
 

@@ -63,6 +63,8 @@ var suites = map[string]func(*emitter){
 	"regex/simplefold":     genSimpleFold,
 	"regex/unicodetable":   genUnicodeTable,
 	"regex/parse":          genRegexParse,
+	"regex/match":          genRegexMatch,
+	"regex/setmatches":     genRegexSetMatches,
 }
 
 func main() {

@@ -68,10 +68,16 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
    `optimizeAlternatingLiterals` returns a matcher but `nil` setMatches, so `foo=~""` falls back to
    matching rather than an index lookup even though the set would be `[""]`.
 
-6. **Regex support is incomplete until Phase 2.** `LiteralOnlyRegexMatcher` handles only literals and
-   literal alternations and **throws** on anything else. This is deliberate: substituting
-   `NSRegularExpression` would silently swap RE2 semantics for backtracking ICU, which diverges on
-   pathological patterns and is a denial-of-service surface on a user-facing query API. See ADR-6.
+6. **`FastRegexMatcher.IsOptimized()` is narrower than Go's.** Go returns true when *any*
+   optimisation applied — a set match, a `stringMatcher`, or a prefix/suffix/contains hint. This port
+   implements only the set-match path, because the ~600-line `StringMatcher` hierarchy
+   (`containsStringMatcher`, `literalPrefix*`, `zeroOrOneCharacter*`, …) exists purely to avoid
+   running the regex engine: Go falls back to `m.re.MatchString` whenever those do not apply, so
+   always running the engine gives exactly the semantics they preserve, just slower.
+
+   Verified safe: `IsOptimized`/`IsRegexOptimized` is consumed **nowhere** in the Prometheus server —
+   only by upstream's own `matcher_test.go`. `SetMatches`, which *is* load-bearing (TSDB turns a regex
+   matcher into direct index lookups with it), matches Go exactly and is asserted.
 
 ## Not ported
 
