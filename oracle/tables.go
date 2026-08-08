@@ -10,6 +10,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"math"
+	"os"
+
+	"github.com/prometheus/prometheus/model/histogram"
 	"sort"
 	"strconv"
 	"unicode"
@@ -17,10 +21,11 @@ import (
 )
 
 var tables = map[string]func(*bufio.Writer){
-	"GoIsPrint":     genIsPrintTable,
-	"SimpleFold":    genSimpleFoldTable,
-	"UnicodeGroups": genUnicodeGroupsTable,
-	"RegexGroups":   genRegexGroupsTable,
+	"GoIsPrint":       genIsPrintTable,
+	"SimpleFold":      genSimpleFoldTable,
+	"UnicodeGroups":   genUnicodeGroupsTable,
+	"RegexGroups":     genRegexGroupsTable,
+	"HistogramBounds": genHistogramBoundsTable,
 }
 
 func header(w *bufio.Writer, script, doc string) {
@@ -322,4 +327,56 @@ func canonicalNameGo(name string) string {
 		return name
 	}
 	return string(b)
+}
+
+// ------------------------------------------------------- HistogramBounds
+
+// genHistogramBoundsTable emits Go's `exponentialBounds` — the precalculated
+// bucket bounds in [0.5, 1) for schemas 0 through 8.
+//
+// The table is unexported, so it is recovered through the public bucket iterator
+// instead of transcribed: for idx in [0, 2^schema) the exponent works out to 1,
+// so a bucket's Upper is exactly 2 x bounds[schema][idx]. Emitted as bit patterns
+// so no decimal round-trip can shift a value.
+func genHistogramBoundsTable(w *bufio.Writer) {
+	header(w, "HistogramBounds", `// Mirrors the unexported exponentialBounds table in model/histogram/generic.go.
+// Recovered via the public bucket iterator rather than transcribed: 511 float64
+// literals cannot be hand-copied reliably.
+`)
+	fmt.Fprintf(w, "extension HistogramTables {\n")
+	fmt.Fprintf(w, "    /// Bucket bounds in [0.5, 1) for schemas 0...8, as raw bit patterns.\n")
+	fmt.Fprintf(w, "    static let exponentialBoundBits: [[UInt64]] = [\n")
+	total := 0
+	for schema := int32(0); schema <= 8; schema++ {
+		n := 1 << uint(schema)
+		fmt.Fprintf(w, "        [  // schema %d, %d entries\n", schema, n)
+		for idx := 0; idx < n; idx++ {
+			// One positive bucket at index idx+1 (spans are 1-based offsets from 0).
+			h := &histogram.FloatHistogram{
+				Schema:          schema,
+				PositiveSpans:   []histogram.Span{{Offset: int32(idx), Length: 1}},
+				PositiveBuckets: []float64{1},
+			}
+			it := h.PositiveBucketIterator()
+			if !it.Next() {
+				panic("no bucket")
+			}
+			b := it.At()
+			bound := b.Upper / 2
+			if idx%4 == 0 {
+				fmt.Fprintf(w, "            ")
+			}
+			fmt.Fprintf(w, "0x%016X, ", math.Float64bits(bound))
+			if idx%4 == 3 {
+				fmt.Fprintln(w)
+			}
+			total++
+		}
+		if n%4 != 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "        ],\n")
+	}
+	fmt.Fprintf(w, "    ]\n}\n")
+	fmt.Fprintf(os.Stderr, "HistogramBounds: %d values\n", total)
 }

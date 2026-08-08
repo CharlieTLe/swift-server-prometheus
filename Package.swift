@@ -25,6 +25,7 @@ let package = Package(
         .library(name: "PromMath", targets: ["PromMath"]),
         .library(name: "PromModel", targets: ["PromModel"]),
         .library(name: "PromRegex", targets: ["PromRegex"]),
+        .library(name: "PromHistogram", targets: ["PromHistogram"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
         // The fuzz differ: generates candidate inputs and diffs Swift against the Go oracle.
@@ -41,6 +42,8 @@ let package = Package(
         .target(name: "PromMath", dependencies: ["PromModel"]),
         // Phase 2: a real RE2 in Swift. See docs/DECISIONS.md ADR-6.
         .target(name: "PromRegex", dependencies: ["GoCompat"]),
+        // Phase 3: native histograms. See docs/DECISIONS.md ADR-7.
+        .target(name: "PromHistogram", dependencies: ["PromModel", "PromMath", "GoCompat"]),
         .target(
             name: "PromLabels",
             dependencies: ["PromModel", "PromHash", "PromRegex", "GoCompat"]
@@ -68,6 +71,8 @@ let package = Package(
         .testTarget(name: "PromMathTests", dependencies: ["PromMath", "GoOracleSupport"]),
         .testTarget(name: "PromModelTests", dependencies: ["PromModel", "GoOracleSupport"]),
         .testTarget(name: "PromRegexTests", dependencies: ["PromRegex", "GoOracleSupport"]),
+        .testTarget(
+            name: "PromHistogramTests", dependencies: ["PromHistogram", "GoOracleSupport"]),
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
     ]

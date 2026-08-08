@@ -12,6 +12,7 @@
     "gocompat/varint.jsonl": { "sha256": "8b7ed3ec6628b5fabac4a6e922db8e67e451c6c50afa5577d8ccdd00247f2344", "lines": 3024 },
     "hash/crc32c.jsonl": { "sha256": "5047a31aff7bdeb6c97b7c565e3e55e6eb57e17c8c797a125a2df6d09abb2549", "lines": 2040 },
     "hash/xxhash64.jsonl": { "sha256": "244eb783584ee98ce79891035d7b35cd46c77131b680146bb953ca887594b0e5", "lines": 2040 },
+    "histogram/bounds.jsonl": { "sha256": "082195cef42198afffce0c0419e036be74323e0f5e02c29bf906e57b89cb19b0", "lines": 188 },
     "labels/builder.jsonl": { "sha256": "d1073e64f1bba76d124e42ea6e6ed168cec4f40045f391da033f3339a1071fe9", "lines": 2500 },
     "labels/compare.jsonl": { "sha256": "b5302ba14bd7ea6062ab6d3a4ff74c6511d68afc1dd63acf8bfa6ae65b2396b1", "lines": 3000 },
     "labels/hashnames.jsonl": { "sha256": "0e22c86517246d5e60ae2b00419d02f815c3eca1a729e78bd48b61dbcb2187ee", "lines": 2000 },
