@@ -24,6 +24,7 @@ let package = Package(
         .library(name: "PromHash", targets: ["PromHash"]),
         .library(name: "PromMath", targets: ["PromMath"]),
         .library(name: "PromModel", targets: ["PromModel"]),
+        .library(name: "PromRegex", targets: ["PromRegex"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
         // The fuzz differ: generates candidate inputs and diffs Swift against the Go oracle.
@@ -38,7 +39,12 @@ let package = Package(
         .target(name: "PromModel", dependencies: ["GoCompat"]),
         // Mirrors Go: util/almost imports model/value.
         .target(name: "PromMath", dependencies: ["PromModel"]),
-        .target(name: "PromLabels", dependencies: ["PromModel", "PromHash", "GoCompat"]),
+        // Phase 2: a real RE2 in Swift. See docs/DECISIONS.md ADR-6.
+        .target(name: "PromRegex", dependencies: ["GoCompat"]),
+        .target(
+            name: "PromLabels",
+            dependencies: ["PromModel", "PromHash", "PromRegex", "GoCompat"]
+        ),
 
         // ── Tier 2 ───────────────────────────────────────────────────────────
         .target(name: "PromEncoding", dependencies: ["PromHash", "GoCompat"]),
@@ -46,7 +52,10 @@ let package = Package(
         // ── Tooling ──────────────────────────────────────────────────────────
         .executableTarget(
             name: "promdiff",
-            dependencies: ["GoCompat", "PromHash", "PromLabels", "PromEncoding", "GoOracleSupport"]
+            dependencies: [
+                "GoCompat", "PromHash", "PromLabels", "PromEncoding", "PromRegex",
+                "GoOracleSupport",
+            ]
         ),
 
         // ── Tests ────────────────────────────────────────────────────────────
@@ -58,6 +67,7 @@ let package = Package(
         .testTarget(name: "PromHashTests", dependencies: ["PromHash", "GoOracleSupport"]),
         .testTarget(name: "PromMathTests", dependencies: ["PromMath", "GoOracleSupport"]),
         .testTarget(name: "PromModelTests", dependencies: ["PromModel", "GoOracleSupport"]),
+        .testTarget(name: "PromRegexTests", dependencies: ["PromRegex", "GoOracleSupport"]),
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
     ]

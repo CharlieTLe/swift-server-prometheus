@@ -67,6 +67,29 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "tables":
+		if len(os.Args) != 3 {
+			usage()
+		}
+		fn, ok := tables[os.Args[2]]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown table %q\n", os.Args[2])
+			os.Exit(2)
+		}
+		w := bufio.NewWriterSize(os.Stdout, 1<<20)
+		fn(w)
+		if err := w.Flush(); err != nil {
+			panic(err)
+		}
+	case "table-names":
+		names := make([]string, 0, len(tables))
+		for k := range tables {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			fmt.Println(n)
+		}
 	case "suites":
 		names := make([]string, 0, len(suites))
 		for k := range suites {
@@ -98,6 +121,6 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: promoracle gen <suite> | promoracle suites")
+	fmt.Fprintln(os.Stderr, "usage: promoracle gen <suite> | suites | tables <name> | table-names")
 	os.Exit(2)
 }

@@ -1,18 +1,15 @@
 //===----------------------------------------------------------------------===//
 // GENERATED FILE — DO NOT EDIT.
 //
-// Regenerate with: Scripts/regen-isprint.sh
+// Regenerate with: Scripts/regen-tables.sh
+// Emitted from Go unicode/strconv ground truth by oracle/tables.go.
 //
-// Mirrors Go's strconv.IsPrint (which has the same definition as
-// unicode.IsPrint). Emitted as compressed inclusive ranges by enumerating every
-// valid rune through Go itself, so no table is transcribed by hand.
-//
-// Source of truth: go 1.26.5 (strconv.IsPrint)
+// Mirrors Go's strconv.IsPrint (same definition as unicode.IsPrint), as
+// compressed inclusive rune ranges.
 //===----------------------------------------------------------------------===//
 
 extension GoStrconv {
-    /// Sorted, non-overlapping inclusive ranges of runes for which Go's
-    /// strconv.IsPrint returns true. 711 ranges.
+    /// Sorted, non-overlapping inclusive ranges where strconv.IsPrint is true. 711 ranges.
     static let printableRanges: [(lo: UInt32, hi: UInt32)] = [
         (0x0020, 0x007E), (0x00A1, 0x00AC), (0x00AE, 0x0377), (0x037A, 0x037F), 
         (0x0384, 0x038A), (0x038C, 0x038C), (0x038E, 0x03A1), (0x03A3, 0x052F), 
