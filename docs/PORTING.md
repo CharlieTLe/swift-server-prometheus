@@ -79,6 +79,34 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
    only by upstream's own `matcher_test.go`. `SetMatches`, which *is* load-bearing (TSDB turns a regex
    matcher into direct index lookups with it), matches Go exactly and is asserted.
 
+## Replicated Go quirks
+
+The inverse of the list above: places where Go does something that reads like a bug, and the port
+does it too. Each is pinned by a fixture, so "cleaning it up" fails the build rather than silently
+changing behaviour.
+
+1. **`Histogram.ReduceResolution` clears the side it was reducing when it fails.** `histogram.go:642`
+   assigns `reduceResolution`'s result to the fields *before* testing the error, and the failing call
+   returns `nil, nil`. So a rejected histogram is left with that side emptied — and if the positive
+   side succeeded and the negative side then failed, it is left half-converted with the original
+   schema. Observable, therefore replicated.
+
+2. **The two spans/buckets mismatch messages are not interchangeable.** `reduceResolution` reports
+   `have %d buckets but spans need more` when it runs out mid-span (`generic.go:817`), but
+   `spans need %d buckets, have %d buckets` when the count is wrong after the loop
+   (`generic.go:883`). Same sentinel error, different prefix, different numbers.
+
+3. **A negative running bucket count converts to a huge `uint64`.** `generic.go:202` does `BC(currCount)`,
+   Go's numeric conversion, so an invalid histogram's negative delta comes out of the iterator as
+   `UInt64.max`-ish rather than clamped to 0. Clamping would hide the invalid histogram instead of
+   surfacing it.
+
+4. **`Histogram.customValues` is `[Double]?`, not `[Double]`.** Everywhere else nil and empty are
+   interchangeable — `slices.Equal` and `len` cannot tell them apart, so spans and bucket slices are
+   plain arrays. But `histogram.go:456` tests `CustomValues != nil` to reject custom bounds on an
+   exponential schema, so an *empty non-nil* slice is an error there and nil is not. Collapsing the
+   two would be a silent divergence.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

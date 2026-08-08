@@ -20,15 +20,21 @@ public enum HistogramTables {}
 /// `UInt64` for `Histogram`.
 public protocol BucketCountValue: Numeric, Comparable, Sendable {
     init(_ value: Double)
-    init(_ value: Int64)
+    /// Go's `BC(ibc)` conversion where `IBC` is `int64`.
+    init(reinterpreting value: Int64)
     var asDouble: Double { get }
 }
 
 extension Double: BucketCountValue {
+    public init(reinterpreting value: Int64) { self = Double(value) }
     public var asDouble: Double { self }
 }
 extension UInt64: BucketCountValue {
-    public init(_ value: Int64) { self = value < 0 ? 0 : UInt64(bitPattern: value) }
+    // generic.go:202 — `BC(b.currCount)` is Go's numeric conversion, so a negative
+    // delta becomes a huge uint64 by two's complement rather than clamping to 0.
+    // Only reachable from an invalid histogram, but the iterator must not paper
+    // over it: that would hide a divergence rather than surface it.
+    public init(reinterpreting value: Int64) { self = UInt64(bitPattern: value) }
     public var asDouble: Double { Double(self) }
 }
 
@@ -37,14 +43,22 @@ extension UInt64: BucketCountValue {
 public protocol InternalBucketCountValue: SignedNumeric, Comparable, Sendable {
     var asDouble: Double { get }
     var asInt64: Int64 { get }
+    /// Go's `BC(ibc)` conversion at the internal-to-external boundary. Dispatching
+    /// through the *source* type keeps it exact: routing `Int64` through `Double`
+    /// would lose precision above 2^53.
+    func asBucketCount<BC: BucketCountValue>(_: BC.Type) -> BC
 }
 
 extension Double: InternalBucketCountValue {
     public var asInt64: Int64 { Int64(self) }
+    public func asBucketCount<BC: BucketCountValue>(_: BC.Type) -> BC { BC(self) }
 }
 extension Int64: InternalBucketCountValue {
     public var asDouble: Double { Double(self) }
     public var asInt64: Int64 { self }
+    public func asBucketCount<BC: BucketCountValue>(_: BC.Type) -> BC {
+        BC(reinterpreting: self)
+    }
 }
 
 // MARK: - Schemas
@@ -98,13 +112,22 @@ public func customBucketBoundsMatch(_ c1: [Double], _ c2: [Double]) -> Bool {
 
 /// Go: the `Err*` sentinel values in generic.go. The `description` reproduces
 /// Go's message text, which surfaces through scrape and API errors.
-public enum HistogramError: Error, Equatable, CustomStringConvertible {
+///
+/// Go composes these with `fmt.Errorf("...: %w", err)`. Wrapping is modelled two
+/// ways, mirroring where Go puts the detail: cases that always carry their own
+/// context spell out the whole message (`spansBucketsMismatch`), while the
+/// caller-supplied prefixes that `Validate` adds are a separate `wrapped` case.
+public indirect enum HistogramError: Error, Equatable, CustomStringConvertible {
     case countNotBigEnough
     case countMismatch
     case negativeCount
     case negativeBucketCount(index: Int, count: Double)
     case spanNegativeOffset(span: Int, offset: Int32)
     case spansBucketsMismatch(need: Int, have: Int)
+    /// Go: generic.go:817 — `reduceResolution` runs out of buckets mid-span and
+    /// reports what it has rather than what it needs, unlike every other
+    /// spans/buckets mismatch.
+    case spansNeedMoreBuckets(have: Int)
     case customBucketsMismatch(defined: Int, needed: Int)
     case customBucketsInvalid(previous: Double, current: Double)
     case customBucketsInfinite
@@ -117,6 +140,12 @@ public enum HistogramError: Error, Equatable, CustomStringConvertible {
     case expSchemaCustomBounds
     case invalidSchema(Int32)
     case unknownSchema(Int32)
+    /// Go: `histogram.go:470` — the observation-count checks prepend the two
+    /// counts to the sentinel message.
+    case countMismatchDetail(sumOfBuckets: UInt64, count: UInt64, notBigEnough: Bool)
+    /// Go: `fmt.Errorf("%s: %w", prefix, err)` — `Validate` labels which side of
+    /// the histogram failed.
+    case wrapped(prefix: String, HistogramError)
 
     public var description: String {
         switch self {
@@ -136,6 +165,9 @@ public enum HistogramError: Error, Equatable, CustomStringConvertible {
         case .spansBucketsMismatch(let need, let have):
             return
                 "spans need \(need) buckets, have \(have) buckets: histogram spans specify different number of buckets than provided"
+        case .spansNeedMoreBuckets(let have):
+            return
+                "have \(have) buckets but spans need more: histogram spans specify different number of buckets than provided"
         case .customBucketsMismatch(let defined, let needed):
             return
                 "only \(defined) custom bounds defined which is insufficient to cover total span length of \(needed): histogram custom bounds are too few"
@@ -166,6 +198,12 @@ public enum HistogramError: Error, Equatable, CustomStringConvertible {
         case .unknownSchema(let s):
             return
                 "histogram has an unknown schema, which must be between \(HistogramSchema.exponentialMinReserved) and \(HistogramSchema.exponentialMaxReserved) for exponential buckets, or \(HistogramSchema.customBuckets) for custom buckets, got schema \(s)"
+        case .countMismatchDetail(let sumOfBuckets, let count, let notBigEnough):
+            let base: HistogramError = notBigEnough ? .countNotBigEnough : .countMismatch
+            return
+                "\(sumOfBuckets) observations found in buckets, but the Count field is \(count): \(base.description)"
+        case .wrapped(let prefix, let inner):
+            return "\(prefix): \(inner.description)"
         }
     }
 }
@@ -311,8 +349,9 @@ func checkHistogramBuckets<BC: BucketCountValue, IBC: InternalBucketCountValue>(
             throw HistogramError.negativeBucketCount(index: i + 1, count: c.asDouble)
         }
         last = c
-        // Go: *count += BC(c)
-        count += BC(c.asDouble)
+        // Go: *count += BC(c) — the conversion is from the internal type, not via
+        // Double, so an Int64 delta above 2^53 stays exact.
+        count += c.asBucketCount(BC.self)
     }
 }
 
