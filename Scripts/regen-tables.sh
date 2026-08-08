@@ -19,6 +19,7 @@ declare -a TARGETS=(
   "SimpleFold:Sources/PromRegex/Generated/SimpleFold.swift"
   "UnicodeGroups:Sources/PromRegex/Generated/UnicodeGroups.swift"
   "RegexGroups:Sources/PromRegex/Generated/RegexGroups.swift"
+  "HistogramBounds:Sources/PromHistogram/Generated/HistogramBounds.swift"
 )
 
 for entry in "${TARGETS[@]}"; do
