@@ -5,9 +5,9 @@
 A source-level port of the [Prometheus](https://github.com/prometheus/prometheus) monitoring server
 from Go to Swift, pinned to upstream **v3.13.2**.
 
-> **Status: early. Phase 1 of 10 complete.** The foundations and the differential-testing rig are in
-> place and green. There is no server, no storage engine and no query engine yet.
-> See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early. Phases 1–2 of 10 complete.** The foundations, the differential-testing rig, and a
+> full RE2 regex engine are in place and green. There is no server, no storage engine and no query
+> engine yet. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why this exists
 
@@ -45,10 +45,13 @@ does PromQL before the storage engine: it is the only half of Prometheus that sh
 | `PromMath` | Kahan–Neumaier summation (bit-exact), `almost.Equal` |
 | `PromModel` | `StaleNaN` payloads, label/metric-name validation |
 | `PromLabels` | packed encoding, `Hash`/`StableHash`, ordering, `String()`, `Builder`/`ScratchBuilder`, `Matcher`, OpenMetrics floats |
+| `PromRegex` | RE2: `regexp/syntax` parser, `Simplify`, compiler, NFA matcher, `FastRegexMatcher` |
 | `PromEncoding` | `ByteSlice`, `Encbuf`, `Decbuf` |
 
-Regex matching is deliberately incomplete: `Matcher` accepts only literals and literal alternations
-and **throws** otherwise, rather than silently substituting ICU semantics for RE2. Phase 2 fixes this.
+`PromRegex` is a real RE2, not a wrapper. `NSRegularExpression` is backtracking ICU where Go is RE2 —
+that diverges on pathological patterns *and* is a denial-of-service surface, since these patterns
+arrive verbatim from user queries. Matching is an NFA simulation: linear in (pattern × input), no
+backtracking.
 
 Float formatting additionally cleared 4.8M differential cases with zero mismatches. Swift's
 `Double.description` does **not** match Go's `strconv` — that divergence reaches PromQL output,

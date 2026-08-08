@@ -6,8 +6,11 @@ import (
 	"math/rand"
 	"os"
 	"regexp/syntax"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/prometheus/model/labels"
 )
 
 type parseOutRegex struct {
@@ -172,5 +175,87 @@ func genRegexParse(e *emitter) {
 			out.Tree = re.String()
 		}
 		e.emit(fmt.Sprintf("p/%d", i), strIn{S: hex.EncodeToString([]byte(pat))}, out)
+	}
+}
+
+// ------------------------------------------------------------------- matching
+
+type matchIn struct {
+	// Hex-encoded so arbitrary bytes survive JSON.
+	Pattern string `json:"pattern"`
+	Subject string `json:"subject"`
+}
+
+// subjectCorpus is the set of strings every pattern is evaluated against.
+func subjectCorpus() []string {
+	return []string{
+		"", "a", "b", "ab", "abc", "abd", "aab", "ba", "A", "AB", "ABC",
+		"foo", "bar", "foobar", "barfoo", "FOO", "Foo", "fooo", "fo",
+		"up", "node", "x", "xy", "x|y", "0", "1", "01", "-", "--", "-a-",
+		"a\nb", "\n", "a\n", "\na", " ", "  ", "\t",
+		"héllo", "ſ", "S", "s", "K", "K", "Σ", "σ", "ς",
+		"日本語", "😀", "café", "a.b", "a*b", "[a]", "abcdefghij",
+		"xyz-016a-ixb-dp-1", "xyz-016A-IXB-OP-2", "node_cpu_seconds_total",
+	}
+}
+
+// genRegexMatch pins FastRegexMatcher.MatchString — the exact contract
+// Matcher.Matches depends on — across the pattern corpus x subject corpus.
+func genRegexMatch(e *emitter) {
+	pats := patternCorpus()
+	subs := subjectCorpus()
+	i := 0
+	for pi, pat := range pats {
+		// Keep the fixture reviewable: every hand-picked pattern (they come first)
+		// against every subject, then a sample of the mutation tail.
+		if pi > 600 && pi%17 != 0 {
+			continue
+		}
+		m, err := labels.NewFastRegexMatcher(pat)
+		if err != nil {
+			continue // rejection is already covered by regex/parse
+		}
+		for _, s := range subs {
+			e.emit(fmt.Sprintf("m/%d", i),
+				matchIn{
+					Pattern: hex.EncodeToString([]byte(pat)),
+					Subject: hex.EncodeToString([]byte(s)),
+				},
+				m.MatchString(s))
+			i++
+		}
+	}
+}
+
+// genRegexSetMatches pins SetMatches and IsOptimized, which TSDB relies on to
+// turn a regex matcher into direct index lookups.
+func genRegexSetMatches(e *emitter) {
+	type setOut struct {
+		Set       []string `json:"set"`
+		Optimized bool     `json:"optimized"`
+	}
+	i := 0
+	for pi, pat := range patternCorpus() {
+		if pi > 600 && pi%29 != 0 {
+			continue
+		}
+		m, err := labels.NewFastRegexMatcher(pat)
+		if err != nil {
+			continue
+		}
+		sm := m.SetMatches()
+		if sm == nil {
+			sm = []string{}
+		}
+		// Order is not contractual (map-backed matcher iterates a Go map); sort.
+		sort.Strings(sm)
+		hexed := make([]string, 0, len(sm))
+		for _, s := range sm {
+			hexed = append(hexed, hex.EncodeToString([]byte(s)))
+		}
+		e.emit(fmt.Sprintf("s/%d", i),
+			strIn{S: hex.EncodeToString([]byte(pat))},
+			setOut{Set: hexed, Optimized: m.IsOptimized()})
+		i++
 	}
 }
