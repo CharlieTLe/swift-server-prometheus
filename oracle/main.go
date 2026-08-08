@@ -62,6 +62,7 @@ var suites = map[string]func(*emitter){
 	"labels/omfloat":       genOpenMetricsFloat,
 	"regex/simplefold":     genSimpleFold,
 	"regex/unicodetable":   genUnicodeTable,
+	"regex/parse":          genRegexParse,
 }
 
 func main() {

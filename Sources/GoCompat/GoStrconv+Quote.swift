@@ -121,14 +121,14 @@ public enum GoStrconv: Sendable {
     // MARK: - UTF-8
 
     /// Go: `utf8.ValidRune`. Surrogates and out-of-range values are invalid.
-    static func isValidRune(_ r: UInt32) -> Bool {
+    public static func isValidRune(_ r: UInt32) -> Bool {
         if r > 0x10FFFF { return false }
         if r >= 0xD800 && r <= 0xDFFF { return false }
         return true
     }
 
     /// Go: `utf8.AppendRune`.
-    static func appendRune(_ out: inout [UInt8], _ r: UInt32) {
+    public static func appendRune(_ out: inout [UInt8], _ r: UInt32) {
         let r = isValidRune(r) ? r : 0xFFFD
         switch r {
         case 0..<0x80:
@@ -151,7 +151,7 @@ public enum GoStrconv: Sendable {
     /// Go: `utf8.DecodeRuneInString`. Returns `(0xFFFD, 1)` for any invalid
     /// sequence — including overlong encodings, surrogates and out-of-range
     /// values — which is what drives Quote's `\xNN` fallback.
-    static func decodeRune(_ s: [UInt8], _ i: Int) -> (UInt32, Int) {
+    public static func decodeRune(_ s: [UInt8], _ i: Int) -> (UInt32, Int) {
         let n = s.count - i
         if n < 1 { return (0xFFFD, 0) }
         let b0 = s[i]

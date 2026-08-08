@@ -1,5 +1,7 @@
 # swift-server-prometheus
 
+[![CI](https://github.com/CharlieTLe/swift-server-prometheus/actions/workflows/ci.yml/badge.svg)](https://github.com/CharlieTLe/swift-server-prometheus/actions/workflows/ci.yml)
+
 A source-level port of the [Prometheus](https://github.com/prometheus/prometheus) monitoring server
 from Go to Swift, pinned to upstream **v3.13.2**.
 
