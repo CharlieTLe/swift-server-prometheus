@@ -17,6 +17,9 @@ identical, PromQL results identical bit-for-bit, error strings identical. That c
 drives nearly every design decision here — see [docs/PORTING.md](docs/PORTING.md) for the contract
 (including its deliberate exceptions) and [docs/DECISIONS.md](docs/DECISIONS.md) for the ADRs.
 
+**Picking this up mid-project?** [docs/HANDOFF.md](docs/HANDOFF.md) has the current state, the PR
+workflow, the traps that have already cost time, and exactly what to do next.
+
 ## How correctness is defined
 
 Not by hand-written expectations. `oracle/` is a separate Go module that runs the pinned Prometheus
