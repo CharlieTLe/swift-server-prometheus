@@ -7,10 +7,29 @@ on:
 
 jobs:
   test:
-    name: Build and test
-    runs-on: macos-15
+    name: Build and test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Never let one toolchain's failure hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          # The toolchain the port is developed against.
+          - name: Xcode 27
+            runner: xcode-27
+          # The declared floor (swift-tools-version:6.1 in Package.swift).
+          #
+          # Keep this job. It is not redundant: it caught a whole class of bug
+          # that the newest toolchain accepts silently — wide shift-or/XOR chains
+          # blowing the Swift 6.1 type checker's budget ("unable to type-check
+          # this expression in reasonable time"). Later phases are full of bit
+          # twiddling (chunkenc bstream, varbit, XOR encodings), so the floor
+          # needs to stay honest. If the floor is ever raised, raise
+          # swift-tools-version with it and update this comment.
+          - name: Swift 6.1 floor
+            runner: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Swift version
         run: swift --version
@@ -26,11 +45,11 @@ jobs:
     name: Verify fixtures against Go
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
 
@@ -44,5 +63,6 @@ jobs:
 
       # Fails if committed fixtures drift from what Go produces — either the
       # port's contract changed or upstream moved. Both need a human decision.
+      # A differing Go patch version is reported as a note, not a failure.
       - name: Verify fixtures
         run: ./Scripts/verify-fixtures.sh
