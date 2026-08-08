@@ -43,18 +43,20 @@ public struct ByteSlice: @unchecked Sendable {
         ByteSlice(base: base + start, count: end - start)
     }
 
+    // Loops rather than chained shift-or expressions: long chains of shifted
+    // UInt64s exceed the Swift 6.1 type checker's budget. The optimiser unrolls.
     @inlinable
     public func loadBE32(at off: Int) -> UInt32 {
-        UInt32(self[off]) << 24 | UInt32(self[off + 1]) << 16
-            | UInt32(self[off + 2]) << 8 | UInt32(self[off + 3])
+        var v: UInt32 = 0
+        for k in 0..<4 { v = (v << 8) | UInt32(self[off + k]) }
+        return v
     }
 
     @inlinable
     public func loadBE64(at off: Int) -> UInt64 {
-        UInt64(self[off]) << 56 | UInt64(self[off + 1]) << 48
-            | UInt64(self[off + 2]) << 40 | UInt64(self[off + 3]) << 32
-            | UInt64(self[off + 4]) << 24 | UInt64(self[off + 5]) << 16
-            | UInt64(self[off + 6]) << 8 | UInt64(self[off + 7])
+        var v: UInt64 = 0
+        for k in 0..<8 { v = (v << 8) | UInt64(self[off + k]) }
+        return v
     }
 
     @inlinable

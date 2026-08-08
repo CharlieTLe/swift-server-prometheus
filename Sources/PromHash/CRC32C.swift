@@ -69,20 +69,23 @@ public struct CRC32C: Sendable {
         // Slicing-by-8: consume eight bytes per iteration. The first four are
         // folded into the running CRC as a little-endian word (the polynomial is
         // reflected), the next four index the higher tables directly.
+        //
+        // Accumulated stepwise rather than as one eight-term XOR chain, which
+        // exceeds the Swift 6.1 type checker's budget.
         while end - i >= 8 {
-            let w = c
-                ^ (UInt32(data[i])
-                    | (UInt32(data[i + 1]) << 8)
-                    | (UInt32(data[i + 2]) << 16)
-                    | (UInt32(data[i + 3]) << 24))
-            c = t[7][Int(w & 0xFF)]
-                ^ t[6][Int((w >> 8) & 0xFF)]
-                ^ t[5][Int((w >> 16) & 0xFF)]
-                ^ t[4][Int((w >> 24) & 0xFF)]
-                ^ t[3][Int(data[i + 4])]
-                ^ t[2][Int(data[i + 5])]
-                ^ t[1][Int(data[i + 6])]
-                ^ t[0][Int(data[i + 7])]
+            var w: UInt32 = 0
+            for k in (0..<4).reversed() { w = (w << 8) | UInt32(data[i + k]) }
+            w ^= c
+
+            var acc = t[7][Int(w & 0xFF)]
+            acc ^= t[6][Int((w >> 8) & 0xFF)]
+            acc ^= t[5][Int((w >> 16) & 0xFF)]
+            acc ^= t[4][Int((w >> 24) & 0xFF)]
+            acc ^= t[3][Int(data[i + 4])]
+            acc ^= t[2][Int(data[i + 5])]
+            acc ^= t[1][Int(data[i + 6])]
+            acc ^= t[0][Int(data[i + 7])]
+            c = acc
             i += 8
         }
 

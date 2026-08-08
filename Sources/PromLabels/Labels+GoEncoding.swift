@@ -78,7 +78,9 @@ extension Labels {
             i += 1
             if b == 255 {
                 guard i + 3 <= data.count else { return nil }
-                let v = Int(data[i]) | (Int(data[i + 1]) << 8) | (Int(data[i + 2]) << 16)
+                var v = Int(data[i])
+                v |= Int(data[i + 1]) << 8
+                v |= Int(data[i + 2]) << 16
                 i += 3
                 return v
             }

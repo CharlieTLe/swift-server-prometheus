@@ -81,23 +81,29 @@ public enum GoVarint: Sendable {
 //===----------------------------------------------------------------------===//
 
 /// Go: `binary.BigEndian`. TSDB's on-disk formats are big-endian throughout.
+///
+/// The loads are written as loops rather than chained shift-or expressions: an
+/// eight-term chain of shifted `UInt64`s exceeds the Swift 6.1 type checker's
+/// budget. The optimiser unrolls these.
 public enum GoBigEndian: Sendable {
 
     @inlinable
     public static func uint16(_ b: [UInt8], _ i: Int = 0) -> UInt16 {
-        UInt16(b[i]) << 8 | UInt16(b[i + 1])
+        (UInt16(b[i]) << 8) | UInt16(b[i + 1])
     }
 
     @inlinable
     public static func uint32(_ b: [UInt8], _ i: Int = 0) -> UInt32 {
-        UInt32(b[i]) << 24 | UInt32(b[i + 1]) << 16 | UInt32(b[i + 2]) << 8 | UInt32(b[i + 3])
+        var v: UInt32 = 0
+        for k in 0..<4 { v = (v << 8) | UInt32(b[i + k]) }
+        return v
     }
 
     @inlinable
     public static func uint64(_ b: [UInt8], _ i: Int = 0) -> UInt64 {
-        UInt64(b[i]) << 56 | UInt64(b[i + 1]) << 48 | UInt64(b[i + 2]) << 40
-            | UInt64(b[i + 3]) << 32 | UInt64(b[i + 4]) << 24 | UInt64(b[i + 5]) << 16
-            | UInt64(b[i + 6]) << 8 | UInt64(b[i + 7])
+        var v: UInt64 = 0
+        for k in 0..<8 { v = (v << 8) | UInt64(b[i + k]) }
+        return v
     }
 
     @inlinable
@@ -108,22 +114,16 @@ public enum GoBigEndian: Sendable {
 
     @inlinable
     public static func append(_ out: inout [UInt8], _ x: UInt32) {
-        out.append(UInt8(truncatingIfNeeded: x >> 24))
-        out.append(UInt8(truncatingIfNeeded: x >> 16))
-        out.append(UInt8(truncatingIfNeeded: x >> 8))
-        out.append(UInt8(truncatingIfNeeded: x))
+        for shift in stride(from: 24, through: 0, by: -8) {
+            out.append(UInt8(truncatingIfNeeded: x >> UInt32(shift)))
+        }
     }
 
     @inlinable
     public static func append(_ out: inout [UInt8], _ x: UInt64) {
-        out.append(UInt8(truncatingIfNeeded: x >> 56))
-        out.append(UInt8(truncatingIfNeeded: x >> 48))
-        out.append(UInt8(truncatingIfNeeded: x >> 40))
-        out.append(UInt8(truncatingIfNeeded: x >> 32))
-        out.append(UInt8(truncatingIfNeeded: x >> 24))
-        out.append(UInt8(truncatingIfNeeded: x >> 16))
-        out.append(UInt8(truncatingIfNeeded: x >> 8))
-        out.append(UInt8(truncatingIfNeeded: x))
+        for shift in stride(from: 56, through: 0, by: -8) {
+            out.append(UInt8(truncatingIfNeeded: x >> UInt64(shift)))
+        }
     }
 }
 
@@ -133,13 +133,15 @@ public enum GoLittleEndian: Sendable {
 
     @inlinable
     public static func uint32(_ b: [UInt8], _ i: Int = 0) -> UInt32 {
-        UInt32(b[i]) | UInt32(b[i + 1]) << 8 | UInt32(b[i + 2]) << 16 | UInt32(b[i + 3]) << 24
+        var v: UInt32 = 0
+        for k in (0..<4).reversed() { v = (v << 8) | UInt32(b[i + k]) }
+        return v
     }
 
     @inlinable
     public static func uint64(_ b: [UInt8], _ i: Int = 0) -> UInt64 {
-        UInt64(b[i]) | UInt64(b[i + 1]) << 8 | UInt64(b[i + 2]) << 16 | UInt64(b[i + 3]) << 24
-            | UInt64(b[i + 4]) << 32 | UInt64(b[i + 5]) << 40 | UInt64(b[i + 6]) << 48
-            | UInt64(b[i + 7]) << 56
+        var v: UInt64 = 0
+        for k in (0..<8).reversed() { v = (v << 8) | UInt64(b[i + k]) }
+        return v
     }
 }

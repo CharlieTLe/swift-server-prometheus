@@ -174,10 +174,10 @@ public enum GoStrconv: Sendable {
             let lo: UInt8 = (b0 == 0xE0) ? 0xA0 : 0x80
             let hi: UInt8 = (b0 == 0xED) ? 0x9F : 0xBF
             guard cont(1, lo, hi), cont(2, 0x80, 0xBF) else { return (0xFFFD, 1) }
-            return (
-                (UInt32(b0 & 0x0F) << 12) | (UInt32(s[i + 1] & 0x3F) << 6)
-                    | UInt32(s[i + 2] & 0x3F), 3
-            )
+            var r = UInt32(b0 & 0x0F) << 12
+            r |= UInt32(s[i + 1] & 0x3F) << 6
+            r |= UInt32(s[i + 2] & 0x3F)
+            return (r, 3)
         }
         if b0 < 0xF5 {  // 4-byte
             // F0 excludes overlong; F4 caps at U+10FFFF.
@@ -186,10 +186,11 @@ public enum GoStrconv: Sendable {
             guard cont(1, lo, hi), cont(2, 0x80, 0xBF), cont(3, 0x80, 0xBF) else {
                 return (0xFFFD, 1)
             }
-            return (
-                (UInt32(b0 & 0x07) << 18) | (UInt32(s[i + 1] & 0x3F) << 12)
-                    | (UInt32(s[i + 2] & 0x3F) << 6) | UInt32(s[i + 3] & 0x3F), 4
-            )
+            var r = UInt32(b0 & 0x07) << 18
+            r |= UInt32(s[i + 1] & 0x3F) << 12
+            r |= UInt32(s[i + 2] & 0x3F) << 6
+            r |= UInt32(s[i + 3] & 0x3F)
+            return (r, 4)
         }
         return (0xFFFD, 1)
     }
