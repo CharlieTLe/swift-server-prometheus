@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj
+Package.resolved
+
+# Go oracle build output
+/oracle/promoracle
+/oracle/go.sum.tmp
+
+# Fixture regeneration scratch
+/.fixtures-tmp/

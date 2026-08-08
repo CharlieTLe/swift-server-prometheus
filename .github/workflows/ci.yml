@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # Hermetic: reads committed Fixtures/, needs no Go toolchain.
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+  fixtures:
+    name: Verify fixtures against Go
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      # The oracle needs the pinned upstream worktree. See docs/PORTING.md.
+      - name: Check out pinned upstream
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/prometheus/prometheus.git ../../prometheus/prometheus
+          git -C ../../prometheus/prometheus worktree add \
+            ../prometheus-v3.13.2 v3.13.2
+
+      # Fails if committed fixtures drift from what Go produces — either the
+      # port's contract changed or upstream moved. Both need a human decision.
+      - name: Verify fixtures
+        run: ./Scripts/verify-fixtures.sh
