@@ -3,6 +3,11 @@
 A port of Prometheus from Go to Swift. Read `docs/PORTING.md` (fidelity contract),
 `docs/ROADMAP.md` (phases), `docs/DECISIONS.md` (ADRs) before making changes.
 
+**`docs/HANDOFF.md` is the fastest way in**: current state, workflow, known traps, next steps.
+
+`main` is protected — all work goes through a PR that passes the three CI checks. Reviews are not
+required; merge your own PR once it is green.
+
 ## The upstream reference
 
 Port against the **pinned worktree**, never the moving `main`:
