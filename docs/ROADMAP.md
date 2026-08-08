@@ -26,7 +26,7 @@ that ships with a portable oracle.
 | # | Goal | Swift LOC | Exit gate (all vs Go) |
 |---|---|---|---|
 | 0 | Pin upstream to a read-only `v3.13.2` worktree | — | `git describe` = `v0.313.2`; `st.go` absent |
-| **1** | **Foundations + verification rig.** `GoCompat`, `PromHash`, `PromMath`, `PromModel`, `PromLabels`, `PromEncoding`, the `oracle/` Go harness, `Fixtures/` | 6.1k (+1.4k Go) | Float format/parse matches `strconv` over a fuzzed corpus incl. subnormals; `Labels` hash/compare/builder match; `Encbuf`/`Decbuf` byte-identical incl. CRC32C; `verify-fixtures.sh` green |
+| **1** ✅ | **Foundations + verification rig.** `GoCompat`, `PromHash`, `PromMath`, `PromModel`, `PromLabels`, `PromEncoding`, the `oracle/` Go harness, `Fixtures/` | 6.1k (+1.4k Go) | **DONE** — 17 suites / ~70k committed cases green on Swift 6.1 and 6.4; `verify-fixtures.sh` green and proven to detect drift. Regex is stubbed (ADR-6), so `Matcher` regex parity is deferred to Phase 2 |
 | 2 | `PromRegex` — RE2 in Swift | 2.8k | Go's own `$(go env GOROOT)/src/regexp/testdata/`; `syntax.Parse(x).String()` fixtures; `SetMatches()` parity |
 | 3 | `PromHistogram` — native histograms | 4.5k | Oracle parity on `Add/Sub/Mul/Div/KahanAdd/Compact/DetectReset/ToFloat/Validate` |
 | 4 | `PromQLParser` — lexer ported 1:1, **hand-written precedence-climbing parser** replacing goyacc | 5.5k | Token-stream equality; AST JSON equality via `translate_ast.go`; `parse(print(parse(x))) == parse(x)`; error + `PositionRange` byte-equality |

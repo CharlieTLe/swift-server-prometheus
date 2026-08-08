@@ -3,8 +3,9 @@
 A source-level port of the [Prometheus](https://github.com/prometheus/prometheus) monitoring server
 from Go to Swift, pinned to upstream **v3.13.2**.
 
-> **Status: early. Phase 1 of 10.** The foundations and the differential-testing rig are in place.
-> There is no server, no storage engine and no query engine yet. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: early. Phase 1 of 10 complete.** The foundations and the differential-testing rig are in
+> place and green. There is no server, no storage engine and no query engine yet.
+> See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why this exists
 
@@ -17,7 +18,7 @@ drives nearly every design decision here — see [docs/PORTING.md](docs/PORTING.
 ## How correctness is defined
 
 Not by hand-written expectations. `oracle/` is a separate Go module that runs the pinned Prometheus
-and Go toolchains and emits golden fixtures; `Fixtures/` holds **57k committed cases**. `swift test`
+and Go toolchains and emits golden fixtures; `Fixtures/` holds **~70k committed cases**. `swift test`
 reads those and needs no Go toolchain.
 
 ```sh
@@ -37,12 +38,15 @@ does PromQL before the storage engine: it is the only half of Prometheus that sh
 
 | Module | Verified against Go |
 |---|---|
-| `GoCompat` | `strconv.FormatFloat` (`f/e/E/g/G`), `strconv.Quote`, `encoding/binary` varints |
+| `GoCompat` | `strconv.FormatFloat` (`f/e/E/g/G`), `ParseFloat`, `Quote`/`Unquote`, `encoding/binary` varints, `time.Duration.String` |
 | `PromHash` | xxhash64, CRC-32C |
 | `PromMath` | Kahan–Neumaier summation (bit-exact), `almost.Equal` |
 | `PromModel` | `StaleNaN` payloads, label/metric-name validation |
-| `PromLabels` | packed label encoding, hashes, ordering, `String()` |
+| `PromLabels` | packed encoding, `Hash`/`StableHash`, ordering, `String()`, `Builder`/`ScratchBuilder`, `Matcher`, OpenMetrics floats |
 | `PromEncoding` | `ByteSlice`, `Encbuf`, `Decbuf` |
+
+Regex matching is deliberately incomplete: `Matcher` accepts only literals and literal alternations
+and **throws** otherwise, rather than silently substituting ICU semantics for RE2. Phase 2 fixes this.
 
 Float formatting additionally cleared 4.8M differential cases with zero mismatches. Swift's
 `Double.description` does **not** match Go's `strconv` — that divergence reaches PromQL output,

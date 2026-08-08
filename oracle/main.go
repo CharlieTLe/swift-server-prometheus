@@ -53,6 +53,13 @@ var suites = map[string]func(*emitter){
 	"labels/compare":       genLabelsCompare,
 	"labels/hashnames":     genLabelsHashNames,
 	"encoding/encbuf":      genEncbuf,
+	"gocompat/floatparse":  genFloatParse,
+	"gocompat/unquote":     genUnquote,
+	"gocompat/duration":    genDuration,
+	"labels/builder":       genLabelsBuilder,
+	"labels/matcher":       genMatcher,
+	"labels/stablehash":    genStableHash,
+	"labels/omfloat":       genOpenMetricsFloat,
 }
 
 func main() {

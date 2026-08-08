@@ -8,7 +8,7 @@ import Testing
 
 @testable import PromLabels
 
-struct LabelsIn: Decodable, Sendable {
+struct LabelsIn: Decodable, Equatable, Sendable {
     /// Names and values are hex-encoded — JSON strings cannot carry the bytes
     /// faithfully (Go's encoding/json rewrites invalid UTF-8 to U+FFFD). See ADR-9.
     let labels: [[String]]

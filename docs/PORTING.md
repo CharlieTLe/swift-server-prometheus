@@ -58,6 +58,21 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
    pointers (`promql/engine.go`, the `matrixSelectorHPool` comment). Preserve every explicit
    `Copy`/`CopyTo` call site even without the pools.
 
+5. **`Matcher.SetMatches()` ordering** — the *set* is contractual, the *order* is not. Go has two
+   backing implementations: `equalMultiStringSliceMatcher` returns source order (duplicates included,
+   so `a|a` yields `["a", "a"]`), while above `minEqualMultiStringMatcherMapThreshold` alternates it
+   switches to `equalMultiStringMapMatcher`, which iterates a Go map and is therefore **randomized
+   per run**. Both the oracle and the port sort before comparing, so fixtures stay reproducible.
+
+   Related genuine behaviour we *do* reproduce: for the **empty** pattern,
+   `optimizeAlternatingLiterals` returns a matcher but `nil` setMatches, so `foo=~""` falls back to
+   matching rather than an index lookup even though the set would be `[""]`.
+
+6. **Regex support is incomplete until Phase 2.** `LiteralOnlyRegexMatcher` handles only literals and
+   literal alternations and **throws** on anything else. This is deliberate: substituting
+   `NSRegularExpression` would silently swap RE2 semantics for backtracking ICU, which diverges on
+   pathological patterns and is a denial-of-service surface on a user-facing query API. See ADR-6.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
