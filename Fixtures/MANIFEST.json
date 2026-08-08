@@ -41,6 +41,7 @@
     "promql/testdata/subquery.test": { "sha256": "37c4534e7a98e4fe7fdd0e273e9bbf8c59c2fb7b0363c4b4b4af6fcf756f62a6", "lines": 161 },
     "promql/testdata/trig_functions.test": { "sha256": "d9cba332e8b6294276e7fbdeb5bbfb715e11bad6ec6aa568fe01aa82ed802a8f", "lines": 101 },
     "promql/testdata/type_and_unit.test": { "sha256": "23f604731f005563f9c7219c913eb65008f366fbe6999d64e1d9a22614e21426", "lines": 280 },
+    "regex/parse.jsonl": { "sha256": "221411ba2bacbd9a1ea86dd1a6e67bd6dfdf08a0f07c4e62fa85826f6547c22c", "lines": 4221 },
     "regex/simplefold.jsonl": { "sha256": "b240b1de6eb59059e86e3a64887e1958dfda7286bbbd33a6b117999dc1310c5f", "lines": 2047 },
     "regex/unicodetable.jsonl": { "sha256": "48d9ef43dc955239ee5f447ea96a2a067bc7f716f3c91823a13cfe7f1cabd6a9", "lines": 159 }
   }
