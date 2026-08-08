@@ -80,8 +80,15 @@ func compactBuckets<IBC: InternalBucketCountValue>(
     }
 
     // Merge zero-offset spans so later logic has fewer special cases.
+    //
+    // Both of these loops mutate `spans` while walking it, and Go's `range` reads
+    // each element out of the slice at the top of its iteration — so an element
+    // an earlier iteration wrote is seen in its updated form. Iterating with
+    // `enumerated()` would snapshot the array instead and silently compact a
+    // different histogram, so the index is explicit.
     if spans.count > 1 {
-        for (i, span) in spans[1...].enumerated() {
+        for i in 0..<(spans.count - 1) {
+            let span = spans[i + 1]
             if span.offset == 0 {
                 spans[iSpan].length += span.length
                 continue
@@ -94,16 +101,16 @@ func compactBuckets<IBC: InternalBucketCountValue>(
     }
 
     // Merge zero-length spans likewise.
-    var kept = [Span]()
-    kept.reserveCapacity(spans.count)
-    for (i, span) in spans.enumerated() {
+    for i in 0..<spans.count {
+        let span = spans[i]
         if span.length == 0 {
             if i + 1 < spans.count { spans[i + 1].offset += span.offset }
             continue
         }
-        kept.append(span)
+        if i != iSpan { spans[iSpan] = span }
+        iSpan += 1
     }
-    spans = kept
+    spans = Array(spans[0..<iSpan])
     iSpan = 0
 
     // If every span was zero-length, no buckets remain valid.
@@ -251,8 +258,10 @@ func reduceResolution<IBC: InternalBucketCountValue>(
         bucketIdx += span.offset
         for _ in 0..<Int(span.length) {
             guard bucketCountIdx < originBuckets.count else {
-                throw HistogramError.spansBucketsMismatch(
-                    need: bucketCountIdx + 1, have: originBuckets.count)
+                // generic.go:817 — this mid-span exhaustion reports the count it
+                // HAS, not the count it needs; the message differs from the
+                // spans/buckets mismatch reported after the loop.
+                throw HistogramError.spansNeedMoreBuckets(have: originBuckets.count)
             }
             let targetBucketIdx = targetIdx(bucketIdx, originSchema, targetSchema)
 

@@ -12,10 +12,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 0 — pin upstream | done |
 | 1 — foundations + verification rig | done |
 | 2 — `PromRegex` (RE2) | done |
-| 3 — native histograms | **generic layer done; two files remain** |
+| 3 — native histograms | **generic layer + integer `Histogram` done; `float_histogram.go` and `convert.go` remain** |
 | 4–10 | not started |
 
-Green as of `39c9558`: **117,879 committed differential cases, 108 tests**, on both Swift 6.4
+Green as of this commit: **125,344 committed differential cases, 122 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -27,9 +27,9 @@ Sources/            src     generated
   PromLabels          797         –
   PromEncoding        343         –
   PromRegex         3,312     3,974
-  PromHistogram       654       163
-Tests               1,758
-oracle (Go)         2,011
+  PromHistogram     1,509       163
+Tests               2,160
+oracle (Go)         2,907
 ```
 
 ### Verify everything in one go
@@ -137,13 +137,29 @@ architectural question for `Labels`** — see §6.
 
 ## 5. What to do next: finish Phase 3
 
-Two files remain, in this order.
+`histogram.go` is done (§5a below, kept for the record). `float_histogram.go` is the remaining
+long pole, and `convert.go` needs it.
 
-### 5a. `histogram.go` → integer `Histogram` (654 Go lines)
+### 5a. `histogram.go` → integer `Histogram` — **done**
 
-Delta-encoded buckets, `Span`, `CounterResetHint`, `ToFloat`, the cumulative iterator, `Validate`,
-`ReduceResolution`. The generic layer it needs (`compactBuckets`, `reduceResolution`, `getBound`,
-validation helpers) is already in place and verified.
+Delta-encoded buckets, `Span`, `CounterResetHint`, `ToFloat`, both regular iterators and the
+cumulative one, `Equals`/`spansMatch`, `Copy`/`CopyTo`, `Validate`, `Compact`, `ReduceResolution`.
+Five oracle suites over a 425-histogram corpus (7,465 cases): `histogram/integer`,
+`-compact`, `-reduce`, `-validate`, `-equals`.
+
+Two bugs in the previously-verified generic layer only surfaced once these suites existed, which is
+worth internalising:
+
+- **`compactBuckets` iterated a snapshot.** Go's `for i, span := range spans` re-reads each element
+  from the slice as the loop mutates it; Swift's `enumerated()` captures the array up front. Two of
+  Go's compaction loops mutate `spans` while walking it, so the port silently compacted a different
+  histogram (45 of 2,125 cases). **When porting a Go loop that mutates what it iterates, index
+  explicitly.** This will recur.
+- **`reduceResolution` used the wrong error message** for mid-span bucket exhaustion. See
+  PORTING.md "Replicated Go quirks" #2.
+
+`FloatHistogram`'s *storage* landed with it, because `ToFloat` has to return something. Only the
+fields — every method is still to come.
 
 ### 5b. `float_histogram.go` → `FloatHistogram` (2,454 Go lines — the long pole)
 
@@ -172,7 +188,9 @@ Port it in slices, and add oracle coverage per slice rather than at the end:
 
 ### 5c. `convert.go` (145 lines)
 
-`ConvertNHCBToClassic`. Small; can ride along with either PR.
+`ConvertNHCBToClassic`. Small, but it calls `FloatHistogram.Validate()` and needs `labels.Builder`
+plus `model.MetricNameLabel` — so it wants a `PromHistogram → PromLabels` dependency edge and has to
+follow 5b, not precede it.
 
 ### Gate for Phase 3
 
