@@ -60,6 +60,8 @@ var suites = map[string]func(*emitter){
 	"labels/matcher":       genMatcher,
 	"labels/stablehash":    genStableHash,
 	"labels/omfloat":       genOpenMetricsFloat,
+	"regex/simplefold":     genSimpleFold,
+	"regex/unicodetable":   genUnicodeTable,
 }
 
 func main() {
