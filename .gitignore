@@ -10,3 +10,7 @@ Package.resolved
 
 # Fixture regeneration scratch
 /.fixtures-tmp/
+
+# Editor state
+.vscode/
+.idea/

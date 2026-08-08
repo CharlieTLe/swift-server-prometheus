@@ -7,12 +7,14 @@ A port of Prometheus from Go to Swift. Read `docs/PORTING.md` (fidelity contract
 
 Port against the **pinned worktree**, never the moving `main`:
 
-```
-/Users/charliele/Work/repos/github/prometheus/prometheus-v3.13.2   # v3.13.2 = bb5dff00c
+```sh
+# Sibling of this repo, created once:
+git -C ../../prometheus/prometheus worktree add ../prometheus-v3.13.2 v3.13.2
+# -> ../../prometheus/prometheus-v3.13.2   (v3.13.2 = bb5dff00c)
 ```
 
-`/Users/charliele/Work/repos/github/prometheus/prometheus` is on `main`, 417 commits ahead, and its
-`VERSION` file misleadingly says `3.13.2`. Do not read it for porting decisions.
+A plain clone of `prometheus/prometheus` tracks `main`, hundreds of commits ahead of the tag, and its
+`VERSION` file still says `3.13.2`. Do not read it for porting decisions.
 
 ## Conventions
 

@@ -6,12 +6,12 @@
 |---|---|
 | Reference | `github.com/prometheus/prometheus` **v3.13.2** |
 | Commit | `bb5dff00cf8fdfbf5c65e0531aa835fa238a43a2` |
-| Read-only worktree | `/Users/charliele/Work/repos/github/prometheus/prometheus-v3.13.2` |
+| Read-only worktree | `../../prometheus/prometheus-v3.13.2` (relative to this repo) |
 | Go directive | `go 1.25.0` |
 | `prometheus/common` | `v0.69.0` |
 | Key deps | `cespare/xxhash/v2 v2.3.0`, `dennwc/varint v1.0.0`, `golang/snappy v1.0.0`, `klauspost/compress v1.18.6`, `oklog/ulid/v2 v2.1.1` |
 
-**Do not port against `main`.** The primary checkout at `.../prometheus/prometheus` is on `main`,
+**Do not port against `main`.** A plain clone of `prometheus/prometheus` tracks `main`,
 417 commits past the tag (`git describe` → `v0.313.2-417-g08e3f7d0e`) even though its `VERSION` file
 says `3.13.2`. Concretely, `tsdb/chunkenc/st.go` and `tsdb/chunkenc/histogram_st.go` exist on `main`
 but **not** at v3.13.2; porting them would add two chunk encodings the target version does not have.
