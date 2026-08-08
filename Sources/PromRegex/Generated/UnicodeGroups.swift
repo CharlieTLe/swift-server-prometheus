@@ -2812,8 +2812,7 @@ enum UnicodeTables {
     ]
 
     // MARK: - Lookup
-    /// Go: unicode.Categories (38) + unicode.Scripts (163) + unicode.Properties (35).
-    static let groups: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [
+    static let categories: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [
         "C": category_C,
         "Cc": category_Cc,
         "Cf": category_Cf,
@@ -2852,6 +2851,8 @@ enum UnicodeTables {
         "Zl": category_Zl,
         "Zp": category_Zp,
         "Zs": category_Zs,
+    ]
+    static let scripts: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [
         "Adlam": script_Adlam,
         "Ahom": script_Ahom,
         "Anatolian_Hieroglyphs": script_Anatolian_Hieroglyphs,
@@ -3015,6 +3016,8 @@ enum UnicodeTables {
         "Yezidi": script_Yezidi,
         "Yi": script_Yi,
         "Zanabazar_Square": script_Zanabazar_Square,
+    ]
+    static let properties: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [
         "ASCII_Hex_Digit": property_ASCII_Hex_Digit,
         "Bidi_Control": property_Bidi_Control,
         "Dash": property_Dash,

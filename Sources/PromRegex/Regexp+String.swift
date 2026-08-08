@@ -193,6 +193,10 @@ extension Regexp: CustomStringConvertible {
         }
 
         switch re.op {
+        case .leftParen, .verticalBar:
+            // Pseudo-ops live only on the parse stack and never reach a returned
+            // tree; Go's printer has no case for them either.
+            b += "<invalid op\(re.op.rawValue)>"
         case .noMatch:
             b += #"[^\x00-\x{10FFFF}]"#
         case .emptyMatch:

@@ -20,6 +20,7 @@ var tables = map[string]func(*bufio.Writer){
 	"GoIsPrint":     genIsPrintTable,
 	"SimpleFold":    genSimpleFoldTable,
 	"UnicodeGroups": genUnicodeGroupsTable,
+	"RegexGroups":   genRegexGroupsTable,
 }
 
 func header(w *bufio.Writer, script, doc string) {
@@ -173,21 +174,21 @@ func genUnicodeGroupsTable(w *bufio.Writer) {
 	scripts := emit("script", unicode.Scripts)
 	props := emit("property", unicode.Properties)
 
-	// Name -> table lookup, so the parser can resolve \p{Name}.
+	// Separate lookups per Go's `unicodeTable`, which consults Categories then
+	// Scripts and NEVER Properties — a merged map would resolve \p{White_Space},
+	// which Go rejects.
 	fmt.Fprintf(w, "\n    // MARK: - Lookup\n")
-	fmt.Fprintf(w, "    /// Go: unicode.Categories (%d) + unicode.Scripts (%d) + unicode.Properties (%d).\n",
-		len(cats), len(scripts), len(props))
-	fmt.Fprintf(w, "    static let groups: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [\n")
-	for _, n := range cats {
-		fmt.Fprintf(w, "        %q: category_%s,\n", n, sanitize(n))
+	emitLookup := func(swiftName, prefix string, names []string) {
+		fmt.Fprintf(w, "    static let %s: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [\n", swiftName)
+		for _, n := range names {
+			fmt.Fprintf(w, "        %q: %s_%s,\n", n, prefix, sanitize(n))
+		}
+		fmt.Fprintf(w, "    ]\n")
 	}
-	for _, n := range scripts {
-		fmt.Fprintf(w, "        %q: script_%s,\n", n, sanitize(n))
-	}
-	for _, n := range props {
-		fmt.Fprintf(w, "        %q: property_%s,\n", n, sanitize(n))
-	}
-	fmt.Fprintf(w, "    ]\n")
+	emitLookup("categories", "category", cats)
+	emitLookup("scripts", "script", scripts)
+	// Emitted for completeness; \p{...} resolution deliberately does not use it.
+	emitLookup("properties", "property", props)
 	fmt.Fprintf(w, "}\n")
 }
 
@@ -201,4 +202,124 @@ func sanitize(s string) string {
 		}
 	}
 	return string(out)
+}
+
+// ------------------------------------------------------------- RegexGroups
+
+// genRegexGroupsTable emits the remaining data regexp/syntax needs:
+//   - FoldCategory / FoldScript: the extra fold-equivalent code points for
+//     \p{...} under (?i). Without these, case-insensitive Unicode classes are
+//     silently too small.
+//   - CategoryAliases, canonicalised, for inexact \p{...} name matching.
+//   - perlGroup / posixGroup: \d \s \w and [:alnum:] etc.
+func genRegexGroupsTable(w *bufio.Writer) {
+	header(w, "RegexGroups", `// Mirrors unicode.FoldCategory, unicode.FoldScript, unicode.CategoryAliases and
+// the perl/posix class tables in regexp/syntax/perl_groups.go.
+`)
+	fmt.Fprintf(w, "extension UnicodeTables {\n")
+
+	emitTables := func(label string, m map[string]*unicode.RangeTable) []string {
+		names := make([]string, 0, len(m))
+		for k := range m {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		fmt.Fprintf(w, "\n    // MARK: - %s\n", label)
+		for _, name := range names {
+			t := m[name]
+			fmt.Fprintf(w, "    static let %s_%s: [(lo: UInt32, hi: UInt32, stride: UInt32)] = [\n",
+				label, sanitize(name))
+			n := 0
+			for _, r := range t.R16 {
+				if n%3 == 0 {
+					fmt.Fprintf(w, "        ")
+				}
+				fmt.Fprintf(w, "(0x%04X, 0x%04X, %d), ", r.Lo, r.Hi, r.Stride)
+				n++
+				if n%3 == 0 {
+					fmt.Fprintln(w)
+				}
+			}
+			for _, r := range t.R32 {
+				if n%3 == 0 {
+					fmt.Fprintf(w, "        ")
+				}
+				fmt.Fprintf(w, "(0x%06X, 0x%06X, %d), ", r.Lo, r.Hi, r.Stride)
+				n++
+				if n%3 == 0 {
+					fmt.Fprintln(w)
+				}
+			}
+			if n%3 != 0 {
+				fmt.Fprintln(w)
+			}
+			fmt.Fprintf(w, "    ]\n")
+		}
+		return names
+	}
+
+	foldCats := emitTables("foldCategory", unicode.FoldCategory)
+	foldScripts := emitTables("foldScript", unicode.FoldScript)
+
+	fmt.Fprintf(w, "\n    // MARK: - Fold lookup\n")
+	fmt.Fprintf(w, "    static let foldGroups: [String: [(lo: UInt32, hi: UInt32, stride: UInt32)]] = [\n")
+	for _, n := range foldCats {
+		fmt.Fprintf(w, "        %q: foldCategory_%s,\n", n, sanitize(n))
+	}
+	for _, n := range foldScripts {
+		fmt.Fprintf(w, "        %q: foldScript_%s,\n", n, sanitize(n))
+	}
+	fmt.Fprintf(w, "    ]\n")
+
+	// CategoryAliases, canonicalised exactly as regexp/syntax does.
+	fmt.Fprintf(w, "\n    // MARK: - Category aliases (canonicalised)\n")
+	fmt.Fprintf(w, "    static let categoryAliases: [String: String] = [\n")
+	akeys := make([]string, 0, len(unicode.CategoryAliases))
+	for k := range unicode.CategoryAliases {
+		akeys = append(akeys, k)
+	}
+	sort.Strings(akeys)
+	for _, k := range akeys {
+		fmt.Fprintf(w, "        %q: %q,\n", canonicalNameGo(k), unicode.CategoryAliases[k])
+	}
+	fmt.Fprintf(w, "    ]\n")
+
+	fmt.Fprintf(w, "}\n")
+}
+
+// canonicalNameGo mirrors regexp/syntax.canonicalName.
+func canonicalNameGo(name string) string {
+	var b []byte
+	first := true
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c == '_' || c == '-' || c == ' ':
+			c = ' '
+		case first:
+			if 'a' <= c && c <= 'z' {
+				c -= 'a' - 'A'
+			}
+			first = false
+		default:
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+		}
+		if b == nil {
+			if c == name[i] && c != ' ' {
+				continue
+			}
+			b = make([]byte, i, len(name))
+			copy(b, name[:i])
+		}
+		if c == ' ' {
+			continue
+		}
+		b = append(b, c)
+	}
+	if b == nil {
+		return name
+	}
+	return string(b)
 }

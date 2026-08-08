@@ -33,6 +33,16 @@ public enum RegexOp: UInt8, Sendable, Comparable, CustomStringConvertible {
     case concat  // concatenation of Subs
     case alternate  // alternation of Subs
 
+    // Pseudo-ops used only on the parse stack; Go: `opPseudo + iota`. They never
+    // appear in a returned tree, and `rawValue >= pseudoThreshold` is the test
+    // Go writes as `op >= opPseudo`.
+    case leftParen = 128
+    case verticalBar = 129
+
+    /// Go: `opPseudo`.
+    public static let pseudoThreshold: UInt8 = 128
+    public var isPseudo: Bool { rawValue >= RegexOp.pseudoThreshold }
+
     public static func < (a: RegexOp, b: RegexOp) -> Bool { a.rawValue < b.rawValue }
 
     /// Go: the stringer-generated `Op.String()`, used in error text.
@@ -57,6 +67,8 @@ public enum RegexOp: UInt8, Sendable, Comparable, CustomStringConvertible {
         case .repeat: return "Repeat"
         case .concat: return "Concat"
         case .alternate: return "Alternate"
+        case .leftParen: return "opLeftParen"
+        case .verticalBar: return "opVerticalBar"
         }
     }
 }

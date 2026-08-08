@@ -18,6 +18,7 @@ declare -a TARGETS=(
   "GoIsPrint:Sources/GoCompat/Generated/GoIsPrint.swift"
   "SimpleFold:Sources/PromRegex/Generated/SimpleFold.swift"
   "UnicodeGroups:Sources/PromRegex/Generated/UnicodeGroups.swift"
+  "RegexGroups:Sources/PromRegex/Generated/RegexGroups.swift"
 )
 
 for entry in "${TARGETS[@]}"; do

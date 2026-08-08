@@ -50,10 +50,11 @@ extension UnicodeTables {
         return min
     }
 
-    /// Resolve a `\p{Name}` group to its ranges. Go: `unicode.Categories`,
-    /// `unicode.Scripts`, `unicode.Properties`.
+    /// Resolve a `\p{Name}` group. Go: `unicodeTable` consults
+    /// `unicode.Categories` then `unicode.Scripts` — and deliberately not
+    /// `unicode.Properties`, so `\p{White_Space}` is an error in Go.
     public static func group(named name: String) -> [(lo: UInt32, hi: UInt32, stride: UInt32)]? {
-        groups[name]
+        categories[name] ?? scripts[name]
     }
 
     /// Expand a Go `RangeTable`-style entry list into class range pairs.
