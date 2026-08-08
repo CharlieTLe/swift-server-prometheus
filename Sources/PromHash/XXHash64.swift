@@ -14,19 +14,26 @@ public enum XXHash64: Sendable {
     private static let prime4: UInt64 = 9_650_029_242_287_828_579
     private static let prime5: UInt64 = 2_870_177_450_012_600_261
 
+    /// Rotate left. Factored out deliberately: writing the four rotations of the
+    /// accumulator merge inline as one chained expression exceeds the Swift 6.1
+    /// type-checker's budget ("unable to type-check this expression in reasonable
+    /// time"), even though 6.4 accepts it.
+    @inline(__always)
+    private static func rotl(_ x: UInt64, _ r: UInt64) -> UInt64 {
+        (x << r) | (x >> (64 - r))
+    }
+
     @inline(__always)
     private static func round(_ acc: UInt64, _ input: UInt64) -> UInt64 {
-        var acc = acc &+ (input &* prime2)
-        acc = (acc << 31) | (acc >> 33)
-        return acc &* prime1
+        let a: UInt64 = acc &+ (input &* prime2)
+        return rotl(a, 31) &* prime1
     }
 
     @inline(__always)
     private static func mergeRound(_ acc: UInt64, _ val: UInt64) -> UInt64 {
-        let val = round(0, val)
-        var acc = acc ^ val
-        acc = acc &* prime1 &+ prime4
-        return acc
+        let v: UInt64 = round(0, val)
+        let a: UInt64 = acc ^ v
+        return a &* prime1 &+ prime4
     }
 
     /// Go: `xxhash.Sum64`.
@@ -62,10 +69,13 @@ public enum XXHash64: Sendable {
                 v4 = round(v4, u64(i + 24))
                 i += 32
             }
-            h = ((v1 << 1) | (v1 >> 63))
-                &+ ((v2 << 7) | (v2 >> 57))
-                &+ ((v3 << 12) | (v3 >> 52))
-                &+ ((v4 << 18) | (v4 >> 46))
+            // Split across statements so the type checker stays within budget on
+            // Swift 6.1; see `rotl`.
+            var acc: UInt64 = rotl(v1, 1)
+            acc = acc &+ rotl(v2, 7)
+            acc = acc &+ rotl(v3, 12)
+            acc = acc &+ rotl(v4, 18)
+            h = acc
             h = mergeRound(h, v1)
             h = mergeRound(h, v2)
             h = mergeRound(h, v3)
@@ -77,19 +87,19 @@ public enum XXHash64: Sendable {
         h = h &+ UInt64(n)
 
         while n - i >= 8 {
-            let k1 = round(0, u64(i))
+            let k1: UInt64 = round(0, u64(i))
             h ^= k1
-            h = ((h << 27) | (h >> 37)) &* prime1 &+ prime4
+            h = rotl(h, 27) &* prime1 &+ prime4
             i += 8
         }
         if n - i >= 4 {
             h ^= UInt64(u32(i)) &* prime1
-            h = ((h << 23) | (h >> 41)) &* prime2 &+ prime3
+            h = rotl(h, 23) &* prime2 &+ prime3
             i += 4
         }
         while i < n {
             h ^= UInt64(b[i]) &* prime5
-            h = ((h << 11) | (h >> 53)) &* prime1
+            h = rotl(h, 11) &* prime1
             i += 1
         }
 
