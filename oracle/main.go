@@ -131,6 +131,16 @@ var suites = map[string]func(*emitter){
 	"gocompat/duration-seconds": genGoDurationSeconds,
 	"promql/preprocess":         genPromQLPreprocess,
 	"promql/histogram-stats":    genPromQLHistogramStats,
+	// Phase 5: the transcendentals `promql/functions.go` reaches through
+	// `simpleFloatFunc`. Every one of them diverges from libm on 15-67% of
+	// inputs. See oracle/suites_gomath_trig.go.
+	"gocompat/sin":   genGoSin,
+	"gocompat/cos":   genGoCos,
+	"gocompat/tan":   genGoTan,
+	"gocompat/asin":  genGoAsin,
+	"gocompat/acos":  genGoAcos,
+	"gocompat/atan":  genGoAtan,
+	"gocompat/log10": genGoLog10,
 }
 
 func main() {

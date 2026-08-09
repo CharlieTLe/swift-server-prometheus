@@ -1,7 +1,7 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `HistogramStatsIterator`, pinned by op-script
-fixtures against Go.
+Written at the end of the session that landed Phase 5's `HistogramStatsIterator` and `GoMath`'s
+trigonometry — the two prerequisites for `promql/functions.go`.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -15,15 +15,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic layer, `durations.go`, `PreprocessExpr`, the in-memory `Queryable` and `histogram_stats_iterator.go` are landed. Next: the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and transcendental* layers, `durations.go`, `PreprocessExpr`, the in-memory `Queryable` and `histogram_stats_iterator.go` are landed. Next: `functions.go`'s bodies, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **241,134 committed differential cases, 367 tests**, on both Swift 6.4
+Green as of this commit: **277,676 committed differential cases, 380 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          2,843       193
+  GoCompat          3,469       193
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
@@ -39,8 +39,8 @@ Sources/            src     generated
   PromTestStorage     453         –
   PromQLParser      5,993       550
   PromQL            2,196         –
-Tests               9,477
-oracle (Go)        11,781
+Tests               9,652
+oracle (Go)        12,242
 ```
 
 ### Verify everything in one go
@@ -214,6 +214,22 @@ where I had written a plausible expectation and the fixture proved the implement
   (`baseline/*`, three cases). Generalisation: when your corpus feeds a dependency that short-circuits,
   ask which of its branches your inputs can actually reach — a family parameterised on one axis pins
   one axis.
+- **Probe the platform function before delegating — and do not generalise from the one that agreed.**
+  Before porting any of `GoMath`'s trigonometry, Swift's libm was compared against Go over 2,000,052
+  inputs per function. `Abs`, `Ceil`, `Floor` and `Sqrt` agreed on every single one; `Sin` differed on
+  23%, `Tan` on 41%, `Asin` on 67%, `Log10` on 65%. Had the four cheap agreements been taken as
+  evidence about the family, seven functions would have been silently one ULP out across
+  `sin`/`cos`/`tan`/`asin`/`acos`/`atan`/`log10` and everything downstream of them. The probe is
+  twenty lines of Go plus twenty of Swift and it answers the question outright — write it.
+- **Classify each fusion by perturbation, not by the disassembly alone.** The disassembly says *what*
+  is fused; only unfusing one site at a time and diffing against Go says whether the corpus can *see*
+  it. For the trig block that was 27 perturbations: 18 broke, and the 6 survivors sorted into two
+  provably-exact products (`y*PI4A`, `y*PI4B` — the constants carry 22 and 21 significant bits, which
+  is exactly why Pi/4 is split into three parts) and four unobservable-in-12M-inputs ones. Where a site
+  is observable but rare, **harvest a witness** and commit it, as `gocompat/log` does; a corpus that
+  passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
+  observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
+  the search, not a licence to simplify.
 - **21 negative controls, 2 survivors, and both survivors were the answer rather than a gap.**
   Perturbing the stats iterator one behaviour at a time broke 19 of 21 fixture runs. The two that
   stayed green — ignoring the reuse buffer entirely, and clearing `current` in `Reset` — are precisely
@@ -384,6 +400,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromStorage` | `storage/interface.go`'s `MockQueryable`/`MockQuerier` | no longer deferred; they had a caller |
 | `PromTestStorage` | **not a port** — fills `util/teststorage`'s role | the in-memory `Queryable`; see below |
 | `PromQL` | `promql/histogram_stats_iterator.go` | in full, plus `histogramStatsSeries` from engine.go:4785 — its only constructor. PORTING.md quirks 37-38 |
+| `GoCompat.GoMath` | `math.Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Log10` + `trigReduce` | portable Go on arm64, not assembly and **not libm** — see below |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -410,14 +427,32 @@ from Cortex/Thanos.
 
 ### What Phase 5 still has to bring, in order
 
-1. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
-   7,667 lines of Go between them, so this needs splitting. `fParams`/`newFParams` from value.go
-   belong here (they take an `*evaluator`), as do `vectorByValueHeap` and `EvalNodeHelper`, which
-   most of `functions.go` takes as a parameter. `quantile.go`, the `GoMath` layer and
-   `HistogramStatsIterator` are already in place beneath them — the last of those means
-   `detectHistogramStatsDecoding` has a real wrapper to reach for rather than a stub, so
-   engine.go:4795's `histogramStatsSeries` is already done.
-2. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
+**The ordering below is not the one an earlier version of this document gave, and the reason is worth
+knowing: `promql.FunctionCalls` and `promql.EvalNodeHelper` are both *exported*.** `FunctionCall` is
+`func([]Vector, Matrix, parser.Expressions, *EvalNodeHelper) (Vector, annotations.Annotations)` and
+every type in it is exported too, so the oracle can call any of `functions.go`'s ~100 bodies
+**directly** — no running engine needed. Nothing in `engine.go` is reachable that way: `evaluator` is
+unexported, so `scalarBinop`, `vectorElemBinop`, `aggregation` and the rest can only be pinned through
+`Engine.NewInstantQuery`, which needs the Swift evaluator to exist first. So `functions.go` is
+differentially testable *now* and `engine.go` is not, which inverts the obvious order.
+
+1. **`promql/functions.go`'s bodies**, driven through `FunctionCalls` from the oracle. Needs
+   `EvalNodeHelper` and its reset helpers (engine.go:1217-1408) as the parameter, plus
+   `EvalSeriesHelper`, `getMetricName`, `stringFromArg`, `stringSliceFromArgs`. Suggested slices:
+   - the element-wise ones — `simpleFloatFunc` + the ~26 math wrappers (the `GoMath` transcendentals
+     below are what unblock these), `clamp`, `funcRound` (a fused site), `funcScalar`, `funcVector`,
+     `funcTime`, `funcTimestamp`, `funcPi`, `funcSgn`, `dateWrapper` + the 8 date functions (the
+     `Int64(Double)` trap), `simpleHistogramFunc` + the `histogram_*` family, and
+     `funcHistogramQuantile`/`Fraction`/`Quantiles` on top of the already-ported `quantile.go`;
+   - the range ones — `extrapolatedRate`/`extendedRate`/`histogramRate` and the `*_over_time` family,
+     which need `interpolate`, `correctForCounterResets` and the load-bearing groupings below;
+   - the sorts, which need **Go's pdqsort ported** — see the note further down, and note that
+     `funcSort` and `funcSortByLabel` go through *different* unstable sorts.
+2. **`promql/engine.go`** — the evaluator, ~4,875 lines, pinned end-to-end through query results once
+   it runs. `fParams`/`newFParams` from value.go belong here (they take an `*evaluator`), as does
+   `vectorByValueHeap`. `quantile.go`, the `GoMath` layers and `HistogramStatsIterator` are already in
+   place beneath it — the last of those means engine.go:4795's `histogramStatsSeries` is already done.
+3. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
    the exit gate. Its patterns are already reproduced in `oracle/corpus.go`. Give it a **storage
    factory** parameter rather than hard-wiring `MemStorage`: that is what
    `RunBuiltinTestsWithStorage(t, engine, newStorage func(testing.TB) storage.Storage)` is for
@@ -594,6 +629,34 @@ reads the *wrapped* iterator's `AtT()` before seeking it. The reason the fixture
 `CounterResetHint` as its own field: `FloatHistogram.String()` does not print it, so the histogram
 rendering alone would have pinned everything except the point of the type.
 
+**`GoMath`'s transcendentals are done, and the measurement that forced them is worth keeping.** Before
+porting anything, Swift's libm was compared against Go over 2,000,052 inputs per function. `Abs`,
+`Ceil`, `Floor` and `Sqrt` agreed on **all** of them — they are the same hardware instruction either
+side, so the port keeps using Swift's and there is deliberately no `GoMath.sqrt`. Every transcendental
+disagreed, and not marginally:
+
+| | | | |
+|---|---|---|---|
+| `Atan` 15% | `Sin` 23% | `Cos` 29% | `Tan` 41% |
+| `Acos` 63% | `Log10` 65% | `Asin` 67% | `Round` 81 cases |
+
+Part of that is the NaN payload — Go's `math.NaN()` is `0x7FF8000000000001`, Swift's `Double.nan` is
+`0x7FF8000000000000` — but most is genuine one-ULP disagreement on ordinary arguments: `Asin(0.5)`,
+`Atan(0.5)`, `Sin(2)`, `Cos(Pi/2)` and `Tan(Pi)` all differ. **Probe before delegating**, every time;
+`Sqrt` agreeing is not evidence that `Sin` will.
+
+`haveArchSin` and its siblings are true only on **s390x**, so these are portable Go on arm64 — the
+opposite of `Exp`/`Exp2`/`Min`/`Max`. Fusion was resolved by disassembly and then *classified by
+perturbation*: 18 of 27 unfusings break the corpus, and the 6 that survive are each explained in the
+file (two provably exact, four unobservable in a 12,000,000-input search). Observable ones carry
+harvested witnesses, as `gocompat/log` does. See `Sources/GoCompat/GoMath+Trig.swift` and PORTING.md
+quirks 39-40.
+
+**Still missing from `GoMath`, and blocking the hyperbolic wrappers:** `Sinh`, `Cosh`, `Tanh`, `Asinh`,
+`Acosh`, `Atanh` — and the last three all need **`Log1p`**, which is its own port with its own
+polynomial and corpus. `Sinh`/`Cosh`/`Tanh` need only the already-ported `Exp`. That is the natural
+next `GoCompat` slice.
+
 **The numeric risk is Kahan summation.** `PromMath` has it, pinned. A wrong Kahan term is exactly the
 kind of silent divergence `docs/ROADMAP.md` warns about when it argues for PromQL before TSDB, and it
 will not announce itself — `sum_over_time` will just be a few ULPs out.
@@ -637,7 +700,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 38 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 40 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
