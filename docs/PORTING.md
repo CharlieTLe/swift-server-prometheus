@@ -153,6 +153,14 @@ changing behaviour.
     either side spins forever. Nothing upstream can produce one, and the fixture corpora deliberately
     do not either.
 
+12. **`FloatHistogram.testExpression()` emits descriptions its own lexer cannot read.** A `+Inf`
+    value renders with a leading `+`, and `lexHistogramDescriptor` rejects that: Go fails
+    `metric {{sum:+Inf}}` with `histogram description incomplete unexpected: '+'`. A non-finite value
+    inside a bracketed set fails too, with `bad number syntax: ""`. Verified against Go, which
+    produces those messages at the same positions this port does — so `testExpression()` is only a
+    fixed point of the series-description parser for the finite cases, and the round-trip test in
+    `ParserInvariantTests` skips the rest rather than pretending otherwise.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

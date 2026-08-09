@@ -142,3 +142,63 @@ the `HashForLabels`/`HashWithoutLabels` name-merge loops all go through it.
 
 Note also that only the **sign** of `labels.Compare` is contractual: stringlabels returns a byte
 length delta for the prefix case, slicelabels a label count delta. Every caller is a sort comparator.
+
+## ADR-11 — The PromQL AST is final classes behind a protocol, not an `indirect enum`
+
+`ast.go` uses interfaces plus pointer structs, and the **engine mutates nodes in place**.
+`VectorSelector.Timestamp`, `.Offset`, `.UnexpandedSeriesSet` and `.Series` are all filled in at
+query-preparation time, and `preprocessExpr` rewrites the tree. `checkAST` also mutates during
+parsing: it rewrites `VectorMatching.Card` and sets `BinaryExpr.VectorMatching` to nil.
+
+An `indirect enum` is the more idiomatic Swift and buys exhaustive switches. It also makes every one
+of those mutations a tree rebuild, and turns `preprocessExpr` from a field assignment into a
+recursive reconstruction of every path to every selector.
+
+**Decision.** `Node` and `Expr` are `AnyObject`-constrained protocols; each node is a `final class`.
+Reference semantics keep the engine's mutation cheap and keep Go's shape, at the cost of dispatch
+being `as?` chains rather than an exhaustive `switch`. `VectorMatching` stays a struct, because
+optional chaining onto a class's `var` property gives both the in-place mutation and the `= nil`.
+
+Consequences worth knowing:
+
+- `Expressions` (Go's `[]Expr` with methods) cannot be a class-bound `Node`, so it is a `[any Expr]`
+  plus free functions in an `Expressions` namespace. Nothing is lost: `ChildrenIter` yields a
+  `Call`'s arguments individually, so no `Expressions` node ever reaches `Tree()`.
+- `EvalStmt`, `TestStmt` and `VectorSelector`'s two `storage` fields are deliberately absent. They
+  need `time.Time` and the storage protocols, which arrive with the engine in Phase 5.
+
+## ADR-12 — goyacc is replaced by recursive descent, and LALR behaviour is reproduced deliberately
+
+`generated_parser.y` is 1,409 lines compiled to a 2,553-line LALR automaton. Shipping a Swift yacc,
+or a table generator, would be a second project.
+
+**Decision.** Hand-written recursive descent with precedence climbing, one function per nonterminal
+named after it, so the `.y` file reads side by side with `Parser.swift`.
+
+The catch is that four LALR behaviours are **observable**, and a naive recursive-descent parser gets
+all four wrong. Each was found by the `promql/parse` fixture, not by reading the grammar:
+
+1. **Which `error` production reports.** There are 24, each with its own `(context, expected)` pair,
+   plus a catch-all `start: error`. goyacc pops the stack to the *innermost* state that can shift
+   `error`, so `errorContexts` is a stack of enclosing productions and a failure with no production of
+   its own reports against the innermost one.
+2. **Conflict resolution decides the language.** `offset_duration_expr` and `duration_expr` both
+   derive `number_duration_literal`; goyacc takes the rule declared earlier, which is why
+   `foo offset 1m+1m` means `(foo offset 1m) + 1m` and `foo offset -2^2` means `(foo offset -2)^2`.
+   Inside `[...]` there is no competition and the full arithmetic grammar applies. Likewise a token
+   is reduced to `aggregate_op` only when the lookahead is in its follow set, which is what keeps
+   `foo * sum` a product of two selectors.
+3. **`lastClosing` is not what Go's source suggests.** Go updates it in `Lex`, when a closing token is
+   produced. But goyacc resolves conflicts at table-generation time, so almost every state has a
+   single default action and reduces *without* reading a lookahead — making the value in practice the
+   last **consumed** closing token. This port updates it on consume, and keeps
+   `findPrevRightParen` for `aggregate_op function_call_body`, the one state where the grammar does
+   force a lookahead past `)` (upstream issue 16053).
+4. **Recovery continues.** An `error` production whose rule still reduces to something usable lets the
+   parse carry on, and yacc's `Errflag` suppresses a second message until three tokens have been
+   shifted. `errFlag` and `recoverableError` reproduce that, which is what makes `{a=b}` report once
+   and `{"a"xx} 0+50x2` report three times in Go's order.
+
+A recursive-descent parser also needs one token of extra lookahead where an LALR parser uses its
+own: `peekType()` separates a function call from a metric identifier, and an aggregation from a
+metric identifier.

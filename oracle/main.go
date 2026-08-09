@@ -87,6 +87,12 @@ var suites = map[string]func(*emitter){
 	"promql/functions":             genPromQLFunctions,
 	"promql/functionnames":         genPromQLFunctionNames,
 	"promql/valuetype":             genPromQLValueType,
+	"promql/parse":                 genPromQLParse,
+	"promql/seriesdesc":            genPromQLSeriesDesc,
+	"promql/metric":                genPromQLMetric,
+	"promql/metricselector":        genPromQLMetricSelector,
+	"promql/modelduration":         genPromQLModelDuration,
+	"gocompat/intparse":            genGoParseInt,
 }
 
 func main() {
@@ -142,12 +148,30 @@ func main() {
 			panic(err)
 		}
 		fmt.Fprintf(os.Stderr, "%s: %d cases\n", os.Args[2], e.n)
+	case "parse-corpus":
+		// Extracts upstream's own parser case list into a committed corpus file.
+		// Run from the copy phase of Scripts/regen-fixtures.sh, before `gen`.
+		if len(os.Args) != 3 {
+			usage()
+		}
+		inputs, err := extractParseTestInputs(os.Args[2])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "parse-corpus: %v\n", err)
+			os.Exit(1)
+		}
+		w := bufio.NewWriterSize(os.Stdout, 1<<20)
+		writeParseCorpus(w, inputs)
+		if err := w.Flush(); err != nil {
+			panic(err)
+		}
+		fmt.Fprintf(os.Stderr, "parse-corpus: %d inputs\n", len(inputs))
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: promoracle gen <suite> | suites | tables <name> | table-names")
+	fmt.Fprintln(os.Stderr,
+		"usage: promoracle gen <suite> | suites | tables <name> | table-names | parse-corpus <parse_test.go>")
 	os.Exit(2)
 }

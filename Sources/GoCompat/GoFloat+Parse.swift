@@ -200,7 +200,10 @@ extension GoFloat {
 
     /// Go: `underscoreOK`. Underscores may appear only between digits, or
     /// between a base prefix and a digit.
-    private static func underscoreOK(_ input: [UInt8]) -> Bool {
+    ///
+    /// Internal rather than private: `GoStrconv.parseUint` needs the same
+    /// function, and Go shares one copy of it between atof and atoi too.
+    static func underscoreOK(_ input: [UInt8]) -> Bool {
         // saw: "^" start, "0" digit or base prefix, "_" underscore, "!" other.
         var saw: UInt8 = UInt8(ascii: "^")
         var i = 0

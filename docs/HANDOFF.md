@@ -1,6 +1,6 @@
 # Handoff
 
-Written at the end of the session that completed Phases 0–2 and the foundation of Phase 3.
+Written at the end of the session that completed Phase 4.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -13,25 +13,26 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 1 — foundations + verification rig | done |
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
-| 4 — `PromQLParser` | **lexer + function table done; AST and parser remain** |
-| 5–10 | not started |
+| 4 — `PromQLParser` | done |
+| 5 — engine + storage protocols | **next** |
+| 6–10 | not started |
 
-Green as of this commit: **165,526 committed differential cases, 196 tests**, on both Swift 6.4
+Green as of this commit: **177,134 committed differential cases, 214 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          1,644       193
+  GoCompat          1,849       193
   PromHash            216         –
   PromMath             91         –
-  PromModel           104         –
-  PromLabels          797         –
+  PromModel           303         –
+  PromLabels          798         –
   PromEncoding        343         –
   PromRegex         3,312     3,974
   PromHistogram     4,125       163
-  PromQLParser      1,615       550
-Tests               4,073
-oracle (Go)         5,015
+  PromQLParser      5,895       550
+Tests               4,788
+oracle (Go)         6,160
 ```
 
 ### Verify everything in one go
@@ -96,6 +97,14 @@ where I had written a plausible expectation and the fixture proved the implement
 - Swift's `Double(String)` rejects uppercase `0X1P-2`, which Go accepts.
 - `getBound` panics on an out-of-range custom index; a single-span iterator's `currIdx` *is* the span
   offset.
+- `-1^2` is `UnaryExpr(BinaryExpr(1^2))`, not `NumberLiteral(-1) ^ 2` — `%prec MUL` puts POW above
+  the sign, and the literal-folding special case only fires when the operand *is* a literal.
+- A bare `step()` is a `Call`, not a `DurationExpr`, and it is gated behind
+  `EnableExperimentalFunctions` rather than `ExperimentalDurationExpr`.
+- `foo * sum` is a product of two selectors: every aggregator name is also a `metric_identifier`.
+- `lastClosing` behaves as though it were updated on *consume*, not on lex, because goyacc's states
+  mostly default-reduce without reading a lookahead. Three error positions pin this.
+- `FloatHistogram.testExpression()` emits `+Inf`, which upstream's own histogram lexer rejects.
 
 When a fixture disagrees with you, **check Go before changing the implementation.** Write a five-line
 Go program in `/tmp` and run it. That habit is the highest-leverage thing in this repo.
@@ -129,6 +138,22 @@ detector that cries wolf gets ignored.
 with `sed`-style substitution and produced duplicated attributes and broken initialisers. Targeted
 edits would have been faster.
 
+**A literal that overflows `Int` crashes the compiler, not your test.** `1 << 63` is Go's idiomatic way
+to write 2^63 in `durationLiteralOutOfRange`; in Swift it overflows `Int` at compile time and the 6.4
+compiler dies in its own IR verifier with no source location. Spell such constants as the `Double`
+they denote. Expect more of these in Phases 6–7.
+
+**The package enables `ExistentialAny`, so every protocol type needs `any`.** New files will not build
+otherwise. `(any Expr)?` needs the parentheses; a conformance clause (`final class X: Expr`) must not
+get one.
+
+**The parser corpus is extracted, not hand-written.** `promoracle parse-corpus` pulls every `input:`
+string literal out of the pinned `parse_test.go` into `Fixtures/promql/parse-corpus.txt`, and
+`regen-fixtures.sh` does that in the copy phase, before generation. Two of upstream's cases are built
+with `fmt.Sprintf` and so are invisible to the extraction; they are added by hand in
+`exprCorpus()`, which also reports on stderr if a new non-literal appears. If you bump the pin and
+the count moves, check that first.
+
 **ADR-9 keeps resurfacing.** A Go `string` is arbitrary bytes; a Swift `String` is valid UTF-8. Three
 separate times a fixture "failure" was actually the harness decoding hex through
 `String(decoding:as:)` and silently substituting U+FFFD. When a surface can carry arbitrary bytes,
@@ -137,76 +162,39 @@ architectural question for `Labels`** — see §6.
 
 ---
 
-## 5. What to do next: finish Phase 4
+## 5. What to do next: Phase 5, the engine
 
-Two slices are done and merged:
+Phase 4 is complete and merged. `PromQLParser` now exports `PromQLParser(options:)` with
+`parseExpr`, `parseMetric`, `parseMetricSelector` and `parseSeriesDesc`, the full AST, `String()`,
+`Prettify()` and `Tree()`.
 
-| slice | state | suites |
-|---|---|---|
-| `posrange.go` + `lex.go` | done (#10) | `promql/lex` (550 token streams), `promql/posrange` (330) |
-| `value.go` + `functions.go` | done (#11) | `promql/functions`, `promql/functionnames`, `promql/valuetype` |
-| `ast.go` + the parser | **remains** | — |
-| `printer.go` + `prettier.go` | **remains** | — |
+The exit gate for Phase 5 is the one that matters most in the whole project: **all 2,201 `eval`
+assertions in `Fixtures/promql/testdata/` green**. That is the shippable-library milestone.
 
-### Why the parser is one big PR
+### What Phase 5 has to bring, roughly in order
 
-The AST is only observable *through* the parser, and no fixture passes until the whole grammar works
-— a parser that handles half of PromQL fails on nearly every corpus entry. So unlike Phase 3, this
-does not split into shippable slices. Budget for it accordingly; do not try to land it in pieces.
+1. **`storage` protocols** — `SeriesSet`, `Series`, `Querier`, `SeriesIterator`. `VectorSelector` has
+   two fields waiting for them (`UnexpandedSeriesSet`, `Series`); they were deliberately left out of
+   `AST.swift` rather than stubbed. See ADR-11.
+2. **`EvalStmt`** and `TestStmt`, also left out, because they need `time.Time`.
+3. **`promql/value.go`** — `Vector`, `Matrix`, `Scalar`, `Sample`, `HPoint`/`FPoint`.
+4. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies.
+5. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
+   the exit gate. Its patterns are already reproduced in `oracle/corpus.go`.
 
-The exit gate (ROADMAP) is four things: token-stream equality (**done**), AST JSON equality via
-`web/api/v1/translate_ast.go`, `parse(print(parse(x))) == parse(x)`, and error + `PositionRange`
-byte-equality.
+### What is already worked out for you
 
-### What is already worked out
+**The parser gives the engine everything it needs.** In particular `preprocessExpr`'s mutations are
+plain field assignments, which is the whole reason ADR-11 chose classes. Do not "modernise" the AST
+into an enum without reading that ADR first.
 
-**Precedence, from `generated_parser.y`** — lowest to highest, for precedence climbing:
+**`checkAST` already runs at parse time**, so the engine can assume types are correct.
 
-```
-%left     LOR
-%left     LAND LUNLESS
-%left     EQLC GTE GTR LSS LTE NEQ TRIM_UPPER TRIM_LOWER
-%left     ADD SUB
-%left     MUL DIV MOD ATAN2
-%right    POW
-%nonassoc OFFSET
-%right    LEFT_BRACKET
-```
+**The numeric risk is Kahan summation.** `PromMath` has it, pinned. A wrong Kahan term is exactly the
+kind of silent divergence `docs/ROADMAP.md` warns about when it argues for PromQL before TSDB, and it
+will not announce itself — `sum_over_time` will just be a few ULPs out.
 
-**The parser entry points are methods, not package functions.** In v3.13.2 it is
-`parser.NewParser(parser.Options{...}).ParseExpr(input)`; there is no package-level `ParseExpr`.
-`Options` gates four features — `EnableExperimentalFunctions`, `ExperimentalDurationExpr`,
-`EnableExtendedRangeSelectors`, `EnableBinopFillModifiers` — and the port needs all four, because they
-change which queries parse.
-
-**The lexer is already byte-oriented and ready.** `Lexer(_ input: [UInt8], seriesDesc: Bool)` exists
-specifically so the parser can reach the series-description states, which `Lex()` cannot. Positions
-are byte offsets throughout, which is what every `PositionRange` is measured in.
-
-**The series-description and histogram states are the coverage gap to close.**
-`lexValueSequence`, `lexHistogram`, `lexHistogramDescriptor` and `lexBuckets` are unreachable from
-outside Go's parser package, so slice 1 could not pin them. `ParseSeriesDesc` reaches all four — make
-sure the parser corpus exercises `{{schema:0 sum:5 count:4 buckets:[1 2 1]}}`-style input heavily.
-`FloatHistogram.testExpression()` emits exactly that DSL and is already pinned over 650 histograms, so
-`parse(testExpression(h))` should reconstruct `h`. That is a free, strong round-trip test — use it.
-
-**A decision to make deliberately: how to represent the AST.** Go uses interfaces plus pointer
-structs, and the *engine* mutates nodes in place — `VectorSelector.UnexpandedSeriesSet`, `Series`,
-`Offset` and `Timestamp` are all filled in at query-preparation time, and `preprocessExpr` rewrites the
-tree. An `indirect enum` is more idiomatic Swift and gives exhaustive switches, but every Phase 5
-mutation becomes a tree rebuild. Final classes behind a protocol keep Go's shape and Phase 5's
-mutation cheap. Decide before writing the parser, not after, and record it as an ADR — this is the
-kind of choice that is expensive to reverse once the engine depends on it.
-
-Note also that `VectorSelector` has `storage.SeriesSet` and `[]storage.Series` fields that do not
-exist yet: Phase 5 brings the storage protocols. Leave them out and add them with the engine rather
-than inventing a placeholder.
-
-**goyacc's token numbers are already reproduced** in `ItemType`, and they matter: `ItemType.String()`
-falls back to `<Item 57370>` and `desc()` renders the raw number through `%q`. Both reach parse
-errors. Do not renumber them.
-
----
+**`promdiff` is still a stub** (§6), and Phase 5 is where it earns its keep.
 
 ## 6. Open decisions and risks
 
@@ -214,6 +202,13 @@ errors. Do not renumber them.
 Phase 8 (`PromTextParse`) — the first point where arbitrary bytes can enter from a scraped target.
 Decide deliberately then: byte-backed `Labels` (`ContiguousArray<UInt8>` + offsets), or validate and
 reject at ingest. Do not let whichever code is written first settle it by accident.
+
+Phase 4 moved the line a little without settling it. `StringLiteral.val` is `[UInt8]`, because
+`"\xff"` is a legal PromQL string and `strconv.Quote` has to re-escape the raw byte; so is
+`GoNumError.num` and `PromDuration.ParseError`'s payload, for the same reason in `%q`. **A label
+*value* carrying invalid UTF-8 is still lossy**: `Matcher.value` is a `String`, so
+`{a="\xff"}` round-trips through U+FFFD. Nothing in the 6,154-case parse corpus reaches it, which is
+why it is still open rather than fixed.
 
 **`promdiff` is still a stub.** `Sources/promdiff/PromDiff.swift` prints a placeholder. The fuzz differ
 (live oracle, nightly, discovers cases the committed fixtures miss) was designed in the plan but never
