@@ -30,7 +30,7 @@ that ships with a portable oracle.
 | **2** ✅ | **`PromRegex` — RE2 in Swift.** Parser, Simplify, compiler, Pike VM, FastRegexMatcher | 3.4k | **DONE** — 4,221 parse cases (tree + exact error text), 40,768 MatchString cases, 675 SetMatches cases, all green. `Matcher` now uses it; the literal-only stand-in is gone |
 | **3** ✅ | **`PromHistogram` — native histograms** | 4.5k | **DONE** — 12 suites; field-by-field bit-pattern parity on `Add/Sub/Mul/Div/KahanAdd/Compact/DetectReset/ToFloat/Validate/Equals/CopyTo/ReduceResolution`, plus `TrimBuckets` and `convert.go` |
 | **4** ✅ | **`PromQLParser` — lexer ported 1:1, hand-written precedence-climbing parser replacing goyacc.** Plus `ast.go`, `printer.go`, `prettier.go`, `model.Duration` and `strutil.Unquote` | 5.9k | **DONE** — 6,154 parse cases across six option sets: AST JSON via `translate_ast.go`, every error message and `PositionRange`, `String()`, `Prettify()`, `Tree()`, and `parse(print(parse(x))) == parse(x)`. Plus 1,685 series descriptions (which is what finally reaches the histogram lexer states), 834 `ParseMetric`, 842 `ParseMetricSelector`, 1,685 `model.Duration`, 408 `strconv.ParseInt`/`ParseUint`. See ADR-11, ADR-12 |
-| 5 | `PromQL` engine + storage protocols | 12k | **All 2,201 `eval` assertions green.** Shippable library milestone. **In progress** — the protocol substrate is done (`PromPosRange`, `PromAnnotations`, `PromChunkEnc`/`PromChunks` protocol surface, `PromStorage` query side, `GoTime`, `GoContext`, `EvalStmt`/`TestStmt`), with 4,137 annotation-message cases, 1,260 storage-error cases and 91 enum/time/timestamp cases green. Next: `storage`'s concrete iterators (`series.go`, `generic.go`, `buffer.go`, `memoized_iterator.go`), then `value.go`, then the evaluator |
+| 5 | `PromQL` engine + storage protocols | 12k | **All 2,201 `eval` assertions green.** Shippable library milestone. **In progress** — the protocol substrate and the look-back sample iterators are done (`PromPosRange`, `PromAnnotations`, `PromChunkEnc`/`PromChunks`, `PromStorage`'s query side plus `buffer.go`/`memoized_iterator.go` in full and a slice of `series.go`, `GoTime`, `GoContext`, `EvalStmt`/`TestStmt`), with 4,137 annotation-message cases, 1,260 storage-error cases, 91 enum/time/timestamp cases and 74 op-script iterator cases green. Next: an in-memory `Queryable` (upstream's `promqltest` uses a real `tsdb.DB`, which Phase 5 cannot), then `value.go`, then the evaluator. `generic.go`/`lazy.go` deferred to Phase 6 — see HANDOFF §5 |
 | 6 | TSDB read path | 9k | Read every block in `tsdb/testdata/`; `tsdb dump` byte-equals `promtool`; re-run 2,201 evals on a block querier |
 | 7 | TSDB write path | 14k | **Byte-identical block** vs Go (ULID pinned); `promtool tsdb verify` accepts ours; WAL replay both ways |
 | 8 | Ingest: text parse, relabel, config, discovery, scrape | 9k | All 217 `config/testdata/` fixtures incl. **byte-identical error strings**; live scrape differential |
@@ -54,7 +54,7 @@ Tier 2  PromEncoding → PromHash, GoCompat
         PromAnnotations → PromPosRange, PromModel, GoCompat
         PromFileUtil, PromCompression
 Tier 3  PromChunkEnc → PromHistogram, PromEncoding, GoCompat
-        PromChunks → PromChunkEnc
+        PromChunks → PromChunkEnc, PromHistogram
 Tier 4  PromStorage → PromLabels, PromChunkEnc, PromChunks, PromAnnotations, GoCompat
 Tier 5  PromTSDBIndex / PromTSDBChunks / PromTSDBTombstones / PromTSDBRecord / PromTSDBWAL
         PromTSDB
@@ -89,3 +89,12 @@ inherited. One `PromStorage` matches Go's one `storage` package, and the split b
 there is an index target to keep thin — at which point the cost of doing it is a target rename, not a
 redesign. Same trick still planned for `PromDiscoveryCore` so `PromConfig` need not depend on
 providers.
+
+**`generic.go` is not the merge boilerplate its header claims.** Worth knowing before Phase 6 budgets
+for it: only ~145 of its 822 lines are the `genericSeriesSet` adapters. Upstream commit `e1f4380b2`
+("web/api: add search API endpoint") appended a whole label-search subsystem — top-K heaps, streaming
+two-way merges, relevance scoring — to the same file without updating the header. Part A belongs with
+`merge.go` in Phase 6; Part B belongs with the HTTP API in Phase 9, and neither is a PromQL
+dependency. Part A is also a pre-generics type-erasure workaround (`At()` returns an interface that
+the adapters downcast with unchecked assertions), so a real Swift generic replaces it rather than
+porting it.

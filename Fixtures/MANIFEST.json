@@ -83,7 +83,10 @@
     "regex/setmatches.jsonl": { "sha256": "d0f09f1ddaade4bc4eaab8246b399ff9f0d01504eacf75a085e665c7507d1743", "lines": 675 },
     "regex/simplefold.jsonl": { "sha256": "b240b1de6eb59059e86e3a64887e1958dfda7286bbbd33a6b117999dc1310c5f", "lines": 2047 },
     "regex/unicodetable.jsonl": { "sha256": "48d9ef43dc955239ee5f447ea96a2a067bc7f716f3c91823a13cfe7f1cabd6a9", "lines": 159 },
+    "storage/buffer.jsonl": { "sha256": "f8584cda9954ec1ca6f2011a9cdf5bb17e6a7c524c5dd813ba758f7580a33df1", "lines": 43 },
     "storage/duplicate.jsonl": { "sha256": "c80aa7cf1293bf7486016a75af8381f41ac327478d78a67d4787af74853885a9", "lines": 1248 },
-    "storage/errors.jsonl": { "sha256": "3030c74cefbeceb35ffb09323fe015de2acae90ac1e974bfc0c3d2b900b250fc", "lines": 12 }
+    "storage/errors.jsonl": { "sha256": "3030c74cefbeceb35ffb09323fe015de2acae90ac1e974bfc0c3d2b900b250fc", "lines": 12 },
+    "storage/listseries.jsonl": { "sha256": "be9e1eeaa101781a79f6d2ba6c229c44b5b94cd101f459583d8ff59691d3f537", "lines": 14 },
+    "storage/memoized.jsonl": { "sha256": "827103284edf312725c249d423007992105197849e633379f6f6f8b863d113ca", "lines": 17 }
   }
 }

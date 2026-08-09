@@ -1,6 +1,6 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's storage-protocol substrate.
+Written at the end of the session that landed Phase 5's storage sample iterators.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -14,10 +14,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols landed, evaluator next |
+| 5 — engine + storage protocols | **in progress** — protocols and sample iterators landed, `value.go` next |
 | 6–10 | not started |
 
-Green as of this commit: **182,670 committed differential cases, 251 tests**, on both Swift 6.4
+Green as of this commit: **182,744 committed differential cases, 272 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -33,11 +33,11 @@ Sources/            src     generated
   PromPosRange         51         –
   PromAnnotations     609         –
   PromChunkEnc        274         –
-  PromChunks           61         –
-  PromStorage         503         –
+  PromChunks          117         –
+  PromStorage       1,694         –
   PromQLParser      5,948       550
-Tests               5,670
-oracle (Go)         7,003
+Tests               6,454
+oracle (Go)         8,081
 ```
 
 ### Verify everything in one go
@@ -115,9 +115,22 @@ where I had written a plausible expectation and the fixture proved the implement
   other way round and the fixture said no.
 - Hinnant's `civil_from_days` divides the *whole* numerator by 365. Splitting the division across the
   terms compiles, looks plausible, and puts 1970-01-01 in the year 1881.
+- `listSeriesIterator.Seek`'s stray-looking `idx = 0` assignment before its bounds check is **not** a
+  bug. I wrote it up as one, then checked Go: `Seek` positioning at element 0 and returning its type
+  is correct iterator behaviour, so the following `Next()` moves to element 1 as it should. The port
+  matches Go exactly rather than "fixing" it. **Not every quirk is a quirk — probe before documenting
+  a divergence, not just before implementing one.**
 
 When a fixture disagrees with you, **check Go before changing the implementation.** Write a five-line
 Go program in `/tmp` and run it. That habit is the highest-leverage thing in this repo.
+
+**A passing differential test proves nothing until you have seen it fail.** The look-back ring's
+growth path is the clearest case: the fixtures passed first try, which is exactly when to be
+suspicious. Perturbing the two-segment copy into the "obvious" logical-order copy broke 6 of 43 cases,
+which is what actually established that the corpus reaches wrapped growth. Perturbing the eviction
+comparison from `<` to `<=` instead **hung the test run**, because the newest sample is what terminates
+that loop — a good reminder that a negative control can be worse than a failure, so kill it and
+restore rather than waiting.
 
 Fixture tests **batch-report** — collect all mismatches, show the first 20 and a count. Never stop at
 the first failure; corpora run to tens of thousands of cases.
@@ -142,8 +155,16 @@ landed in Phase 5:
   patterns; the oracle has `fbits`/`unfbits` for it.
 
 Also: **one fixture file holds one in/out shape.** `Fixtures.check` decodes the whole file with one
-pair of types, so mixing shapes fails on decode rather than on comparison. Two suites in this phase
-were split for that reason (`promql/timestamp-floatsec`, `chunkenc/{encoding,valuetype,compatible}`).
+pair of types, so mixing shapes fails on decode rather than on comparison. Two suites in Phase 5's
+first step were split for that reason (`promql/timestamp-floatsec`,
+`chunkenc/{encoding,valuetype,compatible}`).
+
+**A raw pass-through is only legal while the thing it passes through to is positioned.** Both
+look-back wrappers forward `At`/`AtT`/`AtST`/`AtHistogram` straight onto the wrapped iterator, so
+reading one after the `next` that exhausts indexes past the end of the sample list and Go panics —
+taking the fixture generator with it. This cost three separate corpus rewrites in one sitting. An
+op-script corpus must read the current sample *before* advancing, and must never read after the
+advance that exhausts.
 
 **CI runs an older Swift than you develop on, deliberately.** Wide chained shift-or/XOR expressions
 compile on 6.4 and blow the Swift 6.1 type checker's budget. Write byte assembly as **loops or
@@ -218,8 +239,10 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromPosRange` | `promql/parser/posrange` | split out of `PromQLParser`; see below |
 | `PromAnnotations` | `util/annotations` | full port, 4,137 differential cases |
 | `PromChunkEnc` | `tsdb/chunkenc/chunk.go` | **protocol surface only** |
-| `PromChunks` | `tsdb/chunks/chunks.go` | `Meta`, `ChunkRef`, `ChunkMetaIterator` only |
+| `PromChunks` | `tsdb/chunks/chunks.go`, `samples.go` | `Meta`, `ChunkRef`, `ChunkMetaIterator`, `Sample` |
 | `PromStorage` | `storage/interface.go`, `errors.go`, `noop.go` | **query side only** |
+| `PromStorage` | `storage/buffer.go`, `memoized_iterator.go` | in full |
+| `PromStorage` | `storage/series.go` | **a slice** — the list iterators and `SeriesEntry` |
 | `GoCompat.GoTime` | `time` | ADR-14 |
 | `GoCompat.GoContext` | `context` | ADR-13 |
 | `PromModel.Timestamp` | `model/timestamp` | |
@@ -234,14 +257,27 @@ design is finally exercisable.
 which made the module graph circular the moment `storage` appeared. If you add a target under
 `PromStorage`, check the direction of this edge first.
 
+**`generic.go` and `lazy.go` are out of Phase 5 entirely** — an earlier version of this document
+listed them for the iterator step, wrongly. Only ~145 of `generic.go`'s 822 lines are the merge
+boilerplate its own header claims; upstream commit `e1f4380b2` parked a `web/api/v1` label-search
+subsystem (top-K heaps, streaming merges, relevance scoring) in the other 677 without updating that
+header. Neither half has a PromQL consumer: Part A is referenced only by
+`merge.go`/`secondary.go`/`lazy.go`, Part B only by `web/` and `tsdb/querier.go`. Part A is also a
+pre-generics type-erasure workaround whose adapters downcast with unchecked assertions, so a Swift
+generic makes it vanish rather than needing a port. `lazy.go` is written against it. Both belong to
+Phase 6, when there is more than one querier to merge.
+
+**`storage.NewConcreteSeriesSet` does not exist at this pin.** The only `concreteSeriesSet` is
+unexported in `storage/remote`. If you find a reference to it, it came from an older Prometheus or
+from Cortex/Thanos.
+
 ### What Phase 5 still has to bring, in order
 
-1. **`storage`'s concrete iterators** — `series.go`, `generic.go`, `buffer.go`
-   (`BufferedSeriesIterator` + `sampleRing`), `memoized_iterator.go`, `lazy.go`. `lazy.go` was
-   deliberately deferred because it is written against `genericSeriesSet` from `generic.go`. The
-   engine needs `storage.NewBuffer` and `NewMemoizedIterator` specifically (engine.go:1732, 2240,
-   2829, 2890). **These have real logic and want differential iterator-trace fixtures**, not just
-   message pinning — that is the next PR.
+1. **An in-memory `Queryable`** — this is the piece `ROADMAP.md` §2 budgeted at "~800 lines of
+   in-memory storage", and it is needed sooner than it looks: upstream's `promqltest` runs against
+   `util/teststorage`, which is a **real `tsdb.DB`**. Phase 5 cannot use that, so the exit gate needs
+   its own `storage.Storage` substitute. `SeriesEntry`/`newListSeries` are already in place as the
+   substrate.
 2. **`promql/value.go`** — `Vector`, `Matrix`, `Scalar`, `Sample`, `HPoint`/`FPoint`.
 3. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies.
 4. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
@@ -261,7 +297,9 @@ it:
 - `Searcher`, `SearchResultSet`, `SearchHints`, `Filter`, `Ordering` → Phase 9. Nothing in the engine
   or TSDB reads them. Note when you do port them: `noopQuerier`'s search methods return a **nil**
   `SearchResultSet`, so any caller reaching them panics.
-- `merge.go`, `fanout.go`, `secondary.go` → Phase 6, when there is more than one querier to merge.
+- `merge.go`, `fanout.go`, `secondary.go`, `generic.go`, `lazy.go` → Phase 6.
+- The rest of `series.go` — the chunk encoders, `chunkSetToSeriesSet`, `seriesSetToChunkSet`,
+  `ExpandSamples*`, `ExpandChunks` → Phase 6, or Phase 10 for the remote-read path.
 - `chunkenc`'s concrete encodings (XOR, XOR2, histogram, float histogram) and the bstream/varbit
   machinery → Phases 6–7. `PromChunkEnc` currently has no conforming `Chunk` at all.
 - `context.WithValue` → Phase 9, for the query logger's `QueryOrigin`.
@@ -276,15 +314,20 @@ into an enum without reading that ADR first.
 
 **Annotation messages are already byte-exact and pinned** — 4,118 per-annotation cases plus 19
 collection cases. This matters because `promqltest` asserts them verbatim, so it removes a whole
-class of exit-gate failure from the evaluator work. Two divergences are documented rather than fixed:
-`Annotations` iteration order (Go's is a random map) and `HistogramOperation`'s unreachable
-"unknown operation" default. PORTING.md exceptions 7 and 8.
+class of exit-gate failure from the evaluator work.
+
+**The look-back iterators are pinned by op-script fixtures with nested window drains** — 43 buffer
+cases, 17 memoized, 14 list-series. Six behaviours that the engine depends on and that are easy to
+get subtly wrong are documented as PORTING.md quirks 15–21: the closed retention window, the
+current-element exclusion, already-positioned-after-construction, the two deltas, the
+memo-cleared-before-a-failed-seek ordering, and the stale histogram in a mixed ring.
 
 **The numeric risk is Kahan summation.** `PromMath` has it, pinned. A wrong Kahan term is exactly the
 kind of silent divergence `docs/ROADMAP.md` warns about when it argues for PromQL before TSDB, and it
 will not announce itself — `sum_over_time` will just be a few ULPs out.
 
 **`promdiff` is still a stub** (§6), and Phase 5 is where it earns its keep.
+
 
 
 ## 6. Open decisions and risks
@@ -322,7 +365,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **eight documented exceptions**
+2. `docs/PORTING.md` — the fidelity contract and its **ten documented exceptions**, plus 21 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
