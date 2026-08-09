@@ -20,6 +20,7 @@ declare -a TARGETS=(
   "UnicodeGroups:Sources/PromRegex/Generated/UnicodeGroups.swift"
   "RegexGroups:Sources/PromRegex/Generated/RegexGroups.swift"
   "HistogramBounds:Sources/PromHistogram/Generated/HistogramBounds.swift"
+  "PromQLFunctions:Sources/PromQLParser/Generated/PromQLFunctions.swift"
 )
 
 for entry in "${TARGETS[@]}"; do

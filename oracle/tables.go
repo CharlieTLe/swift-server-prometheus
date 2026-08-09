@@ -14,8 +14,10 @@ import (
 	"os"
 
 	"github.com/prometheus/prometheus/model/histogram"
+	"github.com/prometheus/prometheus/promql/parser"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -26,6 +28,7 @@ var tables = map[string]func(*bufio.Writer){
 	"UnicodeGroups":   genUnicodeGroupsTable,
 	"RegexGroups":     genRegexGroupsTable,
 	"HistogramBounds": genHistogramBoundsTable,
+	"PromQLFunctions": genPromQLFunctionsTable,
 }
 
 func header(w *bufio.Writer, script, doc string) {
@@ -379,4 +382,60 @@ func genHistogramBoundsTable(w *bufio.Writer) {
 	}
 	fmt.Fprintf(w, "    ]\n}\n")
 	fmt.Fprintf(os.Stderr, "HistogramBounds: %d values\n", total)
+}
+
+// genPromQLFunctionsTable emits the PromQL function table.
+//
+// Hand-transcribing ~100 entries with their argument types, variadic arity and
+// experimental flags would be tedious and unverifiable; emitting it from
+// parser.Functions makes it correct by construction. The fixture suite
+// promql/functions then checks the committed Swift against Go independently, so a
+// stale generated file cannot pass silently.
+func genPromQLFunctionsTable(w *bufio.Writer) {
+	header(w, "Scripts/regen-tables.sh", `// promql/parser/functions.go @ v3.13.2 — every function PromQL exposes, with
+// its argument types, variadic arity, return type and experimental flag.
+//
+`)
+	fmt.Fprintln(w, "extension PromQLFunctions {")
+	fmt.Fprintln(w, "    /// Go: `parser.Functions`.")
+	fmt.Fprintln(w, "    public static let all: [String: Function] = [")
+
+	names := make([]string, 0, len(parser.Functions))
+	for name := range parser.Functions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		f := parser.Functions[name]
+		argTypes := make([]string, 0, len(f.ArgTypes))
+		for _, t := range f.ArgTypes {
+			argTypes = append(argTypes, valueTypeSwift(t))
+		}
+		fmt.Fprintf(w, "        %s: Function(\n", strconv.Quote(name))
+		fmt.Fprintf(w, "            name: %s,\n", strconv.Quote(f.Name))
+		fmt.Fprintf(w, "            argTypes: [%s],\n", strings.Join(argTypes, ", "))
+		fmt.Fprintf(w, "            variadic: %d,\n", f.Variadic)
+		fmt.Fprintf(w, "            returnType: %s,\n", valueTypeSwift(f.ReturnType))
+		fmt.Fprintf(w, "            experimental: %t),\n", f.Experimental)
+	}
+
+	fmt.Fprintln(w, "    ]")
+	fmt.Fprintln(w, "}")
+}
+
+func valueTypeSwift(t parser.ValueType) string {
+	switch t {
+	case parser.ValueTypeNone:
+		return ".none"
+	case parser.ValueTypeVector:
+		return ".vector"
+	case parser.ValueTypeScalar:
+		return ".scalar"
+	case parser.ValueTypeMatrix:
+		return ".matrix"
+	case parser.ValueTypeString:
+		return ".string"
+	}
+	panic(fmt.Sprintf("unknown ValueType %q", t))
 }
