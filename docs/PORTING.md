@@ -104,6 +104,34 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
    genuinely cannot produce Go's string. Four cases in `promql/annotations` are skipped for this, and
    the count is asserted so the corpus cannot drift without saying so.
 
+9. **Three latent `sampleRing` bugs are guarded rather than reproduced.** Each is unreachable from an
+   upstream production caller, and none can be differentially tested — Go's behaviour is a crash or a
+   silent corruption, so generating a fixture for it would take the oracle process down. Each is
+   pinned by a Swift-side invariant test instead.
+
+   - `nthLast(n)`/`PeekBack(n)` (`buffer.go:787`) tests `n > r.l`, which lets `n == 0` through; it
+     then reads index `l`, one slot *past* the newest, and reports success. On an empty reset ring
+     `bufInUse` is `noBuf`, so it routes to `at(0)` and divides by zero. Guarded with
+     `precondition(n >= 1)`. Only `PeekBack(1)` is reachable upstream (`web/federate.go:126`).
+   - `sampleRing.add` (`buffer.go:470`) type-switches on the three concrete sample types with no
+     `default`, then returns unconditionally — so a `chunks.Sample` from another package is **silently
+     dropped**, on the first add only. Later adds fall through to the migration path and are handled.
+     Guarded with a trap naming the type. Unreachable through `BufferedSeriesIterator`, which re-wraps
+     whatever the wrapped iterator yields into its own `fSample`/`hSample`/`fhSample` before adding.
+   - `reduceDelta` (`buffer.go:754`) rejects a delta larger than the current one but not a negative
+     one, which makes `tmin > newestT` and breaks the eviction loop's termination proof — it walks
+     past the newest into stale slots and can drive `l` negative. Guarded with
+     `precondition(delta >= 0)`. The engine only ever passes a step range (`engine.go:2372`).
+
+   Also guarded, but *not* a divergence: `listSeriesIterator`'s `At`/`AtT`/`AtST`/`AtHistogram` index
+   `samples[-1]` before the first `Next()` (`series.go:122`). That traps in Swift either way; the
+   precondition only supplies a message.
+
+10. **`MemoizedSeriesIterator.PeekPrev` returns an Optional, not Go's sentinel.** Go signals "nothing
+    memoized" with `prevTime == math.MinInt64` (`memoized_iterator.go:68`), which would make a genuine
+    sample at `Int64.min` invisible. No observable difference for any reachable input, and the
+    Optional has no blind spot.
+
 
 ## Replicated Go quirks
 
@@ -199,6 +227,55 @@ changing behaviour.
     not flooring. So -1001 ms is second -1, rendering `1969-12-31T23:59:59Z`, and *not* second -2.
     Pinned by `Fixtures/gocompat/time-rfc3339.jsonl`; a `floorDiv` here would be wrong by a second
     for every pre-epoch timestamp.
+
+15. **The look-back ring's window is closed at both ends.** `sampleRing` evicts with
+    `tmin := newest.T() - r.delta` and a **strict** `<` (`buffer.go:608`), so a sample landing exactly
+    on `newest - delta` is retained. Pinned directly by `Fixtures/storage/buffer.jsonl`'s
+    `evict/boundary-kept` and `evict/boundary-dropped`, and stated again as an invariant test because
+    a fixture diff would not say *why* the boundary moved. Relaxing the comparison to `<=` does not
+    merely shift the window by one sample — it makes the loop non-terminating, since the newest sample
+    is what stops the walk.
+
+16. **The element the buffered iterator is positioned on is never in its buffer.**
+    `BufferedSeriesIterator.Next()` pushes the *current* element into the ring and only then advances
+    (`buffer.go:116`). `engine.go:2977` depends on it: "Values in the buffer are guaranteed to be
+    smaller than maxt."
+
+17. **Both look-back wrappers are already positioned after construction.** `Reset` ends with
+    `valueType = it.Next()` (`buffer.go:64`, `memoized_iterator.go:62`), so `At()`/`AtT()` report the
+    *first* sample before the caller advances, while `lastTime` is still `math.MinInt64`. The state is
+    internally inconsistent, and the consequence is that the first `Seek` almost always takes the
+    hard-seek branch and discards the fact that the iterator was already positioned. Replicated
+    exactly; the engine's lookback depends on it.
+
+    Corollary the corpus had to learn the hard way: because `At*` are raw pass-throughs onto the
+    wrapped iterator, they are only legal *while it is positioned*. Reading one after the `Next` that
+    exhausts indexes past the end of the sample list and Go panics.
+
+18. **`sampleRing` has two deltas and only one of them can shrink.** `BufferedSeriesIterator.delta`
+    is the construction value and is immutable; `ReduceDelta` moves the ring's copy, `Seek` reads the
+    ring's (`buffer.go:86`), and `Reset` restores it from the original (`:63`). `ReduceDelta` returns
+    false and does nothing when asked to *raise* it. `MemoizedSeriesIterator` by contrast has a single
+    immutable delta.
+
+19. **`MemoizedSeriesIterator.Seek` discards the memo before it knows the seek will succeed.**
+    `memoized_iterator.go:81` clears `prevTime`, and only `:83` attempts the seek — so a seek that
+    returns `ValNone` has destroyed the previous element with nothing to show for it, permanently.
+    `BufferedSeriesIterator.Seek` does the same to its ring (`buffer.go:91` before `:93`).
+
+20. **`MemoizedSeriesIterator` folds integer histograms only on the way out.** `Seek`/`Next` convert
+    `ValHistogram` to `ValFloatHistogram` (`:88`, `:124`), but `At()`/`AtT()` are raw pass-throughs, so
+    a caller that inspects those can still observe an integer histogram. Its `delta` is also never
+    enforced on the memo (`:104-105` says so) — it only computes the hard-seek target, and the
+    staleness check lives in the engine (`engine.go:2729`), which is what makes the lookback window
+    half-open, `(refTime - lookbackDelta, refTime]`.
+
+21. **`SampleRingIterator` leaves a stale histogram behind in the mixed case.** The homogeneous
+    branches cross-nil `h`/`fh`, but the interface buffer's float branch (`buffer.go:403`) sets only
+    `f` — so `AtFloatHistogram()` after a float sample in a mixed ring returns the *previous*
+    histogram rather than nil. Callers must switch on the returned `ValueType`; the engine does. Not
+    reachable from the corpus for that reason, and noted rather than left looking covered.
+
 
 
 ## Not ported

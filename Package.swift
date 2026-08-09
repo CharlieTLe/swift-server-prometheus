@@ -75,7 +75,7 @@ let package = Package(
         // Phase 5 ports only chunk.go's protocol surface; the concrete XOR,
         // XOR2 and histogram encodings arrive with Phases 6–7.
         .target(name: "PromChunkEnc", dependencies: ["PromHistogram", "GoCompat"]),
-        .target(name: "PromChunks", dependencies: ["PromChunkEnc"]),
+        .target(name: "PromChunks", dependencies: ["PromChunkEnc", "PromHistogram"]),
         .target(
             name: "PromStorage",
             dependencies: [
@@ -128,8 +128,8 @@ let package = Package(
         .testTarget(
             name: "PromStorageTests",
             dependencies: [
-                "PromStorage", "PromChunkEnc", "PromLabels", "PromAnnotations", "GoCompat",
-                "GoOracleSupport",
+                "PromStorage", "PromChunkEnc", "PromChunks", "PromHistogram", "PromLabels",
+                "PromAnnotations", "PromModel", "GoCompat", "GoOracleSupport",
             ]
         ),
         .testTarget(
