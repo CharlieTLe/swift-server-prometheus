@@ -74,6 +74,10 @@ var suites = map[string]func(*emitter){
 	"histogram/float":              genFloatHistogram,
 	"histogram/float-copytoschema": genFloatHistogramCopyToSchema,
 	"histogram/float-equals":       genFloatHistogramEquals,
+	"histogram/float-scale":        genFloatHistogramScale,
+	"histogram/float-add":          genFloatHistogramAdd,
+	"histogram/float-kahanadd":     genFloatHistogramKahanAdd,
+	"histogram/float-reduce":       genFloatHistogramReduce,
 }
 
 func main() {
