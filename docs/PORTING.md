@@ -169,6 +169,20 @@ changing behaviour.
      `interpolateLinearly` sibling is not fused, because a divide sits between the multiply and the
      add. **`BucketFraction` fuses nothing at all.** Unfusing all six breaks 23 committed cases.
      Determined per function with `go tool objdump`, not by reading the source.
+   - **`math.Exp` is the same story as `Exp2`, and `math.Log` is a third instance** — see quirks 30
+     and the `Exp` note below. `Exp`'s sibling routine in the same `exp_arm64.s` shares the
+     polynomial and the inlined `Ldexp`; `Log` is pure Go on arm64 but its *compiled* form fuses
+     seven expressions, two of them structurally (a temporary that never exists as a rounded value).
+     `Fixtures/gocompat/exp.jsonl` (5,571 cases) and `gocompat/log.jsonl` (13,335) pin them.
+   - **Not every fusion is observable, and it is worth knowing which.** Unfusing one expression at a
+     time and diffing against Go over tens of millions of inputs separates three groups: *provably
+     unobservable* (`k*Ln2Hi` in both `Log` and `Exp` — `Ln2Hi` carries 32 significant bits and
+     |k| ≤ 1075, so the product is exact; that is the entire purpose of the hi/lo argument-reduction
+     split), *unobservable in search* (polynomial terms whose difference is diluted below the final
+     rounding), and *rare but real* (`Log`'s `R` at ~3 per million and `inner` at ~12 per million).
+     For the last group a randomly generated corpus will miss the case by chance, so `gocompat/log`
+     commits **harvested witnesses**. Prefer measuring this to asserting it: the claim "this is
+     fused" is only tested if some committed case fails when it is not.
 
    Caveat worth knowing: `math.Log` has an assembly implementation on amd64 and a pure-Go one on
    arm64, so Go's own answers can differ between architectures. `math.Exp2` is the mirror image —
@@ -329,6 +343,47 @@ changing behaviour.
     histogram rather than nil. Callers must switch on the returned `ValueType`; the engine does. Not
     reachable from the corpus for that reason, and noted rather than left looking covered.
 
+28. **`math.Min`/`math.Max` are arm64 assembly whose ±Inf check runs *before* NaN handling.**
+    `haveArchMax`/`haveArchMin` are true for `amd64 || arm64 || loong64 || riscv64 || s390x`
+    (`math/dim_asm.go`). `dim_arm64.s` compares each operand's **raw 64-bit pattern** against `+Inf`
+    (for `archMax`) or `-Inf` (for `archMin`) and returns early on a hit — so
+
+    ```
+    math.Max(+Inf, NaN) == +Inf      // the portable math.max returns NaN
+    math.Min(-Inf, NaN) == -Inf      // likewise
+    math.Max(-Inf, NaN) == NaN       // the check is one-sided per function
+    ```
+
+    Below that, `FMAXD` is ARM's `FMAX`, which **propagates** a NaN operand — not `FMAXNM`, and not
+    libm's `fmax`/`fmin` or `Swift.max`/`Double.maximum`, all of which return the non-NaN operand.
+    Two further details are observable and pinned: the Go instruction is `FMAXD F0, F1, F0`, i.e.
+    `FMAX(operand1: y, operand2: x)`, so between two differing quiet NaNs **`y`'s payload wins** and
+    swapping the arguments swaps the answer; and a signalling NaN outranks a quiet one and comes back
+    quietened, which is live rather than theoretical because Prometheus's own stale marker
+    (`0x7ff0000000000002`) has a clear quiet bit. Pinned by `gocompat/minmax`.
+
+29. **`math.Pow(-2, 0.5)` and `math.Pow(-2, 0.25)` return NaNs with different payloads.** `pow`'s
+    `y == ±0.5` shortcut to `Sqrt` is tested *before* the `yf != 0 && x < 0` guard, so the former is
+    `Sqrt(-2)` — the hardware NaN, payload 0 — while the latter reaches the explicit branch and gets
+    `math.NaN()`, payload 1. Same for `Pow(x, ±0.5)` generally. Related to quirk 25, and pinned by
+    `gocompat/pow`.
+
+30. **`math.Log`'s fusion is not what `gocompat/log2` was testing.** `Log2` only ever calls `Log` on
+    a `Frexp` fraction in [0.5, 1), which confines the argument reduction to `k ∈ {0, -1}`. A
+    literal, *unfused* transcription of Go's `log` passed all 2,350 `gocompat/log2` cases and was
+    still one ULP wrong on `Log(5.2063069815873524)` — found by a `gocompat/pow` case, since `Pow`
+    computes `Exp(yf * Log(x))` on the raw `x`. The fix was the seven fusions in Go's arm64 output,
+    two of which are structural: `t1 = s2 * (...)` is folded into `R := t1 + t2`, and
+    `hfsq = 0.5*f*f` is never materialised — only `0.5*f` is rounded, and the `* f` is fused into
+    each of `hfsq`'s two readers.
+
+    The generalisable lesson is **a corpus that reaches a function only through one caller pins only
+    that caller's domain.** `gocompat/log` now covers the full domain, and because only three of the
+    seven fusions are observable at all (the rest are diluted below the final rounding, and
+    `k*Ln2Hi` is *provably* exact — `Ln2Hi` has 32 significant bits and |k| ≤ 1075, which is what the
+    hi/lo split is for), it commits **harvested witnesses** for the two rare ones: `R` diverges on
+    ~3 inputs per million and `inner` on ~12 per million, so a corpus of this size would otherwise
+    miss both by chance. See `GoMath.log`'s doc comment for the per-expression table.
 
 
 ## Not ported

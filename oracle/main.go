@@ -116,6 +116,15 @@ var suites = map[string]func(*emitter){
 	"promql/bucketfraction":     genPromQLBucketFraction,
 	"promql/histogramquantile":  genPromQLHistogramQuantile,
 	"promql/histogramfraction":  genPromQLHistogramFraction,
+	// Phase 5: the math routines the evaluator reaches that neither Swift's
+	// standard library nor libm reproduce. See oracle/suites_gomath.go.
+	"gocompat/log":              genGoLog,
+	"gocompat/exp":              genGoExp,
+	"gocompat/pow":              genGoPow,
+	"gocompat/mod":              genGoMod,
+	"gocompat/minmax":           genGoMinMax,
+	"gocompat/ldexp":            genGoLdexp,
+	"gocompat/duration-seconds": genGoDurationSeconds,
 }
 
 func main() {

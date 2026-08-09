@@ -1,6 +1,7 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `promql/quantile.go`.
+Written at the end of the session that landed Phase 5's `GoMath` arithmetic layer
+(`math.Exp`/`Pow`/`Mod`/`Min`/`Max`/`Ldexp`, and the `math.Log` fusion fix).
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -14,15 +15,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go` and `quantile.go` landed; the evaluator next |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go` and the `GoMath` arithmetic the evaluator needs are landed; `durations.go` + `PreprocessExpr` next, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **184,998 committed differential cases, 310 tests**, on both Swift 6.4
+Green as of this commit: **223,391 committed differential cases, 329 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          2,357       193
+  GoCompat          2,838       193
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
@@ -37,8 +38,8 @@ Sources/            src     generated
   PromStorage       1,694         –
   PromQLParser      5,948       550
   PromQL            1,329         –
-Tests               7,513
-oracle (Go)         9,466
+Tests               7,855
+oracle (Go)         9,997
 ```
 
 ### Verify everything in one go
@@ -134,7 +135,30 @@ where I had written a plausible expectation and the fixture proved the implement
   `BucketQuantile`'s `rank`: `rank -= previousCount` compiles to a single `FNMSUBD` that recomputes
   `q*observations - previousCount`, so the binary search above still sees the unfused product.
   `BucketFraction` fuses nothing. `go tool objdump -s '<symbol>'` per function, every time.
-- `-1 * 0.0` in Go is **`+0`**, not `-0`. Untyped constants are arbitrary-precision, where `-1 * 0` is
+- **A corpus that reaches a function through only one caller pins only that caller's domain.** This
+  is the most transferable thing this session produced. `GoMath.log` was a literal, *unfused*
+  transcription of Go's `log`, and it passed all 2,350 `gocompat/log2` cases — because `Log2` only
+  ever calls `Log` on a `Frexp` fraction in [0.5, 1), which confines `k` to {0, -1}. It was one ULP
+  wrong on `Log(5.2063069815873524)`, and what found it was a `gocompat/pow` case, because `Pow`
+  computes `Exp(yf * Log(x))` on the raw `x`. Ask what fraction of a dependency's input domain your
+  corpus actually reaches before treating it as covered.
+- **"It is fused" is a claim, and it needs a failing case to be a tested one.** Unfusing one
+  expression at a time and diffing against Go over tens of millions of inputs sorts Go's fusions into
+  three groups: *provably unobservable* (`k*Ln2Hi` in `Log` and `Exp`, because `Ln2Hi` carries only 32
+  significant bits and |k| ≤ 1075, so the product is exact — that is what the hi/lo split is *for*),
+  *unobservable in search* (polynomial terms diluted below the final rounding), and *rare but real*
+  (`Log`'s `R` at ~3 per million, `inner` at ~12 per million). A randomly generated corpus misses the
+  last group by chance, so `gocompat/log` commits **harvested witnesses** — inputs found by that
+  search specifically because they distinguish fused from unfused. Do this rather than asserting
+  fusion in a comment; PORTING.md quirk 30 has the table.
+- **`math.Min`/`math.Max` are arm64 assembly and do not agree with the portable Go.** The raw-bits
+  ±Inf check runs *before* NaN handling, so `math.Max(+Inf, NaN)` is `+Inf`. `FMAXD` is `FMAX`, which
+  propagates NaN — the opposite of libm's `fmax` and `Double.maximum`. The operand order in
+  `FMAXD F0, F1, F0` puts **`y` first**, which decides whose NaN payload survives. Quirk 28. The
+  general point: `haveArch*` is per-function *and* per-architecture, so check the build tags of the
+  `_asm.go` file rather than assuming the pure-Go source is what runs — `Log` is assembly on amd64
+  and portable on arm64, while `Exp`, `Exp2`, `Min` and `Max` are the other way round.
+- **`-1 * 0.0` in Go is **`+0`**, not `-0`.** Untyped constants are arbitrary-precision, where `-1 * 0` is
   exactly `0` and carries no sign. A corpus that wanted negative zero got positive zero and the
   fixture showed `0` where `-0` was expected. Use `math.Copysign(0, -1)`.
 
@@ -283,6 +307,9 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/value.go` | everything but `MarshalJSON` and `fParams` |
 | `PromQL` | `promql/quantile.go` | in full |
 | `GoCompat.GoMath.exp2` | `math.Exp2` | ported from the **arm64 assembly** |
+| `GoCompat.GoMath` | `math.Exp`, `Min`, `Max`, `Mod`, `Pow`, `Ldexp`, `Modf`, `Trunc` | `Exp`/`Min`/`Max` from the **arm64 assembly**; `Pow`/`Mod` are Go's own algorithms, not libm's |
+| `GoCompat.GoMath.log` | `math.Log` | **fusion fixed** — see §3 and PORTING.md quirk 30 |
+| `GoCompat.GoDuration.seconds` | `time.Duration.Seconds` | the whole/fractional split, which is not `nanos / 1e9` |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -309,7 +336,27 @@ from Cortex/Thanos.
 
 ### What Phase 5 still has to bring, in order
 
-1. **An in-memory `Queryable`** — the piece `ROADMAP.md` §2 budgeted at "~800 lines of in-memory
+1. **`promql/durations.go` and `PreprocessExpr`** — the next step, and it is already scoped. A draft
+   of `Durations.swift` exists in this session's notes but is not committed; it was blocked on the
+   `GoMath` work above, which is why that landed first. Two things make this a clean unit:
+
+   - `durationVisitor` folds `foo offset (1h / 2)`, `foo[1h + 30m]`, `step()`, `range()`,
+     `max_of(...)` into the concrete `Duration` fields the evaluator reads. It needs `math.Min`,
+     `Max`, `Mod`, `Pow` and `GoDuration.seconds` — all now present.
+   - It is **differentially reachable**, which is not obvious: `durationVisitor` is unexported, but
+     `promql.PreprocessExpr(expr, start, end, step)` is exported and is its only caller
+     (engine.go:4491). Driving that also covers `preprocessExprHelper`, `foldQueryContextFunctions`,
+     `detectHistogramStatsDecoding`, `newStepInvariantExpr` and `unwrapParenExpr` — i.e. the whole
+     step-invariance optimiser, which is a self-contained slice of `engine.go` with no evaluator
+     dependency. Build the suite on the existing `translateAST` from `suites_promql_parse.go` and the
+     committed 6,154-expression parse corpus, at several `(start, end, step)` triples, emitting the
+     AST JSON of the preprocessed tree or the error string. `AtModifierUnsafeFunctions` comes from
+     `functions.go` and is exported.
+
+   Error contract: the messages carry a `start:end` **byte-offset** prefix, not `line:col`, and are
+   not `ParseErr`s. `1<<63/1e9` is `9223372036854775808 / 1e9` rounded to `Double` — spell it as the
+   value, per §4.
+2. **An in-memory `Queryable`** — the piece `ROADMAP.md` §2 budgeted at "~800 lines of in-memory
    storage". It is needed before the exit gate can run at all: upstream's `promqltest` goes through
    `util/teststorage`, which is a **real `tsdb.DB`**, and Phase 5 cannot use that. `SeriesEntry`,
    `newListSeries` and now `PromQL.StorageSeries` are the substrate — `StorageSeries` in particular
@@ -318,11 +365,13 @@ from Cortex/Thanos.
    Note this one has **no Go counterpart to differentially test against**: `teststorage` is a real
    TSDB, so an in-memory stand-in is our own code. Keep it as thin as possible and put the assertions
    in the `.test` runner above it, rather than inventing an oracle for scaffolding.
-2. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
+3. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
    7,667 lines of Go between them, so this needs splitting. `fParams`/`newFParams` from value.go
    belong here (they take an `*evaluator`), as do `vectorByValueHeap` and `EvalNodeHelper`, which
-   most of `functions.go` takes as a parameter. `quantile.go` is already in place beneath them.
-3. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
+   most of `functions.go` takes as a parameter. `quantile.go` and the `GoMath` layer are already in
+   place beneath them. `promql/histogram_stats_iterator.go` belongs here too — engine.go:4795 is its
+   only caller — and it is small (167 lines) and op-script testable like the look-back iterators.
+4. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
    the exit gate. Its patterns are already reproduced in `oracle/corpus.go`.
 
 The exit gate is unchanged and is the one that matters most in the whole project: **all 2,201 `eval`
