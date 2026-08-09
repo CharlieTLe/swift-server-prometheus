@@ -36,8 +36,12 @@ public struct GoTime: Sendable, Hashable, Comparable {
 
     /// Seconds from 0001-01-01T00:00:00Z to 1970-01-01T00:00:00Z.
     /// time.go's `unixToInternal`, which fixes where Go's *zero* `Time` sits.
-    static let unixToInternalSeconds: Int64 = (1969 * 365 + 1969 / 4 - 1969 / 100 + 1969 / 400)
-        * 24 * 60 * 60
+    ///
+    /// Go writes this as `(1969*365 + 1969/4 - 1969/100 + 1969/400) * secondsPerDay`
+    /// — 719,162 days × 86,400. Spelled as the value it denotes because the
+    /// expression form blows the Swift 6.1 type checker's budget (HANDOFF §4); the
+    /// derivation above is the check, and `gocompat/time-rfc3339` pins the result.
+    static let unixToInternalSeconds: Int64 = 62_135_596_800
 
     /// Go: `time.Unix(sec, nsec)`. Normalises `nsec` outside `0..<1e9` into
     /// `sec`, exactly as Go does, so `Unix(0, -1)` is one nanosecond before the
@@ -186,7 +190,9 @@ public struct GoTime: Sendable, Hashable, Comparable {
         let dayOfYear = dayOfEra - daysBeforeYear  // 0...365
 
         let mp = (5 * dayOfYear + 2) / 153  // 0...11
-        let day = dayOfYear - (153 * mp + 2) / 5 + 1  // 1...31
+        var day = dayOfYear
+        day -= (153 * mp + 2) / 5
+        day += 1  // 1...31
         var month = mp + 3
         if mp >= 10 {
             month = mp - 9

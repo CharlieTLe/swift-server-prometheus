@@ -151,6 +151,19 @@ stepwise statements**, never as one long chain. Phases 6–7 (`chunkenc` bstream
 are almost entirely bit twiddling — this will bite again. Do not "simplify" the Swift 6.1 floor job
 away; it exists because it caught a whole class of bug.
 
+It is **not only bit twiddling**. Phase 5 tripped it twice on things that look completely innocent,
+both accepted without complaint by Xcode 27:
+
+- `(1969 * 365 + 1969 / 4 - 1969 / 100 + 1969 / 400) * 24 * 60 * 60` as an `Int64` constant — Go's
+  own spelling of `unixToInternal`. Untyped integer literals are the expensive part: every one is an
+  overload-resolution problem. Spell such constants as the value they denote, with the derivation in
+  a comment.
+- A three-way `+` of interpolated function calls building one annotation message. Build strings with
+  `var s = …; s += …` in a `let x: String = { … }()`, not a concatenation chain.
+
+Neither reproduces locally unless you install a 6.1 toolchain, so when you write either shape, assume
+it is broken and restructure it before pushing.
+
 **Corpus reproducibility.** Do not mine `$GOROOT` at fixture-generation time. The corpus would depend
 on the local Go version, and CI's Go would produce a different corpus and fail `verify-fixtures.sh`
 on a difference that means nothing. Copy the inputs into `Fixtures/` (as is done for Go's regexp

@@ -134,14 +134,28 @@ extension AnnotationBase {
     public static let possibleNonCounterInfo = AnnotationBase(
         .info, "metric might not be a counter, name does not end in _total/_sum/_count/_bucket:")
     public static let possibleNonCounterLabelInfo = AnnotationBase(
-        .info,
-        "metric might not be a counter, __type__ label is not set to "
-            + "\(GoStrconv.quote(MetricType.counter.rawValue)) or "
-            + "\(GoStrconv.quote(MetricType.histogram.rawValue))")
+        .info, possibleNonCounterLabelSuffix)
+
+    /// Split out of the initialiser above: a three-way concatenation of
+    /// interpolated calls is the kind of expression the Swift 6.1 type checker
+    /// gives up on (HANDOFF §4).
+    private static let possibleNonCounterLabelSuffix: String = {
+        var s = "metric might not be a counter, __type__ label is not set to "
+        s += GoStrconv.quote(MetricType.counter.rawValue)
+        s += " or "
+        s += GoStrconv.quote(MetricType.histogram.rawValue)
+        return s
+    }()
+
     public static let histogramQuantileForcedMonotonicityInfo = AnnotationBase(
-        .info,
-        "input to histogram_quantile needed to be fixed for monotonicity (see "
-            + "https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile)")
+        .info, histogramQuantileForcedMonotonicitySuffix)
+
+    private static let histogramQuantileForcedMonotonicitySuffix: String = {
+        var s = "input to histogram_quantile needed to be fixed for monotonicity (see "
+        s += "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+        s += "#histogram_quantile)"
+        return s
+    }()
     public static let incompatibleTypesInBinOpInfo = AnnotationBase(
         .info, "incompatible sample types encountered for binary operator")
     public static let histogramIgnoredInAggregationInfo = AnnotationBase(
