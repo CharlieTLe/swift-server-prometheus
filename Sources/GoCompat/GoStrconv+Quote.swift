@@ -76,9 +76,15 @@ public enum GoStrconv: Sendable {
         out.append(UInt8(ascii: "\""))
     }
 
-    /// Go: `appendEscapedRune` with `quote == '"'`, not ASCII-only, not graphic-only.
-    private static func appendEscapedRune(_ out: inout [UInt8], _ r: UInt32) {
-        if r == UInt32(UInt8(ascii: "\"")) || r == UInt32(UInt8(ascii: "\\")) {
+    /// Go: `appendEscapedRune`, not ASCII-only, not graphic-only.
+    ///
+    /// `quote` is the delimiter being escaped for: `Quote` passes `"` and
+    /// `QuoteRune` passes `'`, and only that delimiter gets a backslash. So `'`
+    /// is literal inside a quoted string and `"` is literal inside a quoted rune.
+    static func appendEscapedRune(
+        _ out: inout [UInt8], _ r: UInt32, quote: UInt8 = UInt8(ascii: "\"")
+    ) {
+        if r == UInt32(quote) || r == UInt32(UInt8(ascii: "\\")) {
             out.append(UInt8(ascii: "\\"))
             out.append(UInt8(r))
             return

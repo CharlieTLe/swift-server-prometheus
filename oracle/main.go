@@ -82,6 +82,8 @@ var suites = map[string]func(*emitter){
 	"histogram/float-trim":         genFloatHistogramTrim,
 	"histogram/nhcb-classic":       genNHCBToClassic,
 	"gocompat/log2":                genGoLog2,
+	"promql/lex":                   genPromQLLex,
+	"promql/posrange":              genPromQLPosRange,
 }
 
 func main() {
