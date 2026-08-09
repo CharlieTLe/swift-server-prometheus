@@ -78,6 +78,10 @@ var suites = map[string]func(*emitter){
 	"histogram/float-add":          genFloatHistogramAdd,
 	"histogram/float-kahanadd":     genFloatHistogramKahanAdd,
 	"histogram/float-reduce":       genFloatHistogramReduce,
+	"histogram/float-detectreset":  genFloatHistogramDetectReset,
+	"histogram/float-trim":         genFloatHistogramTrim,
+	"histogram/nhcb-classic":       genNHCBToClassic,
+	"gocompat/log2":                genGoLog2,
 }
 
 func main() {

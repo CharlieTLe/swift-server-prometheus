@@ -12,24 +12,24 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 0 — pin upstream | done |
 | 1 — foundations + verification rig | done |
 | 2 — `PromRegex` (RE2) | done |
-| 3 — native histograms | **generic layer + integer `Histogram` done; `float_histogram.go` and `convert.go` remain** |
+| 3 — native histograms | done |
 | 4–10 | not started |
 
-Green as of this commit: **125,344 committed differential cases, 122 tests**, on both Swift 6.4
+Green as of this commit: **164,548 committed differential cases, 178 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          1,433       193
+  GoCompat          1,567       193
   PromHash            216         –
   PromMath             91         –
   PromModel           104         –
   PromLabels          797         –
   PromEncoding        343         –
   PromRegex         3,312     3,974
-  PromHistogram     1,509       163
-Tests               2,160
-oracle (Go)         2,907
+  PromHistogram     4,125       163
+Tests               3,574
+oracle (Go)         4,631
 ```
 
 ### Verify everything in one go
@@ -135,70 +135,38 @@ architectural question for `Labels`** — see §6.
 
 ---
 
-## 5. What to do next: finish Phase 3
+## 5. What to do next: Phase 4
 
-`histogram.go` is done (§5a below, kept for the record). `float_histogram.go` is the remaining
-long pole, and `convert.go` needs it.
+**Phase 3 is done.** `model/histogram` is fully ported — the generic layer, the integer `Histogram`,
+`FloatHistogram` in all six slices, and `convert.go`. Twelve oracle suites cover it, and the phase
+gate (field-by-field bit-pattern parity on `Add`, `Sub`, `Mul`, `Div`, `KahanAdd`, `Compact`,
+`DetectReset`, `ToFloat`, `Validate`, `Equals`, `CopyTo`, `ReduceResolution`) is met.
 
-### 5a. `histogram.go` → integer `Histogram` — **done**
+Next is **Phase 4 — PromQL parser**, then Phase 5's engine. `docs/ROADMAP.md` has the phase list and
+the argument for why PromQL comes before TSDB.
 
-Delta-encoded buckets, `Span`, `CounterResetHint`, `ToFloat`, both regular iterators and the
-cumulative one, `Equals`/`spansMatch`, `Copy`/`CopyTo`, `Validate`, `Compact`, `ReduceResolution`.
-Five oracle suites over a 425-histogram corpus (7,465 cases): `histogram/integer`,
-`-compact`, `-reduce`, `-validate`, `-equals`.
+Two things from Phase 3 that will matter immediately in Phases 4–5:
 
-Two bugs in the previously-verified generic layer only surfaced once these suites existed, which is
-worth internalising:
+- **`FloatHistogram.testExpression()` must round-trip with the parser.** It emits the
+  `{{schema:0 sum:5 count:4 buckets:[1 2 1]}}` DSL that the conformance `.test` files are written in.
+  It is pinned against Go over 650 histograms, so if the parser disagrees, the parser is wrong.
+- **Fused multiply-add is a correctness issue, not an optimisation.** See PORTING.md "Replicated Go
+  quirks" #0. Phase 5 is nothing but float arithmetic, and this bit us twice in Phase 3 — once for
+  61 ULP. When porting an expression of the form `a + b*c`, disassemble the Go and check.
 
-- **`compactBuckets` iterated a snapshot.** Go's `for i, span := range spans` re-reads each element
-  from the slice as the loop mutates it; Swift's `enumerated()` captures the array up front. Two of
-  Go's compaction loops mutate `spans` while walking it, so the port silently compacted a different
-  histogram (45 of 2,125 cases). **When porting a Go loop that mutates what it iterates, index
-  explicitly.** This will recur.
-- **`reduceResolution` used the wrong error message** for mid-span bucket exhaustion. See
-  PORTING.md "Replicated Go quirks" #2.
+### What Phase 3 left behind, for reference
 
-`FloatHistogram`'s *storage* landed with it, because `ToFloat` has to return something. Only the
-fields — every method is still to come.
+| file | suites |
+|---|---|
+| `generic.go` | `histogram/bounds` |
+| `histogram.go` | `histogram/integer`, `-compact`, `-reduce`, `-validate`, `-equals` |
+| `float_histogram.go` | `histogram/float`, `-copytoschema`, `-equals`, `-scale`, `-add`, `-kahanadd`, `-reduce`, `-detectreset`, `-trim` |
+| `convert.go` | `histogram/nhcb-classic` |
+| Go's `math.Log2` | `gocompat/log2` |
 
-### 5b. `float_histogram.go` → `FloatHistogram` (2,454 Go lines — the long pole)
-
-Port it in slices, and add oracle coverage per slice rather than at the end:
-
-1. `Copy`/`Equals`/`String`/`TestExpression` and the bucket iterators
-2. `Mul`/`Div`/`Add`/`Sub`/`Compact`
-3. `DetectReset` and the counter-reset hints
-4. `ReduceResolution`/`CopyToSchema`
-5. custom-bucket mismatch reconciliation (`intersectCustomBucketBounds`, `addCustomBucketsWithMismatches`)
-6. `TrimBuckets`
-
-**Known hazards, specific to this file:**
-
-- **Kahan variants must be bit-exact.** `KahanAdd`, `kahanAddBuckets`, `kahanCompact`,
-  `kahanReduceResolution`. `PromMath.Kahan` is already verified against Go; use it and do not
-  re-derive the compensation arithmetic. Compare **bit patterns**, not values — `NaN != NaN` and
-  `-0.0 == 0.0` would both let a real divergence through.
-- **`TestExpression()`** emits the `{{schema:0 sum:5 count:4 buckets:[1 2 1]}}` DSL. It must round-trip
-  with the PromQL parser in Phase 4, because the conformance `.test` files use it. Get it exact.
-- **Copy-vs-alias semantics.** PORTING.md exception 4: some engine code depends on reused
-  `FloatHistogram` pointers even though we dropped `sync.Pool`. Preserve every explicit `Copy`/`CopyTo`
-  call site.
-- `float_histogram_test.go` is **4,641 lines** and is the real specification. Mine it for edge cases
-  when building the oracle corpus — do not invent your own.
-
-### 5c. `convert.go` (145 lines)
-
-`ConvertNHCBToClassic`. Small, but it calls `FloatHistogram.Validate()` and needs `labels.Builder`
-plus `model.MetricNameLabel` — so it wants a `PromHistogram → PromLabels` dependency edge and has to
-follow 5b, not precede it.
-
-### Gate for Phase 3
-
-An oracle suite over a fuzzed histogram corpus comparing, field by field with float **bit patterns**:
-`Add`, `Sub`, `Mul`, `Div`, `KahanAdd`, `Compact`, `DetectReset`, `ToFloat`, `Validate`, `Equals`,
-`CopyTo`, `ReduceResolution`.
-
-Tasks #16, #17 and #18 in the task list already describe this breakdown.
+`GoMath` (in `GoCompat`) exists because Go implements `Log`, `Log2` and `Frexp` itself rather than
+calling libm, and the platform libm disagrees on 43 of 2,350 values — including exact exponential
+bucket boundaries. Do not "simplify" it into a libm call.
 
 ---
 

@@ -72,6 +72,11 @@ public enum Fixtures {
     /// Batch reporting is deliberate: corpora run to millions of cases, and
     /// stopping at the first failure hides whether a bug is systematic or a
     /// single edge case.
+    ///
+    /// Comparison is `==` over the decoded output, which for float-carrying
+    /// fixtures means bit patterns. There is deliberately no tolerant variant: if
+    /// a surface cannot match Go to the bit, that is a finding to chase or a
+    /// documented exception, not something to paper over here.
     public static func check<In: Decodable & Sendable, Out: Decodable & Equatable & Sendable>(
         _ relativePath: String,
         _: FixtureCase<In, Out>.Type = FixtureCase<In, Out>.self,

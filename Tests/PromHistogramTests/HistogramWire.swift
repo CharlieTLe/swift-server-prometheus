@@ -133,6 +133,8 @@ func errString(_ body: () throws -> Void) -> String {
         return e.description
     } catch let e as HistogramOperationError {
         return e.description
+    } catch let e as NHCBConversionError {
+        return e.description
     } catch {
         return "unexpected error type: \(error)"
     }
