@@ -88,7 +88,13 @@ let package = Package(
         ),
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
-        .testTarget(name: "PromQLParserTests", dependencies: ["PromQLParser", "GoOracleSupport"]),
+        .testTarget(
+            name: "PromQLParserTests",
+            dependencies: [
+                "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "GoCompat",
+                "GoOracleSupport",
+            ]
+        ),
     ]
 )
 

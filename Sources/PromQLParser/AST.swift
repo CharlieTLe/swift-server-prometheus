@@ -349,14 +349,29 @@ public final class ParenExpr: Expr {
 }
 
 /// Go: `StringLiteral`.
+///
+/// The value is bytes, not a `String`: `"\xff"` is a legal PromQL string literal
+/// and its value is not valid UTF-8, which a Swift String cannot hold. Go's
+/// `strconv.Quote` re-escapes the raw byte, so decoding through U+FFFD here would
+/// change the printed query (ADR-9).
 public final class StringLiteral: Expr {
-    public var val: String
+    public var val: [UInt8]
     public var posRange: PositionRange
 
-    public init(val: String, posRange: PositionRange) {
+    public init(val: [UInt8], posRange: PositionRange) {
         self.val = val
         self.posRange = posRange
     }
+
+    public init(val: String, posRange: PositionRange) {
+        self.val = Array(val.utf8)
+        self.posRange = posRange
+    }
+
+    /// The value decoded as UTF-8, with U+FFFD for anything invalid. This is what
+    /// Go's `json.Marshal` produces for the same string, so it is the right form
+    /// for the AST serialisation — but not for printing.
+    public var valString: String { String(decoding: val, as: UTF8.self) }
 
     public var type: ValueType { .string }
     public var positionRange: PositionRange { posRange }

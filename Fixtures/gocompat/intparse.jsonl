@@ -1,0 +1,408 @@
+{"id":"ParseInt/0/64/0","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/10/64/0","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/10/64/0","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/0/64/0","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/16/64/0","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/32/0","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/64/1","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"31"},"out":{"val":"1","err":""}}
+{"id":"ParseInt/10/64/1","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"31"},"out":{"val":"1","err":""}}
+{"id":"ParseUint/10/64/1","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"31"},"out":{"val":"1","err":""}}
+{"id":"ParseUint/0/64/1","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"31"},"out":{"val":"1","err":""}}
+{"id":"ParseUint/16/64/1","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"31"},"out":{"val":"1","err":""}}
+{"id":"ParseInt/0/32/1","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"31"},"out":{"val":"1","err":""}}
+{"id":"ParseInt/0/64/2","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d31"},"out":{"val":"-1","err":""}}
+{"id":"ParseInt/10/64/2","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d31"},"out":{"val":"-1","err":""}}
+{"id":"ParseUint/10/64/2","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-1\": invalid syntax"}}
+{"id":"ParseUint/0/64/2","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-1\": invalid syntax"}}
+{"id":"ParseUint/16/64/2","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-1\": invalid syntax"}}
+{"id":"ParseInt/0/32/2","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d31"},"out":{"val":"-1","err":""}}
+{"id":"ParseInt/0/64/3","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2b31"},"out":{"val":"1","err":""}}
+{"id":"ParseInt/10/64/3","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2b31"},"out":{"val":"1","err":""}}
+{"id":"ParseUint/10/64/3","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2b31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+1\": invalid syntax"}}
+{"id":"ParseUint/0/64/3","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2b31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+1\": invalid syntax"}}
+{"id":"ParseUint/16/64/3","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2b31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+1\": invalid syntax"}}
+{"id":"ParseInt/0/32/3","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2b31"},"out":{"val":"1","err":""}}
+{"id":"ParseInt/0/64/4","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"39"},"out":{"val":"9","err":""}}
+{"id":"ParseInt/10/64/4","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"39"},"out":{"val":"9","err":""}}
+{"id":"ParseUint/10/64/4","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"39"},"out":{"val":"9","err":""}}
+{"id":"ParseUint/0/64/4","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"39"},"out":{"val":"9","err":""}}
+{"id":"ParseUint/16/64/4","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"39"},"out":{"val":"9","err":""}}
+{"id":"ParseInt/0/32/4","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"39"},"out":{"val":"9","err":""}}
+{"id":"ParseInt/0/64/5","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3130"},"out":{"val":"10","err":""}}
+{"id":"ParseInt/10/64/5","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3130"},"out":{"val":"10","err":""}}
+{"id":"ParseUint/10/64/5","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3130"},"out":{"val":"10","err":""}}
+{"id":"ParseUint/0/64/5","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3130"},"out":{"val":"10","err":""}}
+{"id":"ParseUint/16/64/5","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3130"},"out":{"val":"16","err":""}}
+{"id":"ParseInt/0/32/5","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3130"},"out":{"val":"10","err":""}}
+{"id":"ParseInt/0/64/6","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30303030"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/10/64/6","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30303030"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/10/64/6","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30303030"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/0/64/6","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30303030"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/16/64/6","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30303030"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/32/6","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30303030"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/64/7","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/10/64/7","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d30"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/10/64/7","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0\": invalid syntax"}}
+{"id":"ParseUint/0/64/7","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0\": invalid syntax"}}
+{"id":"ParseUint/16/64/7","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0\": invalid syntax"}}
+{"id":"ParseInt/0/32/7","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/64/8","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2b30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/10/64/8","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2b30"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/10/64/8","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2b30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+0\": invalid syntax"}}
+{"id":"ParseUint/0/64/8","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2b30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+0\": invalid syntax"}}
+{"id":"ParseUint/16/64/8","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2b30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+0\": invalid syntax"}}
+{"id":"ParseInt/0/32/8","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2b30"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/64/9","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"39323233333732303336383534373735383037"},"out":{"val":"9223372036854775807","err":""}}
+{"id":"ParseInt/10/64/9","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"39323233333732303336383534373735383037"},"out":{"val":"9223372036854775807","err":""}}
+{"id":"ParseUint/10/64/9","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"39323233333732303336383534373735383037"},"out":{"val":"9223372036854775807","err":""}}
+{"id":"ParseUint/0/64/9","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"39323233333732303336383534373735383037"},"out":{"val":"9223372036854775807","err":""}}
+{"id":"ParseUint/16/64/9","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"39323233333732303336383534373735383037"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"9223372036854775807\": value out of range"}}
+{"id":"ParseInt/0/32/9","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"39323233333732303336383534373735383037"},"out":{"val":"2147483647","err":"strconv.ParseInt: parsing \"9223372036854775807\": value out of range"}}
+{"id":"ParseInt/0/64/10","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"39323233333732303336383534373735383038"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"9223372036854775808\": value out of range"}}
+{"id":"ParseInt/10/64/10","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"39323233333732303336383534373735383038"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"9223372036854775808\": value out of range"}}
+{"id":"ParseUint/10/64/10","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"39323233333732303336383534373735383038"},"out":{"val":"9223372036854775808","err":""}}
+{"id":"ParseUint/0/64/10","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"39323233333732303336383534373735383038"},"out":{"val":"9223372036854775808","err":""}}
+{"id":"ParseUint/16/64/10","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"39323233333732303336383534373735383038"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"9223372036854775808\": value out of range"}}
+{"id":"ParseInt/0/32/10","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"39323233333732303336383534373735383038"},"out":{"val":"2147483647","err":"strconv.ParseInt: parsing \"9223372036854775808\": value out of range"}}
+{"id":"ParseInt/0/64/11","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d39323233333732303336383534373735383038"},"out":{"val":"-9223372036854775808","err":""}}
+{"id":"ParseInt/10/64/11","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d39323233333732303336383534373735383038"},"out":{"val":"-9223372036854775808","err":""}}
+{"id":"ParseUint/10/64/11","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d39323233333732303336383534373735383038"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-9223372036854775808\": invalid syntax"}}
+{"id":"ParseUint/0/64/11","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d39323233333732303336383534373735383038"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-9223372036854775808\": invalid syntax"}}
+{"id":"ParseUint/16/64/11","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d39323233333732303336383534373735383038"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-9223372036854775808\": invalid syntax"}}
+{"id":"ParseInt/0/32/11","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d39323233333732303336383534373735383038"},"out":{"val":"-2147483648","err":"strconv.ParseInt: parsing \"-9223372036854775808\": value out of range"}}
+{"id":"ParseInt/0/64/12","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d39323233333732303336383534373735383039"},"out":{"val":"-9223372036854775808","err":"strconv.ParseInt: parsing \"-9223372036854775809\": value out of range"}}
+{"id":"ParseInt/10/64/12","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d39323233333732303336383534373735383039"},"out":{"val":"-9223372036854775808","err":"strconv.ParseInt: parsing \"-9223372036854775809\": value out of range"}}
+{"id":"ParseUint/10/64/12","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d39323233333732303336383534373735383039"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-9223372036854775809\": invalid syntax"}}
+{"id":"ParseUint/0/64/12","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d39323233333732303336383534373735383039"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-9223372036854775809\": invalid syntax"}}
+{"id":"ParseUint/16/64/12","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d39323233333732303336383534373735383039"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-9223372036854775809\": invalid syntax"}}
+{"id":"ParseInt/0/32/12","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d39323233333732303336383534373735383039"},"out":{"val":"-2147483648","err":"strconv.ParseInt: parsing \"-9223372036854775809\": value out of range"}}
+{"id":"ParseInt/0/64/13","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3138343436373434303733373039353531363135"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"18446744073709551615\": value out of range"}}
+{"id":"ParseInt/10/64/13","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3138343436373434303733373039353531363135"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"18446744073709551615\": value out of range"}}
+{"id":"ParseUint/10/64/13","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3138343436373434303733373039353531363135"},"out":{"val":"18446744073709551615","err":""}}
+{"id":"ParseUint/0/64/13","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3138343436373434303733373039353531363135"},"out":{"val":"18446744073709551615","err":""}}
+{"id":"ParseUint/16/64/13","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3138343436373434303733373039353531363135"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"18446744073709551615\": value out of range"}}
+{"id":"ParseInt/0/32/13","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3138343436373434303733373039353531363135"},"out":{"val":"2147483647","err":"strconv.ParseInt: parsing \"18446744073709551615\": value out of range"}}
+{"id":"ParseInt/0/64/14","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3138343436373434303733373039353531363136"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"18446744073709551616\": value out of range"}}
+{"id":"ParseInt/10/64/14","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3138343436373434303733373039353531363136"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"18446744073709551616\": value out of range"}}
+{"id":"ParseUint/10/64/14","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3138343436373434303733373039353531363136"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"18446744073709551616\": value out of range"}}
+{"id":"ParseUint/0/64/14","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3138343436373434303733373039353531363136"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"18446744073709551616\": value out of range"}}
+{"id":"ParseUint/16/64/14","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3138343436373434303733373039353531363136"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"18446744073709551616\": value out of range"}}
+{"id":"ParseInt/0/32/14","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3138343436373434303733373039353531363136"},"out":{"val":"2147483647","err":"strconv.ParseInt: parsing \"18446744073709551616\": value out of range"}}
+{"id":"ParseInt/0/64/15","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3939393939393939393939393939393939393939393939393939393939393939"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"99999999999999999999999999999999\": value out of range"}}
+{"id":"ParseInt/10/64/15","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3939393939393939393939393939393939393939393939393939393939393939"},"out":{"val":"9223372036854775807","err":"strconv.ParseInt: parsing \"99999999999999999999999999999999\": value out of range"}}
+{"id":"ParseUint/10/64/15","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3939393939393939393939393939393939393939393939393939393939393939"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"99999999999999999999999999999999\": value out of range"}}
+{"id":"ParseUint/0/64/15","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3939393939393939393939393939393939393939393939393939393939393939"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"99999999999999999999999999999999\": value out of range"}}
+{"id":"ParseUint/16/64/15","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3939393939393939393939393939393939393939393939393939393939393939"},"out":{"val":"18446744073709551615","err":"strconv.ParseUint: parsing \"99999999999999999999999999999999\": value out of range"}}
+{"id":"ParseInt/0/32/15","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3939393939393939393939393939393939393939393939393939393939393939"},"out":{"val":"2147483647","err":"strconv.ParseInt: parsing \"99999999999999999999999999999999\": value out of range"}}
+{"id":"ParseInt/0/64/16","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30783166"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/10/64/16","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30783166"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x1f\": invalid syntax"}}
+{"id":"ParseUint/10/64/16","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x1f\": invalid syntax"}}
+{"id":"ParseUint/0/64/16","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30783166"},"out":{"val":"31","err":""}}
+{"id":"ParseUint/16/64/16","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x1f\": invalid syntax"}}
+{"id":"ParseInt/0/32/16","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30783166"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/0/64/17","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30583146"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/10/64/17","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30583146"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0X1F\": invalid syntax"}}
+{"id":"ParseUint/10/64/17","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30583146"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0X1F\": invalid syntax"}}
+{"id":"ParseUint/0/64/17","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30583146"},"out":{"val":"31","err":""}}
+{"id":"ParseUint/16/64/17","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30583146"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0X1F\": invalid syntax"}}
+{"id":"ParseInt/0/32/17","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30583146"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/0/64/18","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30786666"},"out":{"val":"255","err":""}}
+{"id":"ParseInt/10/64/18","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30786666"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0xff\": invalid syntax"}}
+{"id":"ParseUint/10/64/18","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30786666"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0xff\": invalid syntax"}}
+{"id":"ParseUint/0/64/18","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30786666"},"out":{"val":"255","err":""}}
+{"id":"ParseUint/16/64/18","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30786666"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0xff\": invalid syntax"}}
+{"id":"ParseInt/0/32/18","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30786666"},"out":{"val":"255","err":""}}
+{"id":"ParseInt/0/64/19","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3078"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x\": invalid syntax"}}
+{"id":"ParseInt/10/64/19","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3078"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x\": invalid syntax"}}
+{"id":"ParseUint/10/64/19","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3078"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x\": invalid syntax"}}
+{"id":"ParseUint/0/64/19","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3078"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x\": invalid syntax"}}
+{"id":"ParseUint/16/64/19","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3078"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x\": invalid syntax"}}
+{"id":"ParseInt/0/32/19","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3078"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x\": invalid syntax"}}
+{"id":"ParseInt/0/64/20","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"307830"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/10/64/20","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"307830"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x0\": invalid syntax"}}
+{"id":"ParseUint/10/64/20","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"307830"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x0\": invalid syntax"}}
+{"id":"ParseUint/0/64/20","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"307830"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/16/64/20","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"307830"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x0\": invalid syntax"}}
+{"id":"ParseInt/0/32/20","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"307830"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/64/21","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3062313031"},"out":{"val":"5","err":""}}
+{"id":"ParseInt/10/64/21","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3062313031"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b101\": invalid syntax"}}
+{"id":"ParseUint/10/64/21","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3062313031"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b101\": invalid syntax"}}
+{"id":"ParseUint/0/64/21","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3062313031"},"out":{"val":"5","err":""}}
+{"id":"ParseUint/16/64/21","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3062313031"},"out":{"val":"45313","err":""}}
+{"id":"ParseInt/0/32/21","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3062313031"},"out":{"val":"5","err":""}}
+{"id":"ParseInt/0/64/22","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3042313031"},"out":{"val":"5","err":""}}
+{"id":"ParseInt/10/64/22","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3042313031"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0B101\": invalid syntax"}}
+{"id":"ParseUint/10/64/22","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3042313031"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0B101\": invalid syntax"}}
+{"id":"ParseUint/0/64/22","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3042313031"},"out":{"val":"5","err":""}}
+{"id":"ParseUint/16/64/22","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3042313031"},"out":{"val":"45313","err":""}}
+{"id":"ParseInt/0/32/22","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3042313031"},"out":{"val":"5","err":""}}
+{"id":"ParseInt/0/64/23","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3062"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b\": invalid syntax"}}
+{"id":"ParseInt/10/64/23","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3062"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b\": invalid syntax"}}
+{"id":"ParseUint/10/64/23","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3062"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b\": invalid syntax"}}
+{"id":"ParseUint/0/64/23","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3062"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b\": invalid syntax"}}
+{"id":"ParseUint/16/64/23","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3062"},"out":{"val":"11","err":""}}
+{"id":"ParseInt/0/32/23","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3062"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b\": invalid syntax"}}
+{"id":"ParseInt/0/64/24","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"306232"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b2\": invalid syntax"}}
+{"id":"ParseInt/10/64/24","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"306232"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b2\": invalid syntax"}}
+{"id":"ParseUint/10/64/24","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"306232"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b2\": invalid syntax"}}
+{"id":"ParseUint/0/64/24","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"306232"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b2\": invalid syntax"}}
+{"id":"ParseUint/16/64/24","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"306232"},"out":{"val":"178","err":""}}
+{"id":"ParseInt/0/32/24","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"306232"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b2\": invalid syntax"}}
+{"id":"ParseInt/0/64/25","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"306f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseInt/10/64/25","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"306f3137"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o17\": invalid syntax"}}
+{"id":"ParseUint/10/64/25","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"306f3137"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o17\": invalid syntax"}}
+{"id":"ParseUint/0/64/25","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"306f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseUint/16/64/25","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"306f3137"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o17\": invalid syntax"}}
+{"id":"ParseInt/0/32/25","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"306f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseInt/0/64/26","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"304f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseInt/10/64/26","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"304f3137"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0O17\": invalid syntax"}}
+{"id":"ParseUint/10/64/26","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"304f3137"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0O17\": invalid syntax"}}
+{"id":"ParseUint/0/64/26","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"304f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseUint/16/64/26","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"304f3137"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0O17\": invalid syntax"}}
+{"id":"ParseInt/0/32/26","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"304f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseInt/0/64/27","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"306f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o\": invalid syntax"}}
+{"id":"ParseInt/10/64/27","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"306f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o\": invalid syntax"}}
+{"id":"ParseUint/10/64/27","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"306f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o\": invalid syntax"}}
+{"id":"ParseUint/0/64/27","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"306f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o\": invalid syntax"}}
+{"id":"ParseUint/16/64/27","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"306f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o\": invalid syntax"}}
+{"id":"ParseInt/0/32/27","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"306f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o\": invalid syntax"}}
+{"id":"ParseInt/0/64/28","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"306f38"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o8\": invalid syntax"}}
+{"id":"ParseInt/10/64/28","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"306f38"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o8\": invalid syntax"}}
+{"id":"ParseUint/10/64/28","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"306f38"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o8\": invalid syntax"}}
+{"id":"ParseUint/0/64/28","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"306f38"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o8\": invalid syntax"}}
+{"id":"ParseUint/16/64/28","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"306f38"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o8\": invalid syntax"}}
+{"id":"ParseInt/0/32/28","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"306f38"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o8\": invalid syntax"}}
+{"id":"ParseInt/0/64/29","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30373535"},"out":{"val":"493","err":""}}
+{"id":"ParseInt/10/64/29","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30373535"},"out":{"val":"755","err":""}}
+{"id":"ParseUint/10/64/29","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30373535"},"out":{"val":"755","err":""}}
+{"id":"ParseUint/0/64/29","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30373535"},"out":{"val":"493","err":""}}
+{"id":"ParseUint/16/64/29","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30373535"},"out":{"val":"1877","err":""}}
+{"id":"ParseInt/0/32/29","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30373535"},"out":{"val":"493","err":""}}
+{"id":"ParseInt/0/64/30","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30373737"},"out":{"val":"511","err":""}}
+{"id":"ParseInt/10/64/30","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30373737"},"out":{"val":"777","err":""}}
+{"id":"ParseUint/10/64/30","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30373737"},"out":{"val":"777","err":""}}
+{"id":"ParseUint/0/64/30","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30373737"},"out":{"val":"511","err":""}}
+{"id":"ParseUint/16/64/30","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30373737"},"out":{"val":"1911","err":""}}
+{"id":"ParseInt/0/32/30","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30373737"},"out":{"val":"511","err":""}}
+{"id":"ParseInt/0/64/31","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3038"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"08\": invalid syntax"}}
+{"id":"ParseInt/10/64/31","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3038"},"out":{"val":"8","err":""}}
+{"id":"ParseUint/10/64/31","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3038"},"out":{"val":"8","err":""}}
+{"id":"ParseUint/0/64/31","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3038"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"08\": invalid syntax"}}
+{"id":"ParseUint/16/64/31","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3038"},"out":{"val":"8","err":""}}
+{"id":"ParseInt/0/32/31","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3038"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"08\": invalid syntax"}}
+{"id":"ParseInt/0/64/32","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3039"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"09\": invalid syntax"}}
+{"id":"ParseInt/10/64/32","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3039"},"out":{"val":"9","err":""}}
+{"id":"ParseUint/10/64/32","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3039"},"out":{"val":"9","err":""}}
+{"id":"ParseUint/0/64/32","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3039"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"09\": invalid syntax"}}
+{"id":"ParseUint/16/64/32","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3039"},"out":{"val":"9","err":""}}
+{"id":"ParseInt/0/32/32","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3039"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"09\": invalid syntax"}}
+{"id":"ParseInt/0/64/33","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3037"},"out":{"val":"7","err":""}}
+{"id":"ParseInt/10/64/33","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3037"},"out":{"val":"7","err":""}}
+{"id":"ParseUint/10/64/33","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3037"},"out":{"val":"7","err":""}}
+{"id":"ParseUint/0/64/33","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3037"},"out":{"val":"7","err":""}}
+{"id":"ParseUint/16/64/33","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3037"},"out":{"val":"7","err":""}}
+{"id":"ParseInt/0/32/33","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3037"},"out":{"val":"7","err":""}}
+{"id":"ParseInt/0/64/34","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3030"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/10/64/34","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3030"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/10/64/34","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3030"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/0/64/34","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3030"},"out":{"val":"0","err":""}}
+{"id":"ParseUint/16/64/34","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3030"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/32/34","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3030"},"out":{"val":"0","err":""}}
+{"id":"ParseInt/0/64/35","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d30783166"},"out":{"val":"-31","err":""}}
+{"id":"ParseInt/10/64/35","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d30783166"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"-0x1f\": invalid syntax"}}
+{"id":"ParseUint/10/64/35","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0x1f\": invalid syntax"}}
+{"id":"ParseUint/0/64/35","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0x1f\": invalid syntax"}}
+{"id":"ParseUint/16/64/35","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0x1f\": invalid syntax"}}
+{"id":"ParseInt/0/32/35","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d30783166"},"out":{"val":"-31","err":""}}
+{"id":"ParseInt/0/64/36","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2b30783166"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/10/64/36","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2b30783166"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"+0x1f\": invalid syntax"}}
+{"id":"ParseUint/10/64/36","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2b30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+0x1f\": invalid syntax"}}
+{"id":"ParseUint/0/64/36","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2b30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+0x1f\": invalid syntax"}}
+{"id":"ParseUint/16/64/36","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2b30783166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+0x1f\": invalid syntax"}}
+{"id":"ParseInt/0/32/36","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2b30783166"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/0/64/37","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d30373535"},"out":{"val":"-493","err":""}}
+{"id":"ParseInt/10/64/37","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d30373535"},"out":{"val":"-755","err":""}}
+{"id":"ParseUint/10/64/37","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d30373535"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0755\": invalid syntax"}}
+{"id":"ParseUint/0/64/37","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d30373535"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0755\": invalid syntax"}}
+{"id":"ParseUint/16/64/37","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d30373535"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-0755\": invalid syntax"}}
+{"id":"ParseInt/0/32/37","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d30373535"},"out":{"val":"-493","err":""}}
+{"id":"ParseInt/0/64/38","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"315f303030"},"out":{"val":"1000","err":""}}
+{"id":"ParseInt/10/64/38","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"315f303030"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1_000\": invalid syntax"}}
+{"id":"ParseUint/10/64/38","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"315f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_000\": invalid syntax"}}
+{"id":"ParseUint/0/64/38","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"315f303030"},"out":{"val":"1000","err":""}}
+{"id":"ParseUint/16/64/38","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"315f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_000\": invalid syntax"}}
+{"id":"ParseInt/0/32/38","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"315f303030"},"out":{"val":"1000","err":""}}
+{"id":"ParseInt/0/64/39","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"315f3030305f303030"},"out":{"val":"1000000","err":""}}
+{"id":"ParseInt/10/64/39","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"315f3030305f303030"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1_000_000\": invalid syntax"}}
+{"id":"ParseUint/10/64/39","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"315f3030305f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_000_000\": invalid syntax"}}
+{"id":"ParseUint/0/64/39","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"315f3030305f303030"},"out":{"val":"1000000","err":""}}
+{"id":"ParseUint/16/64/39","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"315f3030305f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_000_000\": invalid syntax"}}
+{"id":"ParseInt/0/32/39","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"315f3030305f303030"},"out":{"val":"1000000","err":""}}
+{"id":"ParseInt/0/64/40","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30785f3166"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/10/64/40","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30785f3166"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x_1f\": invalid syntax"}}
+{"id":"ParseUint/10/64/40","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30785f3166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x_1f\": invalid syntax"}}
+{"id":"ParseUint/0/64/40","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30785f3166"},"out":{"val":"31","err":""}}
+{"id":"ParseUint/16/64/40","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30785f3166"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x_1f\": invalid syntax"}}
+{"id":"ParseInt/0/32/40","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30785f3166"},"out":{"val":"31","err":""}}
+{"id":"ParseInt/0/64/41","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"30625f31303130"},"out":{"val":"10","err":""}}
+{"id":"ParseInt/10/64/41","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"30625f31303130"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0b_1010\": invalid syntax"}}
+{"id":"ParseUint/10/64/41","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"30625f31303130"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b_1010\": invalid syntax"}}
+{"id":"ParseUint/0/64/41","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"30625f31303130"},"out":{"val":"10","err":""}}
+{"id":"ParseUint/16/64/41","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"30625f31303130"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0b_1010\": invalid syntax"}}
+{"id":"ParseInt/0/32/41","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"30625f31303130"},"out":{"val":"10","err":""}}
+{"id":"ParseInt/0/64/42","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"306f5f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseInt/10/64/42","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"306f5f3137"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0o_17\": invalid syntax"}}
+{"id":"ParseUint/10/64/42","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"306f5f3137"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o_17\": invalid syntax"}}
+{"id":"ParseUint/0/64/42","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"306f5f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseUint/16/64/42","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"306f5f3137"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0o_17\": invalid syntax"}}
+{"id":"ParseInt/0/32/42","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"306f5f3137"},"out":{"val":"15","err":""}}
+{"id":"ParseInt/0/64/43","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"305f373535"},"out":{"val":"493","err":""}}
+{"id":"ParseInt/10/64/43","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"305f373535"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0_755\": invalid syntax"}}
+{"id":"ParseUint/10/64/43","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"305f373535"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0_755\": invalid syntax"}}
+{"id":"ParseUint/0/64/43","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"305f373535"},"out":{"val":"493","err":""}}
+{"id":"ParseUint/16/64/43","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"305f373535"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0_755\": invalid syntax"}}
+{"id":"ParseInt/0/32/43","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"305f373535"},"out":{"val":"493","err":""}}
+{"id":"ParseInt/0/64/44","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"5f31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"_1\": invalid syntax"}}
+{"id":"ParseInt/10/64/44","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"5f31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"_1\": invalid syntax"}}
+{"id":"ParseUint/10/64/44","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"5f31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"_1\": invalid syntax"}}
+{"id":"ParseUint/0/64/44","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"5f31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"_1\": invalid syntax"}}
+{"id":"ParseUint/16/64/44","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"5f31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"_1\": invalid syntax"}}
+{"id":"ParseInt/0/32/44","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"5f31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"_1\": invalid syntax"}}
+{"id":"ParseInt/0/64/45","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"315f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1_\": invalid syntax"}}
+{"id":"ParseInt/10/64/45","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"315f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1_\": invalid syntax"}}
+{"id":"ParseUint/10/64/45","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"315f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_\": invalid syntax"}}
+{"id":"ParseUint/0/64/45","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"315f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_\": invalid syntax"}}
+{"id":"ParseUint/16/64/45","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"315f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1_\": invalid syntax"}}
+{"id":"ParseInt/0/32/45","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"315f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1_\": invalid syntax"}}
+{"id":"ParseInt/0/64/46","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"315f5f30"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1__0\": invalid syntax"}}
+{"id":"ParseInt/10/64/46","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"315f5f30"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1__0\": invalid syntax"}}
+{"id":"ParseUint/10/64/46","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"315f5f30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1__0\": invalid syntax"}}
+{"id":"ParseUint/0/64/46","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"315f5f30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1__0\": invalid syntax"}}
+{"id":"ParseUint/16/64/46","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"315f5f30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1__0\": invalid syntax"}}
+{"id":"ParseInt/0/32/46","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"315f5f30"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1__0\": invalid syntax"}}
+{"id":"ParseInt/0/64/47","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3078315f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x1_\": invalid syntax"}}
+{"id":"ParseInt/10/64/47","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3078315f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x1_\": invalid syntax"}}
+{"id":"ParseUint/10/64/47","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3078315f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x1_\": invalid syntax"}}
+{"id":"ParseUint/0/64/47","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3078315f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x1_\": invalid syntax"}}
+{"id":"ParseUint/16/64/47","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3078315f"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0x1_\": invalid syntax"}}
+{"id":"ParseInt/0/32/47","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3078315f"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0x1_\": invalid syntax"}}
+{"id":"ParseInt/0/64/48","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"305f7831"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0_x1\": invalid syntax"}}
+{"id":"ParseInt/10/64/48","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"305f7831"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0_x1\": invalid syntax"}}
+{"id":"ParseUint/10/64/48","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"305f7831"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0_x1\": invalid syntax"}}
+{"id":"ParseUint/0/64/48","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"305f7831"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0_x1\": invalid syntax"}}
+{"id":"ParseUint/16/64/48","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"305f7831"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0_x1\": invalid syntax"}}
+{"id":"ParseInt/0/32/48","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"305f7831"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0_x1\": invalid syntax"}}
+{"id":"ParseInt/0/64/49","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d315f303030"},"out":{"val":"-1000","err":""}}
+{"id":"ParseInt/10/64/49","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d315f303030"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"-1_000\": invalid syntax"}}
+{"id":"ParseUint/10/64/49","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d315f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-1_000\": invalid syntax"}}
+{"id":"ParseUint/0/64/49","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d315f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-1_000\": invalid syntax"}}
+{"id":"ParseUint/16/64/49","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d315f303030"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-1_000\": invalid syntax"}}
+{"id":"ParseInt/0/32/49","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d315f303030"},"out":{"val":"-1000","err":""}}
+{"id":"ParseInt/0/64/50","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":""},"out":{"val":"0","err":"strconv.ParseInt: parsing \"\": invalid syntax"}}
+{"id":"ParseInt/10/64/50","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":""},"out":{"val":"0","err":"strconv.ParseInt: parsing \"\": invalid syntax"}}
+{"id":"ParseUint/10/64/50","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":""},"out":{"val":"0","err":"strconv.ParseUint: parsing \"\": invalid syntax"}}
+{"id":"ParseUint/0/64/50","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":""},"out":{"val":"0","err":"strconv.ParseUint: parsing \"\": invalid syntax"}}
+{"id":"ParseUint/16/64/50","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":""},"out":{"val":"0","err":"strconv.ParseUint: parsing \"\": invalid syntax"}}
+{"id":"ParseInt/0/32/50","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":""},"out":{"val":"0","err":"strconv.ParseInt: parsing \"\": invalid syntax"}}
+{"id":"ParseInt/0/64/51","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"20"},"out":{"val":"0","err":"strconv.ParseInt: parsing \" \": invalid syntax"}}
+{"id":"ParseInt/10/64/51","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"20"},"out":{"val":"0","err":"strconv.ParseInt: parsing \" \": invalid syntax"}}
+{"id":"ParseUint/10/64/51","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"20"},"out":{"val":"0","err":"strconv.ParseUint: parsing \" \": invalid syntax"}}
+{"id":"ParseUint/0/64/51","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"20"},"out":{"val":"0","err":"strconv.ParseUint: parsing \" \": invalid syntax"}}
+{"id":"ParseUint/16/64/51","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"20"},"out":{"val":"0","err":"strconv.ParseUint: parsing \" \": invalid syntax"}}
+{"id":"ParseInt/0/32/51","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"20"},"out":{"val":"0","err":"strconv.ParseInt: parsing \" \": invalid syntax"}}
+{"id":"ParseInt/0/64/52","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3120"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1 \": invalid syntax"}}
+{"id":"ParseInt/10/64/52","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3120"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1 \": invalid syntax"}}
+{"id":"ParseUint/10/64/52","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3120"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1 \": invalid syntax"}}
+{"id":"ParseUint/0/64/52","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3120"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1 \": invalid syntax"}}
+{"id":"ParseUint/16/64/52","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3120"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1 \": invalid syntax"}}
+{"id":"ParseInt/0/32/52","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3120"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1 \": invalid syntax"}}
+{"id":"ParseInt/0/64/53","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2031"},"out":{"val":"0","err":"strconv.ParseInt: parsing \" 1\": invalid syntax"}}
+{"id":"ParseInt/10/64/53","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2031"},"out":{"val":"0","err":"strconv.ParseInt: parsing \" 1\": invalid syntax"}}
+{"id":"ParseUint/10/64/53","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2031"},"out":{"val":"0","err":"strconv.ParseUint: parsing \" 1\": invalid syntax"}}
+{"id":"ParseUint/0/64/53","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2031"},"out":{"val":"0","err":"strconv.ParseUint: parsing \" 1\": invalid syntax"}}
+{"id":"ParseUint/16/64/53","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2031"},"out":{"val":"0","err":"strconv.ParseUint: parsing \" 1\": invalid syntax"}}
+{"id":"ParseInt/0/32/53","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2031"},"out":{"val":"0","err":"strconv.ParseInt: parsing \" 1\": invalid syntax"}}
+{"id":"ParseInt/0/64/54","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2b"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"+\": invalid syntax"}}
+{"id":"ParseInt/10/64/54","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2b"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"+\": invalid syntax"}}
+{"id":"ParseUint/10/64/54","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2b"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+\": invalid syntax"}}
+{"id":"ParseUint/0/64/54","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2b"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+\": invalid syntax"}}
+{"id":"ParseUint/16/64/54","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2b"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"+\": invalid syntax"}}
+{"id":"ParseInt/0/32/54","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2b"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"+\": invalid syntax"}}
+{"id":"ParseInt/0/64/55","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"-\": invalid syntax"}}
+{"id":"ParseInt/10/64/55","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"-\": invalid syntax"}}
+{"id":"ParseUint/10/64/55","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-\": invalid syntax"}}
+{"id":"ParseUint/0/64/55","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-\": invalid syntax"}}
+{"id":"ParseUint/16/64/55","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"-\": invalid syntax"}}
+{"id":"ParseInt/0/32/55","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"-\": invalid syntax"}}
+{"id":"ParseInt/0/64/56","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2b2b31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"++1\": invalid syntax"}}
+{"id":"ParseInt/10/64/56","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2b2b31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"++1\": invalid syntax"}}
+{"id":"ParseUint/10/64/56","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2b2b31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"++1\": invalid syntax"}}
+{"id":"ParseUint/0/64/56","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2b2b31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"++1\": invalid syntax"}}
+{"id":"ParseUint/16/64/56","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2b2b31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"++1\": invalid syntax"}}
+{"id":"ParseInt/0/32/56","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2b2b31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"++1\": invalid syntax"}}
+{"id":"ParseInt/0/64/57","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"2d2d31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"--1\": invalid syntax"}}
+{"id":"ParseInt/10/64/57","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"2d2d31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"--1\": invalid syntax"}}
+{"id":"ParseUint/10/64/57","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"2d2d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"--1\": invalid syntax"}}
+{"id":"ParseUint/0/64/57","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"2d2d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"--1\": invalid syntax"}}
+{"id":"ParseUint/16/64/57","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"2d2d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"--1\": invalid syntax"}}
+{"id":"ParseInt/0/32/57","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"2d2d31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"--1\": invalid syntax"}}
+{"id":"ParseInt/0/64/58","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"312e30"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1.0\": invalid syntax"}}
+{"id":"ParseInt/10/64/58","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"312e30"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1.0\": invalid syntax"}}
+{"id":"ParseUint/10/64/58","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"312e30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1.0\": invalid syntax"}}
+{"id":"ParseUint/0/64/58","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"312e30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1.0\": invalid syntax"}}
+{"id":"ParseUint/16/64/58","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"312e30"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1.0\": invalid syntax"}}
+{"id":"ParseInt/0/32/58","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"312e30"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1.0\": invalid syntax"}}
+{"id":"ParseInt/0/64/59","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"316533"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1e3\": invalid syntax"}}
+{"id":"ParseInt/10/64/59","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"316533"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1e3\": invalid syntax"}}
+{"id":"ParseUint/10/64/59","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"316533"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1e3\": invalid syntax"}}
+{"id":"ParseUint/0/64/59","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"316533"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1e3\": invalid syntax"}}
+{"id":"ParseUint/16/64/59","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"316533"},"out":{"val":"483","err":""}}
+{"id":"ParseInt/0/32/59","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"316533"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1e3\": invalid syntax"}}
+{"id":"ParseInt/0/64/60","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"616263"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"abc\": invalid syntax"}}
+{"id":"ParseInt/10/64/60","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"616263"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"abc\": invalid syntax"}}
+{"id":"ParseUint/10/64/60","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"616263"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"abc\": invalid syntax"}}
+{"id":"ParseUint/0/64/60","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"616263"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"abc\": invalid syntax"}}
+{"id":"ParseUint/16/64/60","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"616263"},"out":{"val":"2748","err":""}}
+{"id":"ParseInt/0/32/60","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"616263"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"abc\": invalid syntax"}}
+{"id":"ParseInt/0/64/61","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"307867"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0xg\": invalid syntax"}}
+{"id":"ParseInt/10/64/61","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"307867"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0xg\": invalid syntax"}}
+{"id":"ParseUint/10/64/61","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"307867"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0xg\": invalid syntax"}}
+{"id":"ParseUint/0/64/61","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"307867"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0xg\": invalid syntax"}}
+{"id":"ParseUint/16/64/61","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"307867"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"0xg\": invalid syntax"}}
+{"id":"ParseInt/0/32/61","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"307867"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"0xg\": invalid syntax"}}
+{"id":"ParseInt/0/64/62","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"7a"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"z\": invalid syntax"}}
+{"id":"ParseInt/10/64/62","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"7a"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"z\": invalid syntax"}}
+{"id":"ParseUint/10/64/62","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"7a"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"z\": invalid syntax"}}
+{"id":"ParseUint/0/64/62","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"7a"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"z\": invalid syntax"}}
+{"id":"ParseUint/16/64/62","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"7a"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"z\": invalid syntax"}}
+{"id":"ParseInt/0/32/62","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"7a"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"z\": invalid syntax"}}
+{"id":"ParseInt/0/64/63","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"d9a1d9a2d9a3"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"١٢٣\": invalid syntax"}}
+{"id":"ParseInt/10/64/63","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"d9a1d9a2d9a3"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"١٢٣\": invalid syntax"}}
+{"id":"ParseUint/10/64/63","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"d9a1d9a2d9a3"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"١٢٣\": invalid syntax"}}
+{"id":"ParseUint/0/64/63","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"d9a1d9a2d9a3"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"١٢٣\": invalid syntax"}}
+{"id":"ParseUint/16/64/63","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"d9a1d9a2d9a3"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"١٢٣\": invalid syntax"}}
+{"id":"ParseInt/0/32/63","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"d9a1d9a2d9a3"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"١٢٣\": invalid syntax"}}
+{"id":"ParseInt/0/64/64","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"3100"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1\\x00\": invalid syntax"}}
+{"id":"ParseInt/10/64/64","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"3100"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1\\x00\": invalid syntax"}}
+{"id":"ParseUint/10/64/64","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"3100"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1\\x00\": invalid syntax"}}
+{"id":"ParseUint/0/64/64","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"3100"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1\\x00\": invalid syntax"}}
+{"id":"ParseUint/16/64/64","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"3100"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1\\x00\": invalid syntax"}}
+{"id":"ParseInt/0/32/64","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"3100"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1\\x00\": invalid syntax"}}
+{"id":"ParseInt/0/64/65","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"ff"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"\\xff\": invalid syntax"}}
+{"id":"ParseInt/10/64/65","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"ff"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"\\xff\": invalid syntax"}}
+{"id":"ParseUint/10/64/65","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"ff"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"\\xff\": invalid syntax"}}
+{"id":"ParseUint/0/64/65","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"ff"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"\\xff\": invalid syntax"}}
+{"id":"ParseUint/16/64/65","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"ff"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"\\xff\": invalid syntax"}}
+{"id":"ParseInt/0/32/65","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"ff"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"\\xff\": invalid syntax"}}
+{"id":"ParseInt/0/64/66","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"312d31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1-1\": invalid syntax"}}
+{"id":"ParseInt/10/64/66","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"312d31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1-1\": invalid syntax"}}
+{"id":"ParseUint/10/64/66","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"312d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1-1\": invalid syntax"}}
+{"id":"ParseUint/0/64/66","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"312d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1-1\": invalid syntax"}}
+{"id":"ParseUint/16/64/66","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"312d31"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"1-1\": invalid syntax"}}
+{"id":"ParseInt/0/32/66","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"312d31"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"1-1\": invalid syntax"}}
+{"id":"ParseInt/0/64/67","in":{"base":0,"bitSize":64,"fn":"ParseInt","in":"d9a2"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"٢\": invalid syntax"}}
+{"id":"ParseInt/10/64/67","in":{"base":10,"bitSize":64,"fn":"ParseInt","in":"d9a2"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"٢\": invalid syntax"}}
+{"id":"ParseUint/10/64/67","in":{"base":10,"bitSize":64,"fn":"ParseUint","in":"d9a2"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"٢\": invalid syntax"}}
+{"id":"ParseUint/0/64/67","in":{"base":0,"bitSize":64,"fn":"ParseUint","in":"d9a2"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"٢\": invalid syntax"}}
+{"id":"ParseUint/16/64/67","in":{"base":16,"bitSize":64,"fn":"ParseUint","in":"d9a2"},"out":{"val":"0","err":"strconv.ParseUint: parsing \"٢\": invalid syntax"}}
+{"id":"ParseInt/0/32/67","in":{"base":0,"bitSize":32,"fn":"ParseInt","in":"d9a2"},"out":{"val":"0","err":"strconv.ParseInt: parsing \"٢\": invalid syntax"}}

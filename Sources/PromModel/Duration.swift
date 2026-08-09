@@ -37,12 +37,15 @@ public struct PromDuration: Sendable, Hashable, Comparable, CustomStringConverti
     /// Go: `model.ParseDuration`'s error set. The `description` of each case
     /// reproduces Go's message byte-for-byte — these strings reach users through
     /// `ParseErr`, so they are contract, not diagnostics.
+    /// The payloads are bytes, not Strings: `%q` on a Go string escapes invalid
+    /// UTF-8 byte by byte, and decoding through U+FFFD first would change the
+    /// message (ADR-9).
     public enum ParseError: Error, Equatable, CustomStringConvertible {
         case empty
         /// Go: `not a valid duration string: %q`.
-        case notValid(String)
+        case notValid([UInt8])
         /// Go: `unknown unit %q in duration %q`.
-        case unknownUnit(unit: String, duration: String)
+        case unknownUnit(unit: [UInt8], duration: [UInt8])
         case outOfRange
 
         public var description: String {
@@ -50,9 +53,10 @@ public struct PromDuration: Sendable, Hashable, Comparable, CustomStringConverti
             case .empty:
                 return "empty duration string"
             case .notValid(let orig):
-                return "not a valid duration string: \(GoStrconv.quote(orig))"
+                return "not a valid duration string: \(GoStrconv.quote(bytes: orig))"
             case .unknownUnit(let unit, let duration):
-                return "unknown unit \(GoStrconv.quote(unit)) in duration \(GoStrconv.quote(duration))"
+                return
+                    "unknown unit \(GoStrconv.quote(bytes: unit)) in duration \(GoStrconv.quote(bytes: duration))"
             case .outOfRange:
                 return "duration out of range"
             }
@@ -75,13 +79,13 @@ public struct PromDuration: Sendable, Hashable, Comparable, CustomStringConverti
     /// Go: `model.ParseDuration`. A year is always 365d and a week always 7d.
     /// Negative durations are not accepted.
     public static func parse(_ s: String) throws -> PromDuration {
-        try parse(Array(s.utf8), orig: s)
+        try parse(Array(s.utf8))
     }
 
-    /// The byte-level primitive. A duration string is ASCII by construction —
-    /// anything else fails — but the caller may hold arbitrary bytes, and `orig`
-    /// has to be the *original* text because it appears in the error messages.
-    public static func parse(_ bytes: [UInt8], orig: String) throws -> PromDuration {
+    /// The byte-level primitive. A valid duration string is ASCII, but an invalid
+    /// one can be any bytes at all, and it is reproduced verbatim in the error.
+    public static func parse(_ bytes: [UInt8]) throws -> PromDuration {
+        let orig = bytes
         // Go special-cases these two before the loop: a bare "0" is legal
         // without a unit, and "" gets its own message rather than the generic one.
         if bytes == [UInt8(ascii: "0")] { return PromDuration(nanoseconds: 0) }
@@ -107,10 +111,11 @@ public struct PromDuration: Sendable, Hashable, Comparable, CustomStringConverti
             let unitStart = i
             while i < bytes.count, !isDigit(bytes[i]) { i += 1 }
             if i == unitStart { throw ParseError.notValid(orig) }
-            let u = String(decoding: bytes[unitStart..<i], as: UTF8.self)
+            let unitBytes = Array(bytes[unitStart..<i])
+            let u = String(decoding: unitBytes, as: UTF8.self)
 
             guard let unit = unitMap[u] else {
-                throw ParseError.unknownUnit(unit: u, duration: orig)
+                throw ParseError.unknownUnit(unit: unitBytes, duration: orig)
             }
             // Units must go from biggest to smallest, and none may repeat.
             if unit.pos <= lastUnitPos { throw ParseError.notValid(orig) }

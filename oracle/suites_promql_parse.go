@@ -228,6 +228,41 @@ func exprCorpus() []string {
 		"-------------------1",
 		"sum(sum(sum(sum(sum(foo)))))",
 	)
+
+	// Probes for the two places an LALR parser's behaviour cannot be read off the
+	// grammar, and where a hand-written parser plausibly diverges.
+	//
+	// First: `offset_duration_expr` and `duration_expr` both derive
+	// `number_duration_literal`, a reduce/reduce conflict that goyacc settles by
+	// taking the rule declared earlier — which is what makes `foo offset -2^2`
+	// mean `(foo offset -2)^2`. These pin where the duration stops and ordinary
+	// expression arithmetic takes over.
+	add(
+		"foo offset 1m+1m", "foo offset 1m + 1m", "foo offset -1m+1m",
+		"foo offset (1m+1m)", "foo offset -(1m+1m)", "foo offset 2*1m",
+		"foo offset step()*2", "foo offset -step()", "foo offset max_of(1m,2m)+1m",
+		"foo offset 1m^2", "foo offset -1m^2", "foo offset +1m",
+		"foo[1m+1m*2]", "foo[2^3^2s]", "foo[-1m]", "foo[+1m]", "foo[1m:-1m]",
+		"foo[(1m+1m)*2]", "foo[step()+range()]", "foo[max_of(1m,2m)+min_of(1m,2m)]",
+	)
+
+	// Second: `lastClosing` is updated when a closing token is *lexed*, so by the
+	// time an action runs it can already point past the token the node ends on.
+	// `aggregate_op function_call_body` is the case where the grammar forces that
+	// lookahead, and Go walks back with findPrevRightParen (upstream issue 16053).
+	// Positions are only observable through errors, so each of these is a query
+	// whose error is reported against the node whose end position is at stake.
+	add(
+		"(sum(foo, 1))", "((sum(foo, 1)))", "(sum(foo, 1)) + 1", "(topk(1))",
+		"(sum(foo, 1))[5m:1m]", "sum(foo, 1) offset 5m",
+		`({a=""} offset 5m)`, `({a=""})`, `({a=""}) + 1`,
+		`(rate(foo[5m], 1))`, "(1[5m])", "((1[5m]))",
+	)
+
+	// The `@` modifier's preprocessor form has no `error` production of its own, so
+	// a malformed one falls through to the catch-all. These pin which message wins.
+	add("foo @ start", "foo @ end", "foo @ start(", "foo @ start)", "foo @ (start())")
+
 	return out
 }
 

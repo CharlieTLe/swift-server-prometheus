@@ -92,6 +92,7 @@ var suites = map[string]func(*emitter){
 	"promql/metric":                genPromQLMetric,
 	"promql/metricselector":        genPromQLMetricSelector,
 	"promql/modelduration":         genPromQLModelDuration,
+	"gocompat/intparse":            genGoParseInt,
 }
 
 func main() {

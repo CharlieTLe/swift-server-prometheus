@@ -340,7 +340,7 @@ extension ParenExpr {
 }
 
 extension StringLiteral {
-    public var description: String { GoStrconv.quote(val) }
+    public var description: String { GoStrconv.quote(bytes: val) }
 }
 
 extension UnaryExpr {
