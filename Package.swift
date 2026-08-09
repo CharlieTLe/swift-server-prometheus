@@ -31,6 +31,7 @@ let package = Package(
         .library(name: "PromChunkEnc", targets: ["PromChunkEnc"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
+        .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
         .library(name: "PromQLParser", targets: ["PromQLParser"]),
         .library(name: "PromQL", targets: ["PromQL"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
@@ -104,6 +105,19 @@ let package = Package(
             ]
         ),
 
+        // Phase 5: the in-memory `Queryable` the `.test` runner queries. Fills
+        // `util/teststorage`'s role but is NOT a port of it — upstream's is a
+        // wrapper over a real `tsdb.DB`, which Phases 6-7 own. Separate target
+        // for the same reason upstream keeps `teststorage` out of `storage`, and
+        // so that Phase 6 can swap the real Head in behind the same protocol.
+        .target(
+            name: "PromTestStorage",
+            dependencies: [
+                "PromStorage", "PromChunkEnc", "PromChunks", "PromHistogram",
+                "PromLabels", "PromAnnotations", "GoCompat",
+            ]
+        ),
+
         // ── Tooling ──────────────────────────────────────────────────────────
         .executableTarget(
             name: "promdiff",
@@ -155,6 +169,14 @@ let package = Package(
             dependencies: [
                 "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "PromPosRange",
                 "PromStorage", "GoCompat", "GoOracleSupport",
+            ]
+        ),
+        .testTarget(
+            name: "PromTestStorageTests",
+            dependencies: [
+                "PromTestStorage", "PromStorage", "PromChunkEnc", "PromChunks",
+                "PromHistogram", "PromLabels", "PromAnnotations", "GoCompat",
+                "GoOracleSupport",
             ]
         ),
     ]

@@ -13,8 +13,6 @@
 //   - `Storage`, `ExemplarStorage`, `SampleAndChunkQueryable` -> Phase 6.
 //   - `Searcher`, `SearchResultSet`, `SearchHints`, `Filter`, `Ordering` -> the
 //     HTTP API, Phase 9. Nothing in the engine or TSDB reads them.
-//   - `MockQueryable`/`MockQuerier`/`MockSeries` -> test scaffolding; ported
-//     where a test needs them rather than up front.
 //
 // Naming note: Go's `storage.Labels` interface ("a thing that has labels") would
 // shadow `PromLabels.Labels`, the value type, since Swift has no per-module
@@ -148,6 +146,49 @@ public struct QueryableFunc: Queryable {
     public func querier(mint: Int64, maxt: Int64) throws -> any Querier {
         try body(mint, maxt)
     }
+}
+
+/// Go: `MockQueryable` — "used for testing purposes so that a mock Querier can be
+/// used". Ignores both bounds, exactly as Go's unnamed parameters say.
+public struct MockQueryable: Queryable {
+    public var mockQuerier: any Querier
+
+    public init(mockQuerier: any Querier) { self.mockQuerier = mockQuerier }
+
+    public func querier(mint: Int64, maxt: Int64) throws -> any Querier { mockQuerier }
+}
+
+/// Go: `MockQuerier` — `select` delegates to a closure; the three
+/// `LabelQuerier` methods are stubs returning Go's zero values.
+public struct MockQuerier: Querier {
+    public var selectMockFunction:
+        (_ sortSeries: Bool, _ hints: SelectHints?, _ matchers: [Matcher]) -> any SeriesSet
+
+    public init(
+        selectMockFunction: @escaping (Bool, SelectHints?, [Matcher]) -> any SeriesSet
+    ) {
+        self.selectMockFunction = selectMockFunction
+    }
+
+    public func select(
+        _ ctx: GoContext, sortSeries: Bool, hints: SelectHints?, matchers: [Matcher]
+    ) -> any SeriesSet {
+        selectMockFunction(sortSeries, hints, matchers)
+    }
+
+    public func labelValues(
+        _ ctx: GoContext, name: String, hints: LabelHints?, matchers: [Matcher]
+    ) throws -> (values: [String], warnings: Annotations) {
+        ([], Annotations())
+    }
+
+    public func labelNames(
+        _ ctx: GoContext, hints: LabelHints?, matchers: [Matcher]
+    ) throws -> (names: [String], warnings: Annotations) {
+        ([], Annotations())
+    }
+
+    public func close() throws {}
 }
 
 // MARK: - Hints

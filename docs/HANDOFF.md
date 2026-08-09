@@ -1,7 +1,7 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `promql/durations.go` and `PreprocessExpr`,
-and that audited the whole evaluator for fused multiply-adds ahead of porting it.
+Written at the end of the session that landed Phase 5's in-memory `Queryable` (`PromTestStorage`),
+pinned against a real `tsdb.DB`.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -15,15 +15,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic layer, `durations.go` and `PreprocessExpr` are landed. Next: an in-memory `Queryable`, then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic layer, `durations.go`, `PreprocessExpr` and the in-memory `Queryable` are landed. Next: the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **241,056 committed differential cases, 340 tests**, on both Swift 6.4
+Green as of this commit: **241,096 committed differential cases, 355 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          2,838       193
+  GoCompat          2,843       193
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
@@ -32,14 +32,15 @@ Sources/            src     generated
   PromRegex         3,312     3,974
   PromHistogram     4,125       163
   PromPosRange         51         –
-  PromAnnotations     609         –
+  PromAnnotations     623         –
   PromChunkEnc        274         –
   PromChunks          117         –
-  PromStorage       1,694         –
-  PromQLParser      5,948       550
+  PromStorage       1,735         –
+  PromTestStorage     453         –
+  PromQLParser      5,993       550
   PromQL            1,918         –
-Tests               8,312
-oracle (Go)        10,462
+Tests               8,780
+oracle (Go)        11,021
 ```
 
 ### Verify everything in one go
@@ -169,6 +170,39 @@ where I had written a plausible expectation and the fixture proved the implement
 - **`-1 * 0.0` in Go is **`+0`**, not `-0`.** Untyped constants are arbitrary-precision, where `-1 * 0` is
   exactly `0` and carries no sign. A corpus that wanted negative zero got positive zero and the
   fixture showed `0` where `-0` was expected. Use `math.Copysign(0, -1)`.
+- **"There is no Go counterpart" is a claim about the *file*, not about the *behaviour*.** An earlier
+  version of this document said the in-memory `Queryable` "has no Go counterpart to differentially
+  test against", and concluded the assertions should live in the `.test` runner above it. The first
+  half is true — `util/teststorage` is a wrapper over a real `tsdb.DB`, so the stand-in is our own
+  code — and the conclusion did not follow. The *contract* the stand-in has to meet is entirely
+  upstream's, and the oracle can stand up a real `tsdb.DB` and pin it. Doing so **corrected four
+  behaviours that had been written the other way round**, every one of them silent:
+
+  - `Select`'s visibility filter uses the **querier's** range while its trimming filter uses the
+    **hints'** range, and hints *override* rather than narrow. Two ranges, not one. Quirk 33.
+  - A series whose samples are all trimmed away is returned **empty**, not dropped — the skip is at
+    chunk granularity and happens before trimming. Quirk 34.
+  - `LabelValues` applies its limit **before** sorting, so with `Limit: 1` a label first seen as `"1"`
+    then `"0"` yields `["1"]`. `LabelNames` truncates after sorting. Quirk 35.
+  - The label APIs gate on the store's **overall** range and do not filter per series, so a value
+    carried only by a series with no sample in range is still returned.
+
+  The lesson generalises past this file: before accepting that something cannot be differentially
+  tested, separate "no file to port" from "no behaviour to compare".
+- **Do not assume a `tsdb.DB` you stood up yourself is configured like the one under test.** The same
+  suite's first run produced a fixture asserting that **start timestamps are lost**, because
+  `teststorage.NewWithError()` with no options uses `EncXOR`, and ST rides on `EncXOR2`.
+  `EnableSTStorage` is not the switch — `db.go:247` says "currently it's noop" — and `promqltest`
+  quietly sets `FloatChunkEncoding = chunkenc.EncXOR2` alongside it in its own `init()`. Committing
+  that first fixture would have pinned the opposite of what the exit gate needs. Quirk 36, which also
+  records the consequence: **Phases 6-7 must implement XOR2, not just XOR**, or
+  `start_timestamps.test` cannot pass.
+- **Upstream being nondeterministic is a finding, not an obstacle.** `promqltest`'s loader appends by
+  ranging a Go map (`test.go:918`), and with a head-only DB an unsorted `Select` returns series in
+  append order — so upstream has no unsorted order to be byte-exact against. Rather than invent one,
+  the `storage/mem-select` corpus selects **sorted in every case** and the port's own insertion order
+  is asserted Swift-side. Exception 11. Check whether the thing you are about to pin is a contract
+  before pinning it.
 
 When a fixture disagrees with you, **check Go before changing the implementation.** Write a five-line
 Go program in `/tmp` and run it. That habit is the highest-leverage thing in this repo.
@@ -246,6 +280,14 @@ on the local Go version, and CI's Go would produce a different corpus and fail `
 on a difference that means nothing. Copy the inputs into `Fixtures/` (as is done for Go's regexp
 testdata and the PromQL `.test` files) and read them from there.
 
+**The oracle now imports `tsdb`, and that cost 52 indirect modules.** `storage/mem-select` needs
+`util/teststorage`, which needs `tsdb`, which imports `prometheus/config` → `discovery` → every
+service-discovery provider — so `go mod tidy` pulled in the AWS, Azure, GCP, Hetzner and
+OpenTelemetry-collector SDKs, 217 lines of `go.sum`. It is not accidental bloat and not avoidable:
+Phases 6-7 differentially test the block, WAL and chunk formats against `tsdb` anyway, so the
+dependency arrives regardless. Worth knowing before you go looking for what dragged them in, and
+worth not "cleaning up".
+
 **Toolchain noise in the manifest.** `verify-fixtures.sh` deliberately reports a differing Go patch
 version as a *note*, not a failure, and restores the committed manifest. Keep it that way; a drift
 detector that cries wolf gets ignored.
@@ -321,6 +363,8 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/durations.go` | in full — `DurationVisitor`, reachable only through `preprocessExpr` |
 | `PromQL` | `promql/engine.go`'s `PreprocessExpr` closure | `foldQueryContextFunctions`, `preprocessExprHelper`, `newStepInvariantExpr`, `detectHistogramStatsDecoding`, `unwrapParenExpr` |
 | `PromQL` | `promql/functions.go`'s two name sets | `AtModifierUnsafeFunctions`, `AnchoredSafeFunctions` — the rest of that file is the evaluator's |
+| `PromStorage` | `storage/interface.go`'s `MockQueryable`/`MockQuerier` | no longer deferred; they had a caller |
+| `PromTestStorage` | **not a port** — fills `util/teststorage`'s role | the in-memory `Queryable`; see below |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -347,27 +391,52 @@ from Cortex/Thanos.
 
 ### What Phase 5 still has to bring, in order
 
-1. **An in-memory `Queryable`** — the piece `ROADMAP.md` §2 budgeted at "~800 lines of in-memory
-   storage", and now the next step. It is needed before the exit gate can run at all: upstream's
-   `promqltest` goes through `util/teststorage`, which is a **real `tsdb.DB`**, and Phase 5 cannot use
-   that. `SeriesEntry`, `newListSeries` and `PromQL.StorageSeries` are the substrate —
-   `StorageSeries` in particular turns a `promql.Series` into a `storage.Series`, which is most of
-   what a fake querier needs.
-
-   This one has **no Go counterpart to differentially test against**: `teststorage` is a real TSDB,
-   so an in-memory stand-in is our own code. Keep it as thin as possible and put the assertions in
-   the `.test` runner above it, rather than inventing an oracle for scaffolding.
-2. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
+1. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
    7,667 lines of Go between them, so this needs splitting. `fParams`/`newFParams` from value.go
    belong here (they take an `*evaluator`), as do `vectorByValueHeap` and `EvalNodeHelper`, which
    most of `functions.go` takes as a parameter. `quantile.go` and the `GoMath` layer are already in
    place beneath them. `promql/histogram_stats_iterator.go` belongs here too — engine.go:4795 is its
    only caller — and it is small (167 lines) and op-script testable like the look-back iterators.
-3. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
-   the exit gate. Its patterns are already reproduced in `oracle/corpus.go`.
+2. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
+   the exit gate. Its patterns are already reproduced in `oracle/corpus.go`. Give it a **storage
+   factory** parameter rather than hard-wiring `MemStorage`: that is what
+   `RunBuiltinTestsWithStorage(t, engine, newStorage func(testing.TB) storage.Storage)` is for
+   upstream, and it is how Phases 6-7 re-run the same 2,201 evals against the real Head.
 
 The exit gate is unchanged and is the one that matters most in the whole project: **all 2,201 `eval`
 assertions in `Fixtures/promql/testdata/` green**. That is the shippable-library milestone.
+
+### The in-memory `Queryable`, and what is now known about it
+
+`Sources/PromTestStorage` is **not a port** — it fills `util/teststorage`'s role in the module graph,
+but upstream's is a thin wrapper over a real `tsdb.DB`, which Phases 6-7 own. It is a separate target
+for the same reason upstream keeps `teststorage` out of `storage`, and so the real Head can be swapped
+in behind the same protocol later.
+
+`MemStorage` holds insertion-ordered series and a bespoke `append`/`load`/`clear` API — deliberately
+**not** `storage.Appender`, which stays deferred to Phases 6-7 where `AppenderV2`'s commit/rollback
+and ref caching mean something. The load path does enforce `memSeries.appendable`'s ordering rules for
+`oooTimeWindow == 0` (`head_append.go:652`), duplicate-error messages included.
+
+`MemQuerier`'s `select` is where the subtlety is, and all of it is pinned by
+`Fixtures/storage/mem-select.jsonl` against a real `tsdb.DB` — see the four corrections in §3 and
+quirks 33-36. The short version, because it is easy to get backwards:
+
+- **stage 1, visibility, uses the querier's range**; a series with no chunk in it is never seen;
+- **stage 2, trimming, uses the hints' range**, which *overrides* the querier's rather than narrowing
+  it, and cannot resurrect an invisible series;
+- both ranges are **closed** at both ends;
+- a series admitted by stage 1 and emptied by stage 2 is **returned empty**.
+
+Two documented divergences, both in PORTING.md: unsorted select order is insertion order because
+upstream has none (exception 11), and visibility is modelled as one chunk per series, which can return
+extra **empty** series that the evaluator cannot observe (exception 12).
+
+Eight negative controls were run against the fixtures — perturbing each range, the sort, the
+empty-series retention, the closed bounds, the matcher's empty-string handling and the label-limit
+order — and every one of them broke the suite. The corpus is float-only on purpose: a histogram
+appended to a real `tsdb.DB` returns through the chunk encoding, which re-derives `CounterResetHint`,
+so pinning it would pin Phases 6-7's subject. Histogram carriage is a Swift-side test.
 
 ### The evaluator's fusion map — read this before porting `engine.go` or `functions.go`
 
@@ -536,7 +605,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **ten documented exceptions**, plus 27 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 36 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

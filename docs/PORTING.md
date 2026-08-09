@@ -132,6 +132,43 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     sample at `Int64.min` invisible. No observable difference for any reachable input, and the
     Optional has no blind spot.
 
+11. **`MemQuerier.select(sortSeries: false)` returns insertion order, and upstream has no order to
+    match.** With every sample in the Head and no persisted block, `tsdb.DB.Querier` yields a single
+    querier, so `NewMergeQuerier`'s "we need to sort for merge to work" (`merge.go:302`) never fires
+    and postings come back in series-ref order — which is append order. And `promqltest` appends by
+    ranging a **Go map**:
+
+    ```go
+    func (cmd *loadCmd) append(a storage.AppenderV2) error {
+        for h, smpls := range cmd.defs {          // test.go:918
+    ```
+
+    So upstream's own unsorted order is randomised per run, and any `.test` assertion depending on it
+    would already be flaky in upstream's CI. This port returns insertion order because it is
+    reproducible; `sortSeries: true` delivers label order either way, and that half *is* pinned
+    (`storage/mem-select` selects sorted in every case). The choice is asserted Swift-side so it
+    cannot drift silently.
+
+    Consequence to remember when the evaluator lands: an inner expression's series order becomes
+    `aggregation`'s Kahan summation order, so upstream is nondeterministic there too. Drive
+    `aggregation` fixtures with an explicitly ordered input matrix, never through `rangeEval`.
+
+12. **Series visibility is modelled as one chunk per series, which makes the port a superset by empty
+    series.** Upstream decides whether a series appears in a `SeriesSet` at **chunk** granularity —
+    `blockBaseSeriesSet.Next` skips a series only when no chunk overlaps the querier's range
+    (`querier.go:503`) — and this port has no chunks until Phases 6-7, so it tests the span from a
+    series' first sample to its last.
+
+    The *samples* returned are identical whenever the hints' range is contained in the querier's,
+    which it always is for this engine (`execEvalStmt` derives the querier's bounds from
+    `FindMinMaxTime` over the same selectors the hints come from, `engine.go:788`). The difference is
+    only this: upstream's chunks tile a series' span with gaps between them, so a query landing
+    entirely inside a gap matches no chunk and drops the series, whereas one big chunk still overlaps
+    and the series is returned with an **empty** sample list. The evaluator builds output from points,
+    so a series with no points contributes nothing and the difference is unobservable through PromQL.
+
+    Not to be confused with the genuine behaviour in quirk 34, which this port *does* reproduce.
+
 
 ## Replicated Go quirks
 
@@ -416,6 +453,59 @@ changing behaviour.
     boundary, because upstream's `parse_test.go` has none. `promql/preprocess` added one to pin
     `calculateDuration`'s bound and crashed the parser instead. The general lesson matches quirk 30 —
     **a corpus inherits its blind spots from the test suite it was extracted from.**
+
+33. **`Select`'s two ranges are different ranges, and only one of them is the hints'.** `SelectHints`
+    `Start`/`End` **override** the querier's `mint`/`maxt` (`querier.go:205-207`) — they do not narrow
+    them — but they override only the *trimming*. Which series are visible at all is decided by the
+    index reader, which was opened with the **querier's** range, so a chunk outside it is never seen
+    rather than merely trimmed.
+
+    So widening the hints past the querier's range widens the samples returned from an
+    already-visible series but cannot make an invisible series appear. `storage/mem-select`'s
+    `hints/two-stage` pins it: a querier over `[500,600]` with hints over `[0,1000]` returns exactly
+    the one series that spans `[500,600]`, untrimmed, and none of the four that do not.
+
+    Easy to get backwards in either direction, and both were, before the fixture said otherwise.
+
+34. **A series whose samples are all trimmed away is returned *empty*, not dropped.** The skip in
+    `blockBaseSeriesSet.Next` is `if len(chks) == 0`, counted over chunks that overlap the range, and
+    trimming happens afterwards by adding synthetic tombstone intervals. So querying the instant
+    `t=250` between samples at 200 and 300 yields three series with **zero** samples each, where
+    querying `t=500` past every sample yields an empty set. `nohints/instant-miss` and
+    `nohints/after-all` are the two cases.
+
+    Reproduced, subject to the chunk-granularity caveat in exception 12.
+
+35. **`LabelValues` truncates before sorting; `LabelNames` truncates after.** The `LabelQuerier` doc
+    comment says "Results are returned in natural (alphabetical) order regardless", and the final
+    results are indeed sorted — but the limit is not applied to the sorted list.
+
+    `MemPostings.LabelValues` slices `p.lvs[name]`, an **append-only** slice in first-seen order, and
+    only then does `SortedLabelValues` sort what survived (`postings.go`, under
+    `blockBaseQuerier.LabelValues`). So a label first seen as `"1"` and then `"0"`, with `Limit: 1`,
+    yields **`["1"]`** and not `["0"]` — `values/limit-unsorted` pins exactly that.
+    `blockBaseQuerier.LabelNames` is the other way round: the index sorts first and the querier
+    truncates the sorted result, so its limit does keep the alphabetically first names.
+
+    The consequence for Phase 9's HTTP API: *which* values a `limit` keeps depends on ingest order, so
+    it is not a stable API result — and for a Head loaded by `promqltest` it is randomised, for the
+    same map-iteration reason as exception 11.
+
+36. **Start timestamps survive only through the XOR2 chunk encoding.** `tsdb.Options.EnableSTStorage`
+    reads like the switch for it and is not: `db.go:247` says "TODO(bwplotka): Implement this option
+    as per PROM-60, currently it's noop". What actually carries a per-sample ST is
+    `FloatChunkEncoding = chunkenc.EncXOR2`, which is why `promqltest`'s own `init()` sets **both**
+    (`promqltest/test_test.go:33`).
+
+    With the default `EncXOR`, every sample appended with a non-zero `st` reads back with
+    `AtST() == 0`. The `storage/mem-select` oracle hit this first-hand — it was written without the
+    options and produced a fixture asserting that ST is *lost*, which is the opposite of what the port
+    needs. Two consequences worth carrying forward:
+
+    - **Phases 6-7 must implement XOR2, not just XOR**, or `start_timestamps.test` cannot pass; its
+      `st_resets` series expects `increase()` results that differ from the ST-less ones (420 vs 300).
+    - Any future oracle suite standing up a `tsdb.DB` must set the same two options, or it pins the
+      wrong behaviour silently.
 
 
 ## Not ported
