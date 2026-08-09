@@ -32,6 +32,22 @@ public struct GoDuration: Sendable, Hashable, Comparable, CustomStringConvertibl
         a.nanoseconds < b.nanoseconds
     }
 
+    /// Go: `Duration.Seconds()`.
+    ///
+    /// The whole/fractional split is **not** an optimisation and must not be
+    /// simplified to `Double(nanoseconds) / 1e9`. Dividing first keeps the integer
+    /// part exact and only rounds the sub-second remainder; the naive form rounds
+    /// the whole value at once. The two disagree on **25% of random `Int64`
+    /// nanosecond counts** (4,994,284 of 20,000,000 probed), always in the last
+    /// place — e.g. 5577006791947779410ns is 5577006791.9477796555s here and
+    /// 5577006791.9477787018s naively. `promql/durations.go` feeds this straight
+    /// into duration arithmetic, so a divergence here is a wrong query range.
+    public var seconds: Double {
+        let sec = nanoseconds / GoDuration.second.nanoseconds
+        let nsec = nanoseconds % GoDuration.second.nanoseconds
+        return Double(sec) + Double(nsec) / 1e9
+    }
+
     /// Go: `Duration.String()`.
     ///
     /// Leading zero units are omitted. Durations below one second switch to a

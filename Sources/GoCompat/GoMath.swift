@@ -45,6 +45,44 @@ public enum GoMath: Sendable {
     /// [sqrt(2)/2, sqrt(2)], then a rational approximation of
     /// `log(1+f) - f + f²/2` in `s = f/(2+f)`, then reassembly with `k·ln2` split
     /// into a high and a low part so the multiplication stays exact.
+    ///
+    /// `haveArchLog` is true only for `amd64 || s390x` (math/log_asm.go), so on
+    /// arm64 this pure-Go `log` is what runs — the mirror image of `Exp`/`Exp2`.
+    ///
+    /// **Seven expressions are fused**, and which ones is not guessable: it comes
+    /// from `go tool objdump -s 'math\.log$'`. Two are structural rather than
+    /// local, and both are easy to miss:
+    ///
+    ///   * `t1 = s2 * (...)` never exists as a rounded value. `R := t1 + t2`
+    ///     compiles to a single `FMADDD` of `t2 + s2*(...)`.
+    ///   * `hfsq = 0.5 * f * f` never exists either. Only `0.5*f` is rounded, and
+    ///     the second multiplication is fused into each of the two places `hfsq`
+    ///     is read.
+    ///
+    /// Not all seven are *observable*, and the difference is worth recording so
+    /// nobody has to re-derive it. Measured by unfusing one expression at a time
+    /// and comparing against Go over 30,000,000 random inputs:
+    ///
+    /// | expression | observable |
+    /// |---|---|
+    /// | `k*Ln2Hi` in the final `FNMSUBD` | **never** — provably: `Ln2Hi` carries only 32 significant bits and \|k\| ≤ 1075, so the product is exact. That is what the hi/lo split is *for*. |
+    /// | the two polynomial chains | not in 30M random inputs, nor in the corpus |
+    /// | `hfsq + R` | not in 30M random inputs, nor in the corpus |
+    /// | `R = t1 + t2` | ~3 per million |
+    /// | `inner = s*(hfsq+R) + k*Ln2Lo` | ~12 per million |
+    /// | `d = hfsq - inner` | not by random search, but the corpus's near-1 cases catch it |
+    ///
+    /// `Fixtures/gocompat/log.jsonl` commits harvested witnesses for the three
+    /// observable ones, so unfusing any of them fails 10–16 cases rather than
+    /// silently passing. The unobservable ones are matched by construction from
+    /// the disassembly, which is stated here rather than implied.
+    ///
+    /// This matters: unfused, `log(5.2063069815873524)` is one ULP high, which
+    /// carries straight into `Pow` (which computes `Exp(yf * Log(x))`) and from
+    /// there into every PromQL `^`. The `gocompat/log2` corpus cannot catch any of
+    /// it — `Log2` only ever calls `Log` on a fraction in [0.5, 1), where `k` is 0
+    /// or -1 — so `gocompat/log` pins the full domain. A `pow` case is what
+    /// exposed the gap.
     public static func log(_ x: Double) -> Double {
         // 6.93147180369123816490e-01
         let ln2Hi = Double(bitPattern: 0x3FE6_2E42_FEE0_0000)
@@ -67,9 +105,10 @@ public enum GoMath: Sendable {
         // math.Sqrt2 / 2, as Go's constant arithmetic rounds it.
         let sqrt2Half = Double(bitPattern: 0x3FE6_A09E_667F_3BCD)
 
-        // Special cases.
+        // Special cases. The negative case is Go's `NaN()`, whose payload is 1 —
+        // `Double.nan`'s is 0, and a bit-pattern fixture sees the difference.
         if x.isNaN || x == .infinity { return x }
-        if x < 0 { return .nan }
+        if x < 0 { return Double(bitPattern: GoFloat.goNaNBits) }
         if x == 0 { return -.infinity }
 
         // Reduce.
@@ -81,15 +120,34 @@ public enum GoMath: Sendable {
         let f = f1 - 1
         let k = Double(ki)
 
-        // Compute.
+        // Compute. Every `addingProduct` below is an `FMADDD`/`FNMSUBD` in Go's
+        // arm64 output; see the doc comment for why that is load-bearing.
         let s = f / (2 + f)
         let s2 = s * s
         let s4 = s2 * s2
-        let t1 = s2 * (l1 + s4 * (l3 + s4 * (l5 + s4 * l7)))
-        let t2 = s4 * (l2 + s4 * (l4 + s4 * l6))
-        let r = t1 + t2
-        let hfsq = 0.5 * f * f
-        return k * ln2Hi - ((hfsq - (s * (hfsq + r) + k * ln2Lo)) - f)
+
+        var t1Poly = l5.addingProduct(s4, l7)
+        t1Poly = l3.addingProduct(s4, t1Poly)
+        t1Poly = l1.addingProduct(s4, t1Poly)
+
+        var t2Poly = l4.addingProduct(s4, l6)
+        t2Poly = l2.addingProduct(s4, t2Poly)
+        let t2 = s4 * t2Poly
+
+        // R = t1 + t2, with `t1 = s2 * t1Poly` fused into the addition.
+        let r = t2.addingProduct(s2, t1Poly)
+
+        // `hfsq` is only ever half-formed: 0.5*f is rounded, the `* f` is fused
+        // into each of its two readers.
+        let halfF = 0.5 * f
+        let hfsqPlusR = r.addingProduct(halfF, f)
+        let kLn2Lo = k * ln2Lo
+        let inner = kLn2Lo.addingProduct(s, hfsqPlusR)
+        // FNMSUBD: hfsq - inner.
+        var d = (-inner).addingProduct(halfF, f)
+        d -= f
+        // FNMSUBD: k*Ln2Hi - d.
+        return (-d).addingProduct(k, ln2Hi)
     }
 
     /// Go: `math.Log2` — the binary logarithm.
