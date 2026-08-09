@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-// Wire helpers shared by the PromQLParser fixture tests.
+// Wire helpers shared by the Parser fixture tests.
 //
 // `FloatHistJSON` duplicates the one in PromHistogramTests rather than being
 // shared: GoOracleSupport is where cross-target test helpers live, and it

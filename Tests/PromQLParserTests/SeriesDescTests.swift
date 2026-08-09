@@ -76,7 +76,7 @@ func toParseErrJSON(_ e: ParseErrors) -> [ParseErrJSON] {
 struct SeriesDescTests {
 
     /// The oracle generates this suite under the all-features option set.
-    static let parser = PromQLParser(options: Options.named("all"))
+    static let parser = Parser(options: Options.named("all"))
 
     @Test("every committed series description")
     func seriesDescriptions() throws {
@@ -109,7 +109,7 @@ struct SeriesDescTests {
 
     @Test("every committed metric")
     func metrics() throws {
-        let parser = PromQLParser()
+        let parser = Parser()
         try Fixtures.check("promql/metric.jsonl", FixtureCase<MetricIn, MetricOut>.self) { input in
             let text = String(decoding: Hex.decode(input.input), as: UTF8.self)
             do {
@@ -127,7 +127,7 @@ struct SeriesDescTests {
 
     @Test("every committed metric selector")
     func metricSelectors() throws {
-        let parser = PromQLParser()
+        let parser = Parser()
         try Fixtures.check(
             "promql/metricselector.jsonl", FixtureCase<MetricIn, SelectorOut>.self
         ) { input in

@@ -95,11 +95,19 @@ public struct SequenceValue: Sendable, CustomStringConvertible {
     }
 }
 
-/// Go: `parser.Parser` / `NewParser(opts)`.
+/// Go: `parser.Parser` / `NewParser(opts)` — the package's entry point.
 ///
 /// A value type holding only the options: Go pools a mutable parser for
-/// allocation reasons, and each parse here builds its own state instead.
-public struct PromQLParser: Sendable {
+/// allocation reasons, and each parse here builds its own state instead. The
+/// mutable half is ``ParseState``.
+///
+/// Named `Parser`, not `PromQLParser`, deliberately. A type sharing its module's
+/// name shadows that module, which makes `PromQLParser.ValueType` unresolvable
+/// from any module that also imports `PromChunkEnc` — and both define a
+/// `ValueType`. Go disambiguates those as `parser.ValueType` and
+/// `chunkenc.ValueType`; this port can only do the same if the module name stays
+/// available.
+public struct Parser: Sendable {
     public let options: Options
 
     public init(options: Options = Options()) {
@@ -112,7 +120,7 @@ public struct PromQLParser: Sendable {
     }
 
     public func parseExpr(_ input: [UInt8]) throws -> any Expr {
-        let p = Parser(input: input, options: options, seriesDesc: false)
+        let p = ParseState(input: input, options: options, seriesDesc: false)
         let expr = p.parseExpressionEntry()
         // Only typecheck when the syntax was clean: checkAST on a partial tree
         // reports errors that are consequences of the syntax error, not of the
@@ -136,7 +144,7 @@ public struct PromQLParser: Sendable {
     /// Go: `ParseMetric` — the `START_METRIC` entry point, a label set with an
     /// optional leading metric name.
     public func parseMetric(_ input: String) throws -> Labels {
-        let p = Parser(input: Array(input.utf8), options: options, seriesDesc: false)
+        let p = ParseState(input: Array(input.utf8), options: options, seriesDesc: false)
         let lbls = p.parseMetricEntry()
         if !p.parseErrors.isEmpty { throw ParseErrors(p.parseErrors) }
         return lbls ?? Labels()
@@ -147,7 +155,7 @@ public struct PromQLParser: Sendable {
     /// The matchers are optional because a failed one is nil in Go, and callers
     /// see the list only when there was no error.
     public func parseMetricSelector(_ input: String) throws -> [Matcher?] {
-        let p = Parser(input: Array(input.utf8), options: options, seriesDesc: false)
+        let p = ParseState(input: Array(input.utf8), options: options, seriesDesc: false)
         let vs = p.parseMetricSelectorEntry()
         if !p.parseErrors.isEmpty { throw ParseErrors(p.parseErrors) }
         return vs?.labelMatchers ?? []
@@ -168,7 +176,7 @@ public struct PromQLParser: Sendable {
     public func parseSeriesDesc(
         _ input: String
     ) throws -> (labels: Labels, values: [SequenceValue]) {
-        let p = Parser(input: Array(input.utf8), options: options, seriesDesc: true)
+        let p = ParseState(input: Array(input.utf8), options: options, seriesDesc: true)
         let result = p.parseSeriesDescriptionEntry()
         if !p.parseErrors.isEmpty { throw ParseErrors(p.parseErrors) }
         return (result?.labels ?? Labels(), result?.values ?? [])
@@ -183,7 +191,7 @@ public struct PromQLParser: Sendable {
 struct Abort: Error {}
 
 /// Go: `parser`.
-final class Parser {
+final class ParseState {
     var lex: Lexer
     let options: Options
     let input: [UInt8]

@@ -22,7 +22,7 @@
 
 private import GoCompat
 
-extension Parser {
+extension ParseState {
 
     /// Go: `positive_duration_expr: duration_expr`, plus the check that a constant
     /// duration is greater than zero.

@@ -17,13 +17,13 @@ import Testing
 @Suite("PromQL parser invariants")
 struct ParserInvariantTests {
 
-    static let all = PromQLParser(options: Options.named("all"))
+    static let all = Parser(options: Options.named("all"))
 
-    static func str(_ q: String, _ parser: PromQLParser = all) throws -> String {
+    static func str(_ q: String, _ parser: Parser = all) throws -> String {
         try parser.parseExpr(q).description
     }
 
-    static func errorText(_ q: String, _ parser: PromQLParser = all) -> String? {
+    static func errorText(_ q: String, _ parser: Parser = all) -> String? {
         do {
             _ = try parser.parseExpr(q)
             return nil
@@ -95,7 +95,7 @@ struct ParserInvariantTests {
         // enabling only ExperimentalDurationExpr still rejects it.
         #expect(try Self.all.parseExpr("step()") is Call)
         #expect(
-            Self.errorText("step()", PromQLParser(options: Options.named("durexpr")))
+            Self.errorText("step()", Parser(options: Options.named("durexpr")))
                 == "function \"step\" is not enabled")
         // In duration position it is a DurationExpr instead.
         let matrix = try Self.all.parseExpr("foo[step()]") as? MatrixSelector
@@ -183,7 +183,7 @@ struct HistogramDescriptionRoundTripTests {
     /// happens to have none.
     @Test("testExpression() is a fixed point of the series-description parser")
     func testExpressionRoundTrips() throws {
-        let parser = PromQLParser(options: Options.named("all"))
+        let parser = Parser(options: Options.named("all"))
         let cases = try Fixtures.load(
             "histogram/float.jsonl", FixtureCase<FloatHistIn, FloatHistOut>.self)
         #expect(cases.count > 100, "the histogram corpus should be substantial")
