@@ -198,18 +198,20 @@ extension String {
     /// Go compares strings by UTF-8 byte value. Swift's `<` on `String` uses
     /// Unicode canonical ordering, which differs (e.g. for combining sequences),
     /// so every ported comparison must go through this.
+    ///
+    /// Public because ADR-10 applies to every module, not just this one:
+    /// `printer.go`'s `sort.Strings` over matcher strings needs the same ordering.
     @inlinable
-    var utf8Lexicographic: UTF8ByteOrder { UTF8ByteOrder(self) }
+    public var utf8Lexicographic: UTF8ByteOrder { UTF8ByteOrder(self) }
 }
 
 /// A `Comparable` wrapper giving Go's byte-wise string ordering.
-@usableFromInline
-struct UTF8ByteOrder: Comparable {
+public struct UTF8ByteOrder: Comparable {
     @usableFromInline let value: String
-    @inlinable init(_ value: String) { self.value = value }
+    @inlinable public init(_ value: String) { self.value = value }
 
     @inlinable
-    static func < (a: UTF8ByteOrder, b: UTF8ByteOrder) -> Bool {
+    public static func < (a: UTF8ByteOrder, b: UTF8ByteOrder) -> Bool {
         var x = a.value
         var y = b.value
         return x.withUTF8 { xb in
@@ -223,6 +225,5 @@ struct UTF8ByteOrder: Comparable {
         }
     }
 
-    @usableFromInline
-    static func == (a: UTF8ByteOrder, b: UTF8ByteOrder) -> Bool { a.value == b.value }
+    public static func == (a: UTF8ByteOrder, b: UTF8ByteOrder) -> Bool { a.value == b.value }
 }

@@ -28,6 +28,14 @@ echo "==> copying verbatim upstream testdata"
 mkdir -p "$FIXTURES/promql/testdata"
 cp "$PIN"/promql/promqltest/testdata/*.test "$FIXTURES/promql/testdata/"
 
+# Upstream's own PromQL parser case list: every `input:` string literal in
+# parse_test.go, ~400 expressions chosen to cover the grammar (many of them
+# existing only to pin an error message). Extracted rather than read live for the
+# same reason as the .test files above — the corpus must not depend on anything
+# outside Fixtures/. See docs/PORTING.md on corpus reproducibility.
+"$ORACLE" parse-corpus "$PIN/promql/parser/parse_test.go" \
+  > "$FIXTURES/promql/parse-corpus.txt"
+
 # Go's own regexp corpus, mined by the regex/parse suite. Committed rather than
 # read from $GOROOT so the corpus does not vary with the local Go version.
 mkdir -p "$FIXTURES/regex/gotestdata"
