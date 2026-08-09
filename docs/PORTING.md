@@ -507,6 +507,34 @@ changing behaviour.
     - Any future oracle suite standing up a `tsdb.DB` must set the same two options, or it pins the
       wrong behaviour silently.
 
+37. **A stale marker does not become the counter-reset baseline, so the sample after one is compared
+    against the sample *before* it.** `HistogramStatsIterator.AtFloatHistogram` returns early on
+    `value.IsStaleNaN(hsi.current.Sum)` (`histogram_stats_iterator.go:124`), and that early return is
+    *above* `setLastFromCurrent`. So `hsi.last` is untouched by a stale sample — as is
+    `hsi.lastIsCurrent`, which `Next` had already cleared.
+
+    Upstream's own table names this ("detect real counter reset after stale NaN") but only for a single
+    stale sample. Two in a row behave the same way, and the baseline survives both:
+    `stale/consecutive` walks `n=3, stale, stale, n=1` and gets `CounterReset` on the last, because the
+    comparison is still against `n=3`. A float sample in the gap has the same non-effect — nothing on
+    the float path touches any of the three state fields.
+
+    Note also that the stale branch passes the sample's own hint through **unchanged**, so an explicit
+    `CounterReset` on a stale sample survives rather than being recomputed
+    (`stale/with-explicit-hint`).
+
+38. **`HistogramStatsIterator.Seek` reads the *wrapped* iterator's `AtT()`, before seeking it.** The
+    guard at `histogram_stats_iterator.go:69` is `if t > hsi.AtT()`, and `AtT` is the promoted embedded
+    method — so it reports where the underlying iterator is *now*. Two consequences:
+
+    - A seek that does not move (`t <= AtT()`) leaves `last` and `lastIsCurrent` alone, so the
+      following read answers from the memo rather than re-detecting. `>=` instead of `>` breaks
+      `seek/no-op-keeps-last`.
+    - A `Seek` before the first `Next` panics over any iterator whose `AtT` is not valid until then —
+      `listSeriesIterator` reads `samples[-1]`. This is the same family of trap as the look-back
+      wrappers' raw pass-throughs (quirks 15–21), and it is why no case in
+      `Fixtures/promql/histogram-stats.jsonl` seeks before advancing.
+
 
 ## Not ported
 

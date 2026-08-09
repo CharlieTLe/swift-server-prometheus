@@ -1,7 +1,7 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's in-memory `Queryable` (`PromTestStorage`),
-pinned against a real `tsdb.DB`.
+Written at the end of the session that landed Phase 5's `HistogramStatsIterator`, pinned by op-script
+fixtures against Go.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -15,10 +15,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic layer, `durations.go`, `PreprocessExpr` and the in-memory `Queryable` are landed. Next: the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic layer, `durations.go`, `PreprocessExpr`, the in-memory `Queryable` and `histogram_stats_iterator.go` are landed. Next: the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **241,096 committed differential cases, 355 tests**, on both Swift 6.4
+Green as of this commit: **241,134 committed differential cases, 367 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -38,9 +38,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,993       550
-  PromQL            1,918         –
-Tests               8,780
-oracle (Go)        11,021
+  PromQL            2,196         –
+Tests               9,477
+oracle (Go)        11,781
 ```
 
 ### Verify everything in one go
@@ -203,6 +203,24 @@ where I had written a plausible expectation and the fixture proved the implement
   the `storage/mem-select` corpus selects **sorted in every case** and the port's own insertion order
   is asserted Swift-side. Exception 11. Check whether the thing you are about to pin is a contract
   before pinning it.
+- **A generator-built corpus can be blind in a way a literal-built one is not, and the blindness
+  follows the *dependency's* short-circuit order.** `HistogramStatsIterator.setLastFromCurrent` stores
+  a copy of the **full** previous histogram, buckets included, and storing the *stripped* one it just
+  returned passed all 35 cases of the first `promql/histogram-stats` corpus. Every one of those cases
+  was built from `tsdbutil.GenerateTestHistogram(n)`, whose count moves with `n` — so
+  `DetectReset`'s count comparison answered before it ever looked at a bucket, and a baseline with no
+  buckets at all was indistinguishable. What found it was a negative control, not a case. The fix was
+  a generator whose count and sum are **fixed** and where only the bucket distribution moves
+  (`baseline/*`, three cases). Generalisation: when your corpus feeds a dependency that short-circuits,
+  ask which of its branches your inputs can actually reach — a family parameterised on one axis pins
+  one axis.
+- **21 negative controls, 2 survivors, and both survivors were the answer rather than a gap.**
+  Perturbing the stats iterator one behaviour at a time broke 19 of 21 fixture runs. The two that
+  stayed green — ignoring the reuse buffer entirely, and clearing `current` in `Reset` — are precisely
+  the two places Go is managing allocations that a Swift `struct` does not have. That is worth knowing
+  *before* writing a comment claiming something is unobservable: run the perturbation and let it tell
+  you, then say so in the comment. Both are now recorded that way in
+  `Sources/PromQL/HistogramStatsIterator.swift`.
 
 When a fixture disagrees with you, **check Go before changing the implementation.** Write a five-line
 Go program in `/tmp` and run it. That habit is the highest-leverage thing in this repo.
@@ -365,6 +383,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/functions.go`'s two name sets | `AtModifierUnsafeFunctions`, `AnchoredSafeFunctions` — the rest of that file is the evaluator's |
 | `PromStorage` | `storage/interface.go`'s `MockQueryable`/`MockQuerier` | no longer deferred; they had a caller |
 | `PromTestStorage` | **not a port** — fills `util/teststorage`'s role | the in-memory `Queryable`; see below |
+| `PromQL` | `promql/histogram_stats_iterator.go` | in full, plus `histogramStatsSeries` from engine.go:4785 — its only constructor. PORTING.md quirks 37-38 |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -394,9 +413,10 @@ from Cortex/Thanos.
 1. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
    7,667 lines of Go between them, so this needs splitting. `fParams`/`newFParams` from value.go
    belong here (they take an `*evaluator`), as do `vectorByValueHeap` and `EvalNodeHelper`, which
-   most of `functions.go` takes as a parameter. `quantile.go` and the `GoMath` layer are already in
-   place beneath them. `promql/histogram_stats_iterator.go` belongs here too — engine.go:4795 is its
-   only caller — and it is small (167 lines) and op-script testable like the look-back iterators.
+   most of `functions.go` takes as a parameter. `quantile.go`, the `GoMath` layer and
+   `HistogramStatsIterator` are already in place beneath them — the last of those means
+   `detectHistogramStatsDecoding` has a real wrapper to reach for rather than a stub, so
+   engine.go:4795's `histogramStatsSeries` is already done.
 2. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
    the exit gate. Its patterns are already reproduced in `oracle/corpus.go`. Give it a **storage
    factory** parameter rather than hard-wiring `MemStorage`: that is what
@@ -562,6 +582,18 @@ get subtly wrong are documented as PORTING.md quirks 15–21: the closed retenti
 current-element exclusion, already-positioned-after-construction, the two deltas, the
 memo-cleared-before-a-failed-seek ordering, and the stale histogram in a mixed ring.
 
+**`HistogramStatsIterator` is pinned the same way** — 38 op-script cases in
+`Fixtures/promql/histogram-stats.jsonl`, six of them upstream's own `TestHistogramStatsDecoding`
+tables reproduced in shape (whose expected hints are re-asserted directly in
+`Tests/PromQLTests/HistogramStatsTests.swift`, since those numbers are upstream's rather than ours).
+The corpus names its histograms by **generator** rather than by catalogue index, because counter reset
+detection needs a family ordered by magnitude — `n` ascending is no reset, `n` descending is one — and
+a catalogue of literals would hide that relationship. Two behaviours the evaluator will lean on are
+PORTING.md quirks 37–38: a stale marker does not become the comparison baseline, and `Seek`'s guard
+reads the *wrapped* iterator's `AtT()` before seeking it. The reason the fixture records the
+`CounterResetHint` as its own field: `FloatHistogram.String()` does not print it, so the histogram
+rendering alone would have pinned everything except the point of the type.
+
 **The numeric risk is Kahan summation.** `PromMath` has it, pinned. A wrong Kahan term is exactly the
 kind of silent divergence `docs/ROADMAP.md` warns about when it argues for PromQL before TSDB, and it
 will not announce itself — `sum_over_time` will just be a few ULPs out.
@@ -605,7 +637,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 36 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 38 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
