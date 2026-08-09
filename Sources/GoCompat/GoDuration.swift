@@ -23,6 +23,11 @@ public struct GoDuration: Sendable, Hashable, Comparable, CustomStringConvertibl
     public static let minute = GoDuration(nanoseconds: 60 * 1_000_000_000)
     public static let hour = GoDuration(nanoseconds: 60 * 60 * 1_000_000_000)
 
+    /// Go: `minDuration` / `maxDuration` (time.go). `Time.Sub` saturates at these
+    /// rather than wrapping.
+    public static let min = GoDuration(nanoseconds: Int64.min)
+    public static let max = GoDuration(nanoseconds: Int64.max)
+
     public static func < (a: GoDuration, b: GoDuration) -> Bool {
         a.nanoseconds < b.nanoseconds
     }

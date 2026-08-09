@@ -14,6 +14,8 @@
 // Go cannot tell the two apart either, and neither does this.
 //===----------------------------------------------------------------------===//
 
+public import PromPosRange
+
 private import GoCompat
 
 /// Go: `eof` — the sentinel `next()` returns past the end of the input.

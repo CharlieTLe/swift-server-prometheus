@@ -13,6 +13,7 @@
 // ParseSeriesDesc.
 //===----------------------------------------------------------------------===//
 
+import PromPosRange
 import GoOracleSupport
 import Testing
 

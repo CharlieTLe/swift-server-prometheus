@@ -1,0 +1,7 @@
+{"id":"valuetype/0","in":0,"out":{"string":"none","encodingXOR2":"none","encodingNotXOR2":"none"}}
+{"id":"valuetype/1","in":1,"out":{"string":"float","encodingXOR2":"XOR2","encodingNotXOR2":"XOR"}}
+{"id":"valuetype/2","in":2,"out":{"string":"histogram","encodingXOR2":"histogram","encodingNotXOR2":"histogram"}}
+{"id":"valuetype/3","in":3,"out":{"string":"floathistogram","encodingXOR2":"floathistogram","encodingNotXOR2":"floathistogram"}}
+{"id":"valuetype/4","in":4,"out":{"string":"unknown","encodingXOR2":"none","encodingNotXOR2":"none"}}
+{"id":"valuetype/5","in":5,"out":{"string":"unknown","encodingXOR2":"none","encodingNotXOR2":"none"}}
+{"id":"valuetype/6","in":6,"out":{"string":"unknown","encodingXOR2":"none","encodingNotXOR2":"none"}}

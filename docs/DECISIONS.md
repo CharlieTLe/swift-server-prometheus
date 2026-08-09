@@ -167,6 +167,22 @@ Consequences worth knowing:
 - `EvalStmt`, `TestStmt` and `VectorSelector`'s two `storage` fields are deliberately absent. They
   need `time.Time` and the storage protocols, which arrive with the engine in Phase 5.
 
+**Phase 5 update — resolved.** All three landed as written: `VectorSelector.unexpandedSeriesSet` and
+`.series` are plain `var`s assigned in place, and `EvalStmt`/`TestStmt` are in
+`PromQLParser/Statements.swift` on `GoTime` (ADR-14) and `GoContext` (ADR-13). Phase 5 also forced a
+module split this ADR did not anticipate: `posrange` had to become its own target, because Go's
+dependency chain is
+
+```
+promql/parser -> storage -> util/annotations -> promql/parser/posrange
+```
+
+Upstream keeps `posrange` a separate package precisely to break that cycle; folding it into
+`PromQLParser` — which Phase 4 did — makes the Swift module graph circular the moment `storage`
+exists. `TestStmt` also had to become a class wrapping a closure, since Go declares it as a named
+function type with methods and Swift cannot attach protocol conformance to a function type.
+
+
 ## ADR-12 — goyacc is replaced by recursive descent, and LALR behaviour is reproduced deliberately
 
 `generated_parser.y` is 1,409 lines compiled to a 2,553-line LALR automaton. Shipping a Swift yacc,
@@ -202,3 +218,63 @@ all four wrong. Each was found by the `promql/parse` fixture, not by reading the
 A recursive-descent parser also needs one token of extra lookahead where an LALR parser uses its
 own: `peekType()` separates a function call from a metric identifier, and an aggregation from a
 metric identifier.
+
+## ADR-13 — `context.Context` is a hand-rolled `GoContext`, not `Task` cancellation
+
+Every `storage` and `promql` entry point takes a `context.Context`. The engine uses it for exactly
+three things: `ctx.Err()` polled at every evaluation step (`contextDone`), a query timeout
+(`context.WithTimeout`), and one `WithValue` for the query logger's `QueryOrigin` (Phase 9).
+
+**Decision.** `GoCompat.GoContext` — a class holding a cancellation cause, an optional absolute
+deadline, and a child list. `WithValue` is not ported.
+
+**Why not Swift structured concurrency.** ADR-3 makes the evaluator synchronous and non-`Sendable`
+because Go uses no goroutines in eval. Synchronous code does not run inside a `Task`, so
+`Task.isCancelled` is unavailable — and adding an `async` boundary to the hottest loop to get it
+would cost exactly what ADR-3 set out to avoid. But the *cancel signal* arrives from another thread
+(an HTTP handler abandoning a request), so the flag itself has to be thread-safe: `Mutex` from
+`Synchronization`, one per context.
+
+**No timer.** Go's `WithTimeout` arms a `time.Timer` that flips the context asynchronously.
+`GoContext.err(now:)` compares the deadline against the clock when asked instead. This is
+behaviourally equivalent for Prometheus because the evaluator *polls* — `contextDone` runs at every
+step — and it avoids putting a thread or a `Task` behind every query. `now` is a parameter rather
+than an internal clock read so a single evaluation step can be consistent about "now" and so the
+deadline logic is testable without sleeping.
+
+Consequences worth knowing:
+
+- First cause wins, as in Go: a context cancelled before its deadline stays `.canceled` forever
+  rather than becoming `.deadlineExceeded` when the clock passes it.
+- The deadline instant itself counts as expired (`!now.before(deadline)`), matching a Go timer that
+  fires *at* the deadline.
+- A child of an already-cancelled parent starts cancelled and is never registered, which is what
+  Go's `propagateCancel` does.
+
+## ADR-14 — `time.Time` is an instant, not a calendar
+
+`EvalStmt.Start`/`.End` are `time.Time`, and one annotation message formats a timestamp as RFC 3339.
+Porting `time.Time` in full would mean locations, monotonic readings, and the `Format`/`Parse` layout
+machinery — a large compatibility surface.
+
+**Decision.** `GoCompat.GoTime` carries `unixSeconds: Int64` plus a normalised
+`nanosecond: Int32`, and implements only the arithmetic Prometheus does plus RFC 3339 in UTC. Grow
+it when a port needs more, not pre-emptively.
+
+Two details are load-bearing rather than cosmetic:
+
+- **Seconds plus nanoseconds, not a nanosecond count.** A single `Int64` of nanoseconds overflows at
+  ±292 years, and `time.Unix(math.MaxInt64/1000, 0)` — reachable by dividing an `Int64` millisecond
+  timestamp by 1000, which is exactly what the monotonicity annotation does — is 292 million years
+  out.
+- **The zero value is year 1, not the epoch.** Go's zero `time.Time` is 0001-01-01T00:00:00Z and
+  `IsZero` is defined against it, so the memberwise default had to be suppressed. A struct whose
+  zero value sat at 1970 would make `isZero` quietly wrong.
+
+The date conversion is Howard Hinnant's `civil_from_days`, which agrees with Go's `absDate` over the
+whole `Int64` range including year 0 — Go uses astronomical year numbering, so year 0 exists and is
+1 BC. `Fixtures/gocompat/time-rfc3339.jsonl` pins it. **This caught a real bug immediately**: the
+first attempt split the `(doe - doe/1460 + doe/36524 - doe/146096) / 365` division across the terms
+instead of dividing the whole numerator, and every one of the 136 failing annotation cases reported
+`1881-1051-12` where Go said `1970-01-01`.
+

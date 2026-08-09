@@ -16,6 +16,8 @@
 //   - `%s` on a strconv error renders the whole NumError, function name included.
 //===----------------------------------------------------------------------===//
 
+public import PromPosRange
+
 private import GoCompat
 private import PromModel
 

@@ -93,6 +93,18 @@ var suites = map[string]func(*emitter){
 	"promql/metricselector":        genPromQLMetricSelector,
 	"promql/modelduration":         genPromQLModelDuration,
 	"gocompat/intparse":            genGoParseInt,
+	// Phase 5.
+	"promql/annotations":        genPromQLAnnotations,
+	"promql/annotations-set":    genPromQLAnnotationsSet,
+	"promql/timestamp":          genPromQLTimestamp,
+	"promql/timestamp-floatsec": genPromQLTimestampFloatSeconds,
+	"storage/errors":            genStorageErrors,
+	"storage/duplicate":         genStorageDuplicateErrors,
+	"chunkenc/encoding":         genChunkEncEncoding,
+	"chunkenc/valuetype":        genChunkEncValueType,
+	"chunkenc/compatible":       genChunkEncCompatible,
+	"gocompat/time-rfc3339":     genGoTimeRFC3339,
+	"gocompat/time-unixmilli":   genGoTimeUnixMilli,
 }
 
 func main() {

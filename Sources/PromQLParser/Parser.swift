@@ -32,6 +32,7 @@
 // than reasoned about — see the promql/parse fixture.
 //===----------------------------------------------------------------------===//
 
+public import PromPosRange
 public import PromLabels
 public import PromHistogram
 internal import GoCompat
