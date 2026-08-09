@@ -111,6 +111,11 @@ var suites = map[string]func(*emitter){
 	"promql/value":              genPromQLValue,
 	"promql/value-sort":         genPromQLValueSort,
 	"promql/storageseries":      genPromQLStorageSeries,
+	"gocompat/exp2":             genGoExp2,
+	"promql/bucketquantile":     genPromQLBucketQuantile,
+	"promql/bucketfraction":     genPromQLBucketFraction,
+	"promql/histogramquantile":  genPromQLHistogramQuantile,
+	"promql/histogramfraction":  genPromQLHistogramFraction,
 }
 
 func main() {
