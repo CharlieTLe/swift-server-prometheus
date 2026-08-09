@@ -37,6 +37,8 @@
     "labels/omfloat.jsonl": { "sha256": "ef4f5e5af45dcc2a69e4f36baec62c5d11b6747089d59ef6c16179c9e574db20", "lines": 922 },
     "labels/stablehash.jsonl": { "sha256": "4ab4d041223dfb6c47b6056215347767a60914b1baeabae85c5ddd760837d7f8", "lines": 1522 },
     "math/kahan.jsonl": { "sha256": "df9bc48cb7a2949b6f73fac40220d2b88edf205bbafa3a4bdf46be74354a1202", "lines": 1503 },
+    "promql/lex.jsonl": { "sha256": "b11abce9c6f7ced2589919ea37eaa55267a5d7fac35dfb5f1562e7c4996194b3", "lines": 550 },
+    "promql/posrange.jsonl": { "sha256": "c8e7dc58f352b67d2fe4180d997a5c9d46e20316e35730afefde9d4fcff4db57", "lines": 330 },
     "promql/testdata/aggregators.test": { "sha256": "d9201ff19258995d2b78fc5e79515a913e62fb60957ff0996a7447ceb1f00d40", "lines": 967 },
     "promql/testdata/at_modifier.test": { "sha256": "e323ea87e4f042e1c3e6b29c7b3cc6ed6169d1a5877dd71427fb827c03287c9b", "lines": 309 },
     "promql/testdata/collision.test": { "sha256": "7d477979b45192d1aa2ba7bc1928e16c69fe8c84babe74e010f2cbc4f4b2c412", "lines": 23 },

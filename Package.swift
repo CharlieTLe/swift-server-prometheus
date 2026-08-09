@@ -26,6 +26,7 @@ let package = Package(
         .library(name: "PromModel", targets: ["PromModel"]),
         .library(name: "PromRegex", targets: ["PromRegex"]),
         .library(name: "PromHistogram", targets: ["PromHistogram"]),
+        .library(name: "PromQLParser", targets: ["PromQLParser"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
         // The fuzz differ: generates candidate inputs and diffs Swift against the Go oracle.
@@ -56,6 +57,11 @@ let package = Package(
 
         // ── Tier 2 ───────────────────────────────────────────────────────────
         .target(name: "PromEncoding", dependencies: ["PromHash", "GoCompat"]),
+        // Phase 4: the PromQL lexer and a hand-written parser replacing goyacc.
+        .target(
+            name: "PromQLParser",
+            dependencies: ["PromModel", "PromLabels", "PromHistogram", "GoCompat"]
+        ),
 
         // ── Tooling ──────────────────────────────────────────────────────────
         .executableTarget(
@@ -82,6 +88,7 @@ let package = Package(
         ),
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
+        .testTarget(name: "PromQLParserTests", dependencies: ["PromQLParser", "GoOracleSupport"]),
     ]
 )
 
