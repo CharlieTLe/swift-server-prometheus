@@ -13,14 +13,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 1 — foundations + verification rig | done |
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
-| 4–10 | not started |
+| 4 — `PromQLParser` | **lexer + function table done; AST and parser remain** |
+| 5–10 | not started |
 
-Green as of this commit: **164,548 committed differential cases, 178 tests**, on both Swift 6.4
+Green as of this commit: **165,526 committed differential cases, 196 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          1,567       193
+  GoCompat          1,644       193
   PromHash            216         –
   PromMath             91         –
   PromModel           104         –
@@ -28,8 +29,9 @@ Sources/            src     generated
   PromEncoding        343         –
   PromRegex         3,312     3,974
   PromHistogram     4,125       163
-Tests               3,574
-oracle (Go)         4,631
+  PromQLParser      1,615       550
+Tests               4,073
+oracle (Go)         5,015
 ```
 
 ### Verify everything in one go
@@ -135,38 +137,74 @@ architectural question for `Labels`** — see §6.
 
 ---
 
-## 5. What to do next: Phase 4
+## 5. What to do next: finish Phase 4
 
-**Phase 3 is done.** `model/histogram` is fully ported — the generic layer, the integer `Histogram`,
-`FloatHistogram` in all six slices, and `convert.go`. Twelve oracle suites cover it, and the phase
-gate (field-by-field bit-pattern parity on `Add`, `Sub`, `Mul`, `Div`, `KahanAdd`, `Compact`,
-`DetectReset`, `ToFloat`, `Validate`, `Equals`, `CopyTo`, `ReduceResolution`) is met.
+Two slices are done and merged:
 
-Next is **Phase 4 — PromQL parser**, then Phase 5's engine. `docs/ROADMAP.md` has the phase list and
-the argument for why PromQL comes before TSDB.
+| slice | state | suites |
+|---|---|---|
+| `posrange.go` + `lex.go` | done (#10) | `promql/lex` (550 token streams), `promql/posrange` (330) |
+| `value.go` + `functions.go` | done (#11) | `promql/functions`, `promql/functionnames`, `promql/valuetype` |
+| `ast.go` + the parser | **remains** | — |
+| `printer.go` + `prettier.go` | **remains** | — |
 
-Two things from Phase 3 that will matter immediately in Phases 4–5:
+### Why the parser is one big PR
 
-- **`FloatHistogram.testExpression()` must round-trip with the parser.** It emits the
-  `{{schema:0 sum:5 count:4 buckets:[1 2 1]}}` DSL that the conformance `.test` files are written in.
-  It is pinned against Go over 650 histograms, so if the parser disagrees, the parser is wrong.
-- **Fused multiply-add is a correctness issue, not an optimisation.** See PORTING.md "Replicated Go
-  quirks" #0. Phase 5 is nothing but float arithmetic, and this bit us twice in Phase 3 — once for
-  61 ULP. When porting an expression of the form `a + b*c`, disassemble the Go and check.
+The AST is only observable *through* the parser, and no fixture passes until the whole grammar works
+— a parser that handles half of PromQL fails on nearly every corpus entry. So unlike Phase 3, this
+does not split into shippable slices. Budget for it accordingly; do not try to land it in pieces.
 
-### What Phase 3 left behind, for reference
+The exit gate (ROADMAP) is four things: token-stream equality (**done**), AST JSON equality via
+`web/api/v1/translate_ast.go`, `parse(print(parse(x))) == parse(x)`, and error + `PositionRange`
+byte-equality.
 
-| file | suites |
-|---|---|
-| `generic.go` | `histogram/bounds` |
-| `histogram.go` | `histogram/integer`, `-compact`, `-reduce`, `-validate`, `-equals` |
-| `float_histogram.go` | `histogram/float`, `-copytoschema`, `-equals`, `-scale`, `-add`, `-kahanadd`, `-reduce`, `-detectreset`, `-trim` |
-| `convert.go` | `histogram/nhcb-classic` |
-| Go's `math.Log2` | `gocompat/log2` |
+### What is already worked out
 
-`GoMath` (in `GoCompat`) exists because Go implements `Log`, `Log2` and `Frexp` itself rather than
-calling libm, and the platform libm disagrees on 43 of 2,350 values — including exact exponential
-bucket boundaries. Do not "simplify" it into a libm call.
+**Precedence, from `generated_parser.y`** — lowest to highest, for precedence climbing:
+
+```
+%left     LOR
+%left     LAND LUNLESS
+%left     EQLC GTE GTR LSS LTE NEQ TRIM_UPPER TRIM_LOWER
+%left     ADD SUB
+%left     MUL DIV MOD ATAN2
+%right    POW
+%nonassoc OFFSET
+%right    LEFT_BRACKET
+```
+
+**The parser entry points are methods, not package functions.** In v3.13.2 it is
+`parser.NewParser(parser.Options{...}).ParseExpr(input)`; there is no package-level `ParseExpr`.
+`Options` gates four features — `EnableExperimentalFunctions`, `ExperimentalDurationExpr`,
+`EnableExtendedRangeSelectors`, `EnableBinopFillModifiers` — and the port needs all four, because they
+change which queries parse.
+
+**The lexer is already byte-oriented and ready.** `Lexer(_ input: [UInt8], seriesDesc: Bool)` exists
+specifically so the parser can reach the series-description states, which `Lex()` cannot. Positions
+are byte offsets throughout, which is what every `PositionRange` is measured in.
+
+**The series-description and histogram states are the coverage gap to close.**
+`lexValueSequence`, `lexHistogram`, `lexHistogramDescriptor` and `lexBuckets` are unreachable from
+outside Go's parser package, so slice 1 could not pin them. `ParseSeriesDesc` reaches all four — make
+sure the parser corpus exercises `{{schema:0 sum:5 count:4 buckets:[1 2 1]}}`-style input heavily.
+`FloatHistogram.testExpression()` emits exactly that DSL and is already pinned over 650 histograms, so
+`parse(testExpression(h))` should reconstruct `h`. That is a free, strong round-trip test — use it.
+
+**A decision to make deliberately: how to represent the AST.** Go uses interfaces plus pointer
+structs, and the *engine* mutates nodes in place — `VectorSelector.UnexpandedSeriesSet`, `Series`,
+`Offset` and `Timestamp` are all filled in at query-preparation time, and `preprocessExpr` rewrites the
+tree. An `indirect enum` is more idiomatic Swift and gives exhaustive switches, but every Phase 5
+mutation becomes a tree rebuild. Final classes behind a protocol keep Go's shape and Phase 5's
+mutation cheap. Decide before writing the parser, not after, and record it as an ADR — this is the
+kind of choice that is expensive to reverse once the engine depends on it.
+
+Note also that `VectorSelector` has `storage.SeriesSet` and `[]storage.Series` fields that do not
+exist yet: Phase 5 brings the storage protocols. Leave them out and add them with the engine rather
+than inventing a placeholder.
+
+**goyacc's token numbers are already reproduced** in `ItemType`, and they matter: `ItemType.String()`
+falls back to `<Item 57370>` and `desc()` renders the raw number through `%q`. Both reach parse
+errors. Do not renumber them.
 
 ---
 

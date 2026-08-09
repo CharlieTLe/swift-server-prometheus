@@ -28,8 +28,8 @@ that ships with a portable oracle.
 | 0 | Pin upstream to a read-only `v3.13.2` worktree | — | `git describe` = `v0.313.2`; `st.go` absent |
 | **1** ✅ | **Foundations + verification rig.** `GoCompat`, `PromHash`, `PromMath`, `PromModel`, `PromLabels`, `PromEncoding`, the `oracle/` Go harness, `Fixtures/` | 6.1k (+1.4k Go) | **DONE** — 17 suites / ~70k committed cases green on Swift 6.1 and 6.4; `verify-fixtures.sh` green and proven to detect drift. Regex is stubbed (ADR-6), so `Matcher` regex parity is deferred to Phase 2 |
 | **2** ✅ | **`PromRegex` — RE2 in Swift.** Parser, Simplify, compiler, Pike VM, FastRegexMatcher | 3.4k | **DONE** — 4,221 parse cases (tree + exact error text), 40,768 MatchString cases, 675 SetMatches cases, all green. `Matcher` now uses it; the literal-only stand-in is gone |
-| 3 | `PromHistogram` — native histograms | 4.5k | Oracle parity on `Add/Sub/Mul/Div/KahanAdd/Compact/DetectReset/ToFloat/Validate` |
-| 4 | `PromQLParser` — lexer ported 1:1, **hand-written precedence-climbing parser** replacing goyacc | 5.5k | Token-stream equality; AST JSON equality via `translate_ast.go`; `parse(print(parse(x))) == parse(x)`; error + `PositionRange` byte-equality |
+| **3** ✅ | **`PromHistogram` — native histograms** | 4.5k | **DONE** — 12 suites; field-by-field bit-pattern parity on `Add/Sub/Mul/Div/KahanAdd/Compact/DetectReset/ToFloat/Validate/Equals/CopyTo/ReduceResolution`, plus `TrimBuckets` and `convert.go` |
+| **4** ◐ | `PromQLParser` — lexer ported 1:1, **hand-written precedence-climbing parser** replacing goyacc | 5.5k | Token-stream equality **done** (550 streams); function table pinned. Remaining: AST JSON equality via `translate_ast.go`; `parse(print(parse(x))) == parse(x)`; error + `PositionRange` byte-equality |
 | 5 | `PromQL` engine + storage protocols | 12k | **All 2,201 `eval` assertions green.** Shippable library milestone |
 | 6 | TSDB read path | 9k | Read every block in `tsdb/testdata/`; `tsdb dump` byte-equals `promtool`; re-run 2,201 evals on a block querier |
 | 7 | TSDB write path | 14k | **Byte-identical block** vs Go (ULID pinned); `promtool tsdb verify` accepts ours; WAL replay both ways |
