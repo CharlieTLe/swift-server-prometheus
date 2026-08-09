@@ -84,6 +84,9 @@ var suites = map[string]func(*emitter){
 	"gocompat/log2":                genGoLog2,
 	"promql/lex":                   genPromQLLex,
 	"promql/posrange":              genPromQLPosRange,
+	"promql/functions":             genPromQLFunctions,
+	"promql/functionnames":         genPromQLFunctionNames,
+	"promql/valuetype":             genPromQLValueType,
 }
 
 func main() {

@@ -1,0 +1,8 @@
+{"id":"vt/0","in":"none","out":{"raw":"none","documented":"none"}}
+{"id":"vt/1","in":"vector","out":{"raw":"vector","documented":"instant vector"}}
+{"id":"vt/2","in":"scalar","out":{"raw":"scalar","documented":"scalar"}}
+{"id":"vt/3","in":"matrix","out":{"raw":"matrix","documented":"range vector"}}
+{"id":"vt/4","in":"string","out":{"raw":"string","documented":"string"}}
+{"id":"vt/5","in":"","out":{"raw":"","documented":""}}
+{"id":"vt/6","in":"unknown","out":{"raw":"unknown","documented":"unknown"}}
+{"id":"vt/7","in":"Vector","out":{"raw":"Vector","documented":"Vector"}}
