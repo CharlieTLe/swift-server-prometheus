@@ -143,6 +143,12 @@ public indirect enum HistogramError: Error, Equatable, CustomStringConvertible {
     /// Go: `histogram.go:470` — the observation-count checks prepend the two
     /// counts to the sentinel message.
     case countMismatchDetail(sumOfBuckets: UInt64, count: UInt64, notBigEnough: Bool)
+    /// Go: `float_histogram.go:964` — only the float histogram checks the zero
+    /// bucket for a negative count, and it reuses the bucket-count sentinel.
+    case zeroBucketNegativeCount(count: Double)
+    /// Go: `float_histogram.go:973`. The double space after "is" is upstream's
+    /// and is reproduced deliberately.
+    case negativeCountDetail(count: Double)
     /// Go: `fmt.Errorf("%s: %w", prefix, err)` — `Validate` labels which side of
     /// the histogram failed.
     case wrapped(prefix: String, HistogramError)
@@ -202,6 +208,13 @@ public indirect enum HistogramError: Error, Equatable, CustomStringConvertible {
             let base: HistogramError = notBigEnough ? .countNotBigEnough : .countMismatch
             return
                 "\(sumOfBuckets) observations found in buckets, but the Count field is \(count): \(base.description)"
+        case .zeroBucketNegativeCount(let c):
+            return
+                "zero bucket has observation count of \(GoFloat.formatG(c)): histogram has a bucket whose observation count is negative"
+        case .negativeCountDetail(let c):
+            // Two spaces after "is" — upstream's typo, reproduced byte-for-byte.
+            return
+                "observation count is  \(GoFloat.formatG(c)): \(HistogramError.negativeCount.description)"
         case .wrapped(let prefix, let inner):
             return "\(prefix): \(inner.description)"
         }

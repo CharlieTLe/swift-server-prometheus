@@ -98,6 +98,21 @@ struct FloatHistJSON: Codable, Equatable, Sendable {
         nb = fh.negativeBuckets.map(hexBits)
         cv = fh.customValues.map { $0.map(hexBits) }
     }
+
+    var histogram: FloatHistogram {
+        FloatHistogram(
+            counterResetHint: CounterResetHint(rawValue: crh)!,
+            schema: schema,
+            zeroThreshold: doubleFromHex(zt),
+            zeroCount: doubleFromHex(zc),
+            count: doubleFromHex(count),
+            sum: doubleFromHex(sum),
+            positiveSpans: psp.map(\.span),
+            negativeSpans: nsp.map(\.span),
+            positiveBuckets: pb.map(doubleFromHex),
+            negativeBuckets: nb.map(doubleFromHex),
+            customValues: cv.map { $0.map(doubleFromHex) })
+    }
 }
 
 /// Every bucket an iterator yields, rendered the way Go's `Bucket.String()` does
