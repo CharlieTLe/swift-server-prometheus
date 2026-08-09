@@ -1,0 +1,12 @@
+{"id":"sentinel/NotFound","in":"NotFound","out":"not found"}
+{"id":"sentinel/OutOfOrderSample","in":"OutOfOrderSample","out":"out of order sample"}
+{"id":"sentinel/OutOfBounds","in":"OutOfBounds","out":"out of bounds"}
+{"id":"sentinel/TooOldSample","in":"TooOldSample","out":"too old sample"}
+{"id":"sentinel/DuplicateSampleForTimestamp","in":"DuplicateSampleForTimestamp","out":"duplicate sample for timestamp"}
+{"id":"sentinel/OutOfOrderExemplar","in":"OutOfOrderExemplar","out":"out of order exemplar"}
+{"id":"sentinel/DuplicateExemplar","in":"DuplicateExemplar","out":"duplicate exemplar"}
+{"id":"sentinel/ExemplarLabelLength","in":"ExemplarLabelLength","out":"label length for exemplar exceeds maximum of 128 UTF-8 characters"}
+{"id":"sentinel/ExemplarsDisabled","in":"ExemplarsDisabled","out":"exemplar storage is disabled or max exemplars is less than or equal to 0"}
+{"id":"sentinel/NativeHistogramsDisabled","in":"NativeHistogramsDisabled","out":"native histograms are disabled"}
+{"id":"sentinel/OutOfOrderST","in":"OutOfOrderST","out":"start timestamp out of order, ignoring"}
+{"id":"sentinel/STNewerThanSample","in":"STNewerThanSample","out":"ST is newer or the same as sample's timestamp, ignoring"}

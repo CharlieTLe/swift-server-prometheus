@@ -8,16 +8,13 @@
 // reference semantics keep Phase 5 a field assignment instead of a tree rebuild.
 // The cost is that dispatch is `as?` chains rather than an exhaustive switch.
 //
-// Two sets of fields are deliberately absent:
-//
-//   - `VectorSelector.UnexpandedSeriesSet` and `.Series` are `storage.SeriesSet`
-//     and `[]storage.Series`. Phase 5 brings the storage protocols; inventing a
-//     placeholder now would be a guess to unpick later.
-//   - `EvalStmt` and `TestStmt` are statements the parser never produces. They
-//     carry `time.Time` and an evaluation context, and belong with the engine.
+// `EvalStmt` and `TestStmt` are in Statements.swift, added in Phase 5 once
+// `GoTime` and the storage protocols existed to express them.
 //===----------------------------------------------------------------------===//
 
+public import PromPosRange
 public import PromLabels
+public import PromStorage
 public import GoCompat
 
 // MARK: - Protocols
@@ -428,6 +425,15 @@ public final class VectorSelector: Expr {
     public var startOrEnd: ItemType
     public var labelMatchers: [Matcher?]
 
+    /// Go: `UnexpandedSeriesSet` — the series set populated at query-preparation
+    /// time, before `checkAndExpandSeriesSet` drains it into ``series``.
+    ///
+    /// Assigned in place by the engine, which is the whole reason ADR-11 chose
+    /// classes over an `indirect enum`.
+    public var unexpandedSeriesSet: (any SeriesSet)?
+    /// Go: `Series` — the expanded result of ``unexpandedSeriesSet``.
+    public var series: [any Series]
+
     /// True when this selector need not have a matcher that rejects the empty
     /// string — which is the case for `info()`'s second argument.
     public var bypassEmptyMatcherCheck: Bool
@@ -446,6 +452,8 @@ public final class VectorSelector: Expr {
         skipHistogramBuckets: Bool = false,
         startOrEnd: ItemType = ItemType(0),
         labelMatchers: [Matcher?] = [],
+        unexpandedSeriesSet: (any SeriesSet)? = nil,
+        series: [any Series] = [],
         bypassEmptyMatcherCheck: Bool = false,
         anchored: Bool = false,
         smoothed: Bool = false,
@@ -459,6 +467,8 @@ public final class VectorSelector: Expr {
         self.skipHistogramBuckets = skipHistogramBuckets
         self.startOrEnd = startOrEnd
         self.labelMatchers = labelMatchers
+        self.unexpandedSeriesSet = unexpandedSeriesSet
+        self.series = series
         self.bypassEmptyMatcherCheck = bypassEmptyMatcherCheck
         self.anchored = anchored
         self.smoothed = smoothed

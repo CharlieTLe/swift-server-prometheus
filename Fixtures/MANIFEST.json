@@ -3,6 +3,9 @@
   "upstreamDescribe": "v0.313.2",
   "goVersion": "go1.26.5",
   "files": {
+    "chunkenc/compatible.jsonl": { "sha256": "705caedcd4167985825cbcb5ecb43ce9699d8894e024e55d071c9c9b8af76481", "lines": 36 },
+    "chunkenc/encoding.jsonl": { "sha256": "c97b97d5bbde77bcd681bdf3cbdd4ec7724dca35476379ee71b3d458147462d6", "lines": 10 },
+    "chunkenc/valuetype.jsonl": { "sha256": "cc70b980e039bfbfaf8ef7a132673d7418d388b5556833360c25fe60bc1afddb", "lines": 7 },
     "encoding/encbuf.jsonl": { "sha256": "37644158026ca51cc85e7c53d6f0292fe8f536af5a68df957301cb7372c66dfb", "lines": 2000 },
     "gocompat/duration.jsonl": { "sha256": "f92f96cbb9e54a95fbd41dfb8ed8fa993fa81592ea214a26c4ebcc0aac8daf38", "lines": 2027 },
     "gocompat/floatformat.jsonl": { "sha256": "2c826fbc0611efe0e36bb13f2d686acaa476d7aa1336e47d80811efb5aada0a9", "lines": 38130 },
@@ -10,6 +13,8 @@
     "gocompat/intparse.jsonl": { "sha256": "611574c5aca1335cf5702aa61f0e663de362af39f19bfb1ecd7d05b7e923b6fa", "lines": 408 },
     "gocompat/log2.jsonl": { "sha256": "971f9340412324cd7b58be5cab03d7b750c79296e76757be935c3373569a4c8d", "lines": 2350 },
     "gocompat/quote.jsonl": { "sha256": "00425ec84140e5627ce545087baeb95004b3c4a8938765a96312e951a71ced6f", "lines": 1839 },
+    "gocompat/time-rfc3339.jsonl": { "sha256": "c06ff4ee6270b13949167ef26938f0a41a580ebf19529af0ae37bfb15416ed37", "lines": 31 },
+    "gocompat/time-unixmilli.jsonl": { "sha256": "eefcb1b8ca9c821df7791ac19bf8c9e2fed92152b932600f51a777eaaa1b20ef", "lines": 17 },
     "gocompat/unquote.jsonl": { "sha256": "2f30fe2018e2200979725ac1b405c3ef1132d6d502709ab1bde969bb41b3e7cf", "lines": 3083 },
     "gocompat/varint.jsonl": { "sha256": "8b7ed3ec6628b5fabac4a6e922db8e67e451c6c50afa5577d8ccdd00247f2344", "lines": 3024 },
     "hash/crc32c.jsonl": { "sha256": "5047a31aff7bdeb6c97b7c565e3e55e6eb57e17c8c797a125a2df6d09abb2549", "lines": 2040 },
@@ -38,6 +43,8 @@
     "labels/omfloat.jsonl": { "sha256": "ef4f5e5af45dcc2a69e4f36baec62c5d11b6747089d59ef6c16179c9e574db20", "lines": 922 },
     "labels/stablehash.jsonl": { "sha256": "4ab4d041223dfb6c47b6056215347767a60914b1baeabae85c5ddd760837d7f8", "lines": 1522 },
     "math/kahan.jsonl": { "sha256": "df9bc48cb7a2949b6f73fac40220d2b88edf205bbafa3a4bdf46be74354a1202", "lines": 1503 },
+    "promql/annotations-set.jsonl": { "sha256": "a3e860627c6a1d1f92c1b610b5a40854b1333714ecccd18fde00ba78cd345b17", "lines": 19 },
+    "promql/annotations.jsonl": { "sha256": "b5331508a77c2ffaa9ae2b84113a5fa34af0b166537048f74e6ffc59d7f90c9f", "lines": 4118 },
     "promql/functionnames.jsonl": { "sha256": "d666fe08dfc81f182f3691e76eced10da491293041a999ce92e9d7feee52a235", "lines": 1 },
     "promql/functions.jsonl": { "sha256": "9e4e60dca64cd78e7a9bc43f1613c15bb079f8e47b82fdd265446bc5d966aedd", "lines": 89 },
     "promql/lex.jsonl": { "sha256": "b11abce9c6f7ced2589919ea37eaa55267a5d7fac35dfb5f1562e7c4996194b3", "lines": 550 },
@@ -68,11 +75,15 @@
     "promql/testdata/subquery.test": { "sha256": "37c4534e7a98e4fe7fdd0e273e9bbf8c59c2fb7b0363c4b4b4af6fcf756f62a6", "lines": 161 },
     "promql/testdata/trig_functions.test": { "sha256": "d9cba332e8b6294276e7fbdeb5bbfb715e11bad6ec6aa568fe01aa82ed802a8f", "lines": 101 },
     "promql/testdata/type_and_unit.test": { "sha256": "23f604731f005563f9c7219c913eb65008f366fbe6999d64e1d9a22614e21426", "lines": 280 },
+    "promql/timestamp-floatsec.jsonl": { "sha256": "8f97a691d724944f6d13b384b5daca731345d1a2eba09328d3b936069c16e6eb", "lines": 23 },
+    "promql/timestamp.jsonl": { "sha256": "d0864347586a7e603e3ac9a7ef7b6c3d915f905bb90b5ec639d9e1bb40fe3783", "lines": 15 },
     "promql/valuetype.jsonl": { "sha256": "8e88774d31523dd070292896a9cb48347951da0621363d99da7d66a1fb06d2f0", "lines": 8 },
     "regex/match.jsonl": { "sha256": "38844cdb215d414acb495c9195fcbda5783502711a0ebe31fcb94b0648d6897e", "lines": 40768 },
     "regex/parse.jsonl": { "sha256": "221411ba2bacbd9a1ea86dd1a6e67bd6dfdf08a0f07c4e62fa85826f6547c22c", "lines": 4221 },
     "regex/setmatches.jsonl": { "sha256": "d0f09f1ddaade4bc4eaab8246b399ff9f0d01504eacf75a085e665c7507d1743", "lines": 675 },
     "regex/simplefold.jsonl": { "sha256": "b240b1de6eb59059e86e3a64887e1958dfda7286bbbd33a6b117999dc1310c5f", "lines": 2047 },
-    "regex/unicodetable.jsonl": { "sha256": "48d9ef43dc955239ee5f447ea96a2a067bc7f716f3c91823a13cfe7f1cabd6a9", "lines": 159 }
+    "regex/unicodetable.jsonl": { "sha256": "48d9ef43dc955239ee5f447ea96a2a067bc7f716f3c91823a13cfe7f1cabd6a9", "lines": 159 },
+    "storage/duplicate.jsonl": { "sha256": "c80aa7cf1293bf7486016a75af8381f41ac327478d78a67d4787af74853885a9", "lines": 1248 },
+    "storage/errors.jsonl": { "sha256": "3030c74cefbeceb35ffb09323fe015de2acae90ac1e974bfc0c3d2b900b250fc", "lines": 12 }
   }
 }

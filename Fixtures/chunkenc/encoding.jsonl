@@ -1,0 +1,10 @@
+{"id":"encoding/0","in":0,"out":{"string":"none","isValid":false}}
+{"id":"encoding/1","in":1,"out":{"string":"XOR","isValid":true}}
+{"id":"encoding/2","in":2,"out":{"string":"histogram","isValid":true}}
+{"id":"encoding/3","in":3,"out":{"string":"floathistogram","isValid":true}}
+{"id":"encoding/4","in":4,"out":{"string":"XOR2","isValid":true}}
+{"id":"encoding/5","in":5,"out":{"string":"\u003cunknown\u003e","isValid":false}}
+{"id":"encoding/6","in":6,"out":{"string":"\u003cunknown\u003e","isValid":false}}
+{"id":"encoding/7","in":7,"out":{"string":"\u003cunknown\u003e","isValid":false}}
+{"id":"encoding/8","in":8,"out":{"string":"\u003cunknown\u003e","isValid":false}}
+{"id":"encoding/255","in":255,"out":{"string":"\u003cunknown\u003e","isValid":false}}

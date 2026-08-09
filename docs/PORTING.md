@@ -79,6 +79,32 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
    only by upstream's own `matcher_test.go`. `SetMatches`, which *is* load-bearing (TSDB turns a regex
    matcher into direct index lookups with it), matches Go exactly and is asserted.
 
+7. **`annotations.Annotations` iteration order.** Go's is a `map[string]error`, so `AsStrings`
+   returns warnings and infos in randomised order, and when `maxWarnings`/`maxInfos` truncates,
+   *which* annotations survive is random too. There is no order to be byte-exact against.
+
+   This port keeps first-insertion order, so its output is reproducible. A Swift `Dictionary` would
+   have been no better than Go's map, since Swift seeds its hasher per process — the ordering is
+   explicit for that reason, not by accident.
+
+   Deduplication *is* contractual and is reproduced exactly, including the part that is easy to guess
+   backwards: the key is the annotation's message with **no query set**, so two annotations differing
+   only in position collapse into one, and the **last** one wins — `Add` calls
+   `incoming.Merge(stored)` and `annoErr.Merge` returns its receiver (`annotations.go:49`).
+
+   Consequence for the fixtures: `promql/annotations-set` sorts before comparing, and for the
+   truncating cases it records only the counts and the "N more … omitted" line, never the surviving
+   subset. Emitting the subset would have made the *fixture itself* nondeterministic and
+   `verify-fixtures.sh` flaky.
+
+8. **`annotations.HistogramOperation`'s "unknown operation" default is unreachable.** Go declares it
+   as a named `string` type, so a value outside `{addition, subtraction, aggregation}` renders
+   "unknown operation". The Swift port is an enum, whose raw-value initialiser simply fails instead —
+   a narrowing that is safe at the call sites (the engine only ever passes the three constants) but
+   genuinely cannot produce Go's string. Four cases in `promql/annotations` are skipped for this, and
+   the count is asserted so the corpus cannot drift without saying so.
+
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -160,6 +186,20 @@ changing behaviour.
     produces those messages at the same positions this port does — so `testExpression()` is only a
     fixed point of the series-description parser for the finite cases, and the round-trip test in
     `ParserInvariantTests` skips the rest rather than pretending otherwise.
+
+13. **`histogramQuantileForcedMonotonicityErr.Merge` mutates the *other* error and returns it.**
+    `annotations.go:351` does `o := &histogramQuantileForcedMonotonicityErr{}` and then
+    `errors.As(other, &o)`, whose target is a `**T` — so `o` is *overwritten* with `other` rather than
+    being a fresh accumulator. The widening that follows therefore mutates the already-stored
+    annotation, and `o.count += e.count + 1` counts against whichever object survives. Replicated,
+    because the sample count in the message depends on it.
+
+14. **`time.Time.UnixMilli` truncation vs. the second boundary.** The monotonicity annotation formats
+    `time.Unix(e.minTs/1000, 0)`, and `minTs/1000` is Go integer division — truncating toward zero,
+    not flooring. So -1001 ms is second -1, rendering `1969-12-31T23:59:59Z`, and *not* second -2.
+    Pinned by `Fixtures/gocompat/time-rfc3339.jsonl`; a `floorDiv` here would be wrong by a second
+    for every pre-epoch timestamp.
+
 
 ## Not ported
 

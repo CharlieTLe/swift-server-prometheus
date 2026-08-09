@@ -11,6 +11,8 @@
 // are part of the contract.
 //===----------------------------------------------------------------------===//
 
+public import PromPosRange
+
 private import GoCompat
 
 /// Go: `ItemType` — a token type.

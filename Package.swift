@@ -26,6 +26,11 @@ let package = Package(
         .library(name: "PromModel", targets: ["PromModel"]),
         .library(name: "PromRegex", targets: ["PromRegex"]),
         .library(name: "PromHistogram", targets: ["PromHistogram"]),
+        .library(name: "PromPosRange", targets: ["PromPosRange"]),
+        .library(name: "PromAnnotations", targets: ["PromAnnotations"]),
+        .library(name: "PromChunkEnc", targets: ["PromChunkEnc"]),
+        .library(name: "PromChunks", targets: ["PromChunks"]),
+        .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromQLParser", targets: ["PromQLParser"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
@@ -57,10 +62,35 @@ let package = Package(
 
         // ── Tier 2 ───────────────────────────────────────────────────────────
         .target(name: "PromEncoding", dependencies: ["PromHash", "GoCompat"]),
+
+        // Phase 5. The tier order below is Go's own, and the split of
+        // `PromPosRange` out of `PromQLParser` is forced rather than stylistic:
+        //
+        //   promql/parser -> storage -> util/annotations -> promql/parser/posrange
+        //
+        // Upstream keeps `posrange` a separate package precisely to break that
+        // cycle. Folding it back into `PromQLParser` makes the graph circular.
+        .target(name: "PromPosRange"),
+        .target(name: "PromAnnotations", dependencies: ["PromPosRange", "PromModel", "GoCompat"]),
+        // Phase 5 ports only chunk.go's protocol surface; the concrete XOR,
+        // XOR2 and histogram encodings arrive with Phases 6–7.
+        .target(name: "PromChunkEnc", dependencies: ["PromHistogram", "GoCompat"]),
+        .target(name: "PromChunks", dependencies: ["PromChunkEnc"]),
+        .target(
+            name: "PromStorage",
+            dependencies: [
+                "PromLabels", "PromModel", "PromHistogram", "PromChunkEnc", "PromChunks",
+                "PromAnnotations", "GoCompat",
+            ]
+        ),
+
         // Phase 4: the PromQL lexer and a hand-written parser replacing goyacc.
         .target(
             name: "PromQLParser",
-            dependencies: ["PromModel", "PromLabels", "PromHistogram", "GoCompat"]
+            dependencies: [
+                "PromModel", "PromLabels", "PromHistogram", "PromPosRange", "PromStorage",
+                "GoCompat",
+            ]
         ),
 
         // ── Tooling ──────────────────────────────────────────────────────────
@@ -80,7 +110,10 @@ let package = Package(
         .testTarget(name: "GoCompatTests", dependencies: ["GoCompat", "GoOracleSupport"]),
         .testTarget(name: "PromHashTests", dependencies: ["PromHash", "GoOracleSupport"]),
         .testTarget(name: "PromMathTests", dependencies: ["PromMath", "GoOracleSupport"]),
-        .testTarget(name: "PromModelTests", dependencies: ["PromModel", "GoOracleSupport"]),
+        .testTarget(
+            name: "PromModelTests",
+            dependencies: ["PromModel", "GoCompat", "GoOracleSupport"]
+        ),
         .testTarget(name: "PromRegexTests", dependencies: ["PromRegex", "GoOracleSupport"]),
         .testTarget(
             name: "PromHistogramTests",
@@ -89,10 +122,21 @@ let package = Package(
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
         .testTarget(
+            name: "PromAnnotationsTests",
+            dependencies: ["PromAnnotations", "PromPosRange", "GoCompat", "GoOracleSupport"]
+        ),
+        .testTarget(
+            name: "PromStorageTests",
+            dependencies: [
+                "PromStorage", "PromChunkEnc", "PromLabels", "PromAnnotations", "GoCompat",
+                "GoOracleSupport",
+            ]
+        ),
+        .testTarget(
             name: "PromQLParserTests",
             dependencies: [
-                "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "GoCompat",
-                "GoOracleSupport",
+                "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "PromPosRange",
+                "PromStorage", "GoCompat", "GoOracleSupport",
             ]
         ),
     ]

@@ -8,6 +8,7 @@
 // `ParseErrors.Error()` — so the traversal order is part of the contract.
 //===----------------------------------------------------------------------===//
 
+public import PromPosRange
 internal import GoCompat
 public import PromHistogram
 internal import PromLabels
