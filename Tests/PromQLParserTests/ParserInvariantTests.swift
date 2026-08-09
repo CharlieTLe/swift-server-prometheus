@@ -245,3 +245,62 @@ struct HistogramDescriptionRoundTripTests {
         return false
     }
 }
+
+/// Regressions found by the `promql/preprocess` corpus, not by `promql/parse`.
+///
+/// Both are `Double`-to-`Int64` conversions that Go performs with hardware
+/// saturating/wrapping semantics and that Swift traps on. Neither was reachable
+/// from the 6,154-case parse corpus, because upstream's `parse_test.go` has no
+/// duration literal near the `Int64` boundary — the preprocess suite added one on
+/// purpose, to pin `calculateDuration`'s out-of-range bound, and it crashed the
+/// *parser* instead.
+@Suite("Int64 boundary conversions in the parser")
+struct ParserInt64BoundaryTests {
+
+    /// The bound at `parse.go:1208` is `val > 1<<63/1e9`, which is **inclusive**:
+    /// `1<<63/1e9` rounds to the `Double` 9223372036.854776, so a literal equal to
+    /// it passes the check and reaches the conversion.
+    static let atBound = "9223372036.8547764"
+
+    @Test("a duration literal at the Int64 boundary saturates rather than trapping")
+    func durationLiteralSaturates() throws {
+        let p = Parser(options: Options(experimentalDurationExpr: true))
+
+        // Go: `time.Duration(math.Round(9223372036.8547764 * 1e9))` — the product
+        // is exactly 2**63, one above Int64.max, and arm64's FCVTZS clamps.
+        let expr = try p.parseExpr("foo[\(Self.atBound)]")
+        let ms = try #require(expr as? MatrixSelector)
+        #expect(ms.range.nanoseconds == Int64.max)
+        // Go's rendering of that duration, verified by running it.
+        #expect(expr.description == "foo[106751d23h47m16s854ms]")
+
+        // The negative side clamps to Int64.min.
+        let negExpr = try p.parseExpr("foo offset -\(Self.atBound)")
+        let vs = try #require(negExpr as? VectorSelector)
+        #expect(vs.originalOffset.nanoseconds == Int64.min)
+    }
+
+    @Test("printing a negative offset of Int64.min emits a double minus")
+    func negativeOffsetAtInt64Min() throws {
+        // The printer writes the sign itself and formats the *negated* magnitude
+        // (printer.go:266). `-Int64.min` wraps back to `Int64.min`, which is still
+        // negative, so `model.Duration.String()` prepends a second sign. Go really
+        // does print `foo offset --106751d23h47m16s854ms`; this is not a typo.
+        let p = Parser(options: Options(experimentalDurationExpr: true))
+        let expr = try p.parseExpr("foo offset -\(Self.atBound)")
+        #expect(expr.description == "foo offset --106751d23h47m16s854ms")
+    }
+
+    @Test("a literal past the boundary is still a parse error")
+    func pastBoundIsAnError() {
+        // The saturation above must not swallow the out-of-range check: one ULP
+        // higher, and the parser rejects it.
+        let p = Parser(options: Options(experimentalDurationExpr: true))
+        // One ULP above the bound. Spelled with enough digits to survive the
+        // round trip through the query text: 17 significant digits is always
+        // enough to name a Double uniquely.
+        #expect(throws: (any Error).self) {
+            _ = try p.parseExpr("foo[9223372036.854778]")
+        }
+    }
+}

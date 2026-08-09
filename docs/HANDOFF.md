@@ -1,7 +1,7 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `GoMath` arithmetic layer
-(`math.Exp`/`Pow`/`Mod`/`Min`/`Max`/`Ldexp`, and the `math.Log` fusion fix).
+Written at the end of the session that landed Phase 5's `promql/durations.go` and `PreprocessExpr`,
+and that audited the whole evaluator for fused multiply-adds ahead of porting it.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -15,10 +15,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go` and the `GoMath` arithmetic the evaluator needs are landed; `durations.go` + `PreprocessExpr` next, then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic layer, `durations.go` and `PreprocessExpr` are landed. Next: an in-memory `Queryable`, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **223,391 committed differential cases, 329 tests**, on both Swift 6.4
+Green as of this commit: **241,056 committed differential cases, 340 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -37,9 +37,9 @@ Sources/            src     generated
   PromChunks          117         –
   PromStorage       1,694         –
   PromQLParser      5,948       550
-  PromQL            1,329         –
-Tests               7,855
-oracle (Go)         9,997
+  PromQL            1,918         –
+Tests               8,312
+oracle (Go)        10,462
 ```
 
 ### Verify everything in one go
@@ -151,6 +151,14 @@ where I had written a plausible expectation and the fixture proved the implement
   last group by chance, so `gocompat/log` commits **harvested witnesses** — inputs found by that
   search specifically because they distinguish fused from unfused. Do this rather than asserting
   fusion in a comment; PORTING.md quirk 30 has the table.
+- **A corpus written to test one layer will find bugs in the layer beneath it, and that is a
+  feature.** The `promql/preprocess` corpus needed a duration literal at the `Int64` boundary to pin
+  `calculateDuration`'s out-of-range check. That literal *crashed the parser* twice over — once in
+  `durationOf` (Go's `int64(float64)` saturates on arm64; Swift's traps) and once in the printer
+  (`-Int64.min` wraps in Go, traps in Swift, and Go really does print `offset --106751d23h47m16s854ms`).
+  Neither was reachable from the 6,154-case `promql/parse` corpus, because upstream's own
+  `parse_test.go` has no such literal. PORTING.md quirks 31–32. When a new corpus reaches into an
+  older one's blind spot, expect to fix the older layer, and add the regression test *there*.
 - **`math.Min`/`math.Max` are arm64 assembly and do not agree with the portable Go.** The raw-bits
   ±Inf check runs *before* NaN handling, so `math.Max(+Inf, NaN)` is `+Inf`. `FMAXD` is `FMAX`, which
   propagates NaN — the opposite of libm's `fmax` and `Double.maximum`. The operand order in
@@ -310,6 +318,9 @@ The **protocol substrate is done and merged**. What exists now:
 | `GoCompat.GoMath` | `math.Exp`, `Min`, `Max`, `Mod`, `Pow`, `Ldexp`, `Modf`, `Trunc` | `Exp`/`Min`/`Max` from the **arm64 assembly**; `Pow`/`Mod` are Go's own algorithms, not libm's |
 | `GoCompat.GoMath.log` | `math.Log` | **fusion fixed** — see §3 and PORTING.md quirk 30 |
 | `GoCompat.GoDuration.seconds` | `time.Duration.Seconds` | the whole/fractional split, which is not `nanos / 1e9` |
+| `PromQL` | `promql/durations.go` | in full — `DurationVisitor`, reachable only through `preprocessExpr` |
+| `PromQL` | `promql/engine.go`'s `PreprocessExpr` closure | `foldQueryContextFunctions`, `preprocessExprHelper`, `newStepInvariantExpr`, `detectHistogramStatsDecoding`, `unwrapParenExpr` |
+| `PromQL` | `promql/functions.go`'s two name sets | `AtModifierUnsafeFunctions`, `AnchoredSafeFunctions` — the rest of that file is the evaluator's |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -336,46 +347,110 @@ from Cortex/Thanos.
 
 ### What Phase 5 still has to bring, in order
 
-1. **`promql/durations.go` and `PreprocessExpr`** — the next step, and it is already scoped. A draft
-   of `Durations.swift` exists in this session's notes but is not committed; it was blocked on the
-   `GoMath` work above, which is why that landed first. Two things make this a clean unit:
+1. **An in-memory `Queryable`** — the piece `ROADMAP.md` §2 budgeted at "~800 lines of in-memory
+   storage", and now the next step. It is needed before the exit gate can run at all: upstream's
+   `promqltest` goes through `util/teststorage`, which is a **real `tsdb.DB`**, and Phase 5 cannot use
+   that. `SeriesEntry`, `newListSeries` and `PromQL.StorageSeries` are the substrate —
+   `StorageSeries` in particular turns a `promql.Series` into a `storage.Series`, which is most of
+   what a fake querier needs.
 
-   - `durationVisitor` folds `foo offset (1h / 2)`, `foo[1h + 30m]`, `step()`, `range()`,
-     `max_of(...)` into the concrete `Duration` fields the evaluator reads. It needs `math.Min`,
-     `Max`, `Mod`, `Pow` and `GoDuration.seconds` — all now present.
-   - It is **differentially reachable**, which is not obvious: `durationVisitor` is unexported, but
-     `promql.PreprocessExpr(expr, start, end, step)` is exported and is its only caller
-     (engine.go:4491). Driving that also covers `preprocessExprHelper`, `foldQueryContextFunctions`,
-     `detectHistogramStatsDecoding`, `newStepInvariantExpr` and `unwrapParenExpr` — i.e. the whole
-     step-invariance optimiser, which is a self-contained slice of `engine.go` with no evaluator
-     dependency. Build the suite on the existing `translateAST` from `suites_promql_parse.go` and the
-     committed 6,154-expression parse corpus, at several `(start, end, step)` triples, emitting the
-     AST JSON of the preprocessed tree or the error string. `AtModifierUnsafeFunctions` comes from
-     `functions.go` and is exported.
-
-   Error contract: the messages carry a `start:end` **byte-offset** prefix, not `line:col`, and are
-   not `ParseErr`s. `1<<63/1e9` is `9223372036854775808 / 1e9` rounded to `Double` — spell it as the
-   value, per §4.
-2. **An in-memory `Queryable`** — the piece `ROADMAP.md` §2 budgeted at "~800 lines of in-memory
-   storage". It is needed before the exit gate can run at all: upstream's `promqltest` goes through
-   `util/teststorage`, which is a **real `tsdb.DB`**, and Phase 5 cannot use that. `SeriesEntry`,
-   `newListSeries` and now `PromQL.StorageSeries` are the substrate — `StorageSeries` in particular
-   turns a `promql.Series` into a `storage.Series`, which is most of what a fake querier needs.
-
-   Note this one has **no Go counterpart to differentially test against**: `teststorage` is a real
-   TSDB, so an in-memory stand-in is our own code. Keep it as thin as possible and put the assertions
-   in the `.test` runner above it, rather than inventing an oracle for scaffolding.
-3. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
+   This one has **no Go counterpart to differentially test against**: `teststorage` is a real TSDB,
+   so an in-memory stand-in is our own code. Keep it as thin as possible and put the assertions in
+   the `.test` runner above it, rather than inventing an oracle for scaffolding.
+2. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
    7,667 lines of Go between them, so this needs splitting. `fParams`/`newFParams` from value.go
    belong here (they take an `*evaluator`), as do `vectorByValueHeap` and `EvalNodeHelper`, which
    most of `functions.go` takes as a parameter. `quantile.go` and the `GoMath` layer are already in
    place beneath them. `promql/histogram_stats_iterator.go` belongs here too — engine.go:4795 is its
    only caller — and it is small (167 lines) and op-script testable like the look-back iterators.
-4. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
+3. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
    the exit gate. Its patterns are already reproduced in `oracle/corpus.go`.
 
 The exit gate is unchanged and is the one that matters most in the whole project: **all 2,201 `eval`
 assertions in `Fixtures/promql/testdata/` green**. That is the shippable-library milestone.
+
+### The evaluator's fusion map — read this before porting `engine.go` or `functions.go`
+
+Produced by disassembling all 239 functions of `engine.go` and `functions.go` out of a
+`go test -c` binary and scanning for `FMADDD`/`FMSUBD`/`FNMADDD`/`FNMSUBD`/`FNMULD`. Recorded here
+because it is expensive to derive and cheap to consult. Rebuild the binary with
+
+```sh
+cd ../../prometheus/prometheus-v3.13.2 && go test -c -o /tmp/promql.test ./promql
+go tool objdump -s 'promql\.funcRate$' /tmp/promql.test          # a free function
+go tool objdump -s 'promql\.\(\*evaluator\)\.aggregation$' /tmp/promql.test   # a method
+```
+
+and note the trap: **objdump attributes inlined callees to their own file's line numbers**, so
+`extrapolatedRate`'s disassembly contains `time.go` and `float_histogram.go` lines. Attribute by the
+file prefix, not by position.
+
+**There are exactly five fused sites in the two files.** Everything else is unfused; plain Swift
+operators are correct.
+
+| site | expression | Swift |
+|---|---|---|
+| `engine.go:3838` | `aggregation`, STDVAR/STDDEV Welford | `group.floatValue.addingProduct(f - group.floatMean, delta)` — the subtraction rounds first; only the product and the add share a rounding |
+| `functions.go:900` | `calcTrendValue` | `((1 - tf) * b).addingProduct(tf, s1 - s0)` — `tf*(s1-s0)` is never materialised |
+| `functions.go:956` | `funcDoubleExponentialSmoothing` | `y.addingProduct(sf, floats[i].f)` where `y = (1 - sf) * (s1 + b)` |
+| `functions.go:1099` | `funcRound`'s closure | `Double(0.5).addingProduct(toNearestInverse, f).rounded(.down) / toNearestInverse`, with `toNearestInverse = 1.0 / toNearest` hoisted out of the loop |
+| `functions.go:1938`, `:1940` | `funcPredictLinear`, both returns | `intercept.addingProduct(slope, duration)` — there is no `FMULD` in the function at all |
+
+Plus, already ported: `quantile.go`'s eight, and `float_histogram.go`'s `TrimBuckets` family.
+
+**Kahan summation must NOT be fused, and that is guaranteed by upstream's source rather than by the
+build.** `util/kahansum/kahansum.go` casts all three arguments *and* both results through
+`float64(...)` — "The following casts are not no-ops!" — expressly to forbid fusing across the `Inc`
+boundary, citing prometheus/prometheus#16895. So **any product handed to a Kahan step must be rounded
+with a plain `*` first**. Three call sites make that easy to get wrong because they are FMA-shaped:
+`aggregation:3804` (`q*floatMean`), `functions.go:1291` (`q*mean`), `functions.go:2006`
+(`bucket.Count*delta*delta`, left-associative). Its `isInf` is hand-rolled as
+`t > MaxFloat64 || t < -MaxFloat64`; keep that spelling.
+
+**Four groupings are load-bearing even though nothing fuses**, because a rewrite changes the rounding:
+
+- `interpolate` (functions.go:100) — `y1 + (y2-y1)*Δt/ΔT`, left-associated. Not `(y2-y1)*(Δt/ΔT)`.
+- `extrapolatedRate:564`/`:569` — `sampledInterval * (a / b)`. Not `si * a / b`.
+- `linearRegression:1883`/`:1884`/`:1887` — `sumXY - sumX*sumY/n`, `sumX2 - sumX*sumX/n`,
+  `sumY/n - slope*sumX/n`. The division between the product and the subtraction is what prevents
+  fusion; hoisting it would both fuse and reassociate.
+- `aggregation:3897` — `v/n + c/n`, **two divisions then one add**. Not `(v + c) / n`.
+
+**`Int64(Double)` traps in Swift where Go saturates.** Three sites, and one is user-reachable:
+
+- `functions.go:2487`, `dateWrapper` — `int64(el.F)` on **arbitrary sample data**, unguarded. So
+  `year(vector(NaN))` is legal PromQL and a Swift crash. Go's `FCVTZS` gives NaN → 0, ±Inf → `Int64`
+  extremes; probed answers are 1970 for NaN and 292277026596 for +Inf.
+- `engine.go:3986`, `aggregationK` — `int64(fParam)`, guarded *upstream* by `rangeEvalAgg:1637-1645`
+  using the hand-written float constants at `engine.go:67/69` (`maxInt64 = 9223372036854774784`, the
+  largest `Int64` exactly representable as a `Double`). Port the guard and the constants together, or
+  the port accepts inputs Go rejects with `Scalar value %v overflows int64`.
+- `sin.go`'s `trigReduce`, reached from `sin`/`cos`/`tan` for `|x| >= 2**29` — `uint64(x * (4/Pi))`,
+  a saturating `FCVTZUD`.
+
+**`sort` and `sort_by_label` use two different unstable sorts, and both comparators are invalid.**
+`funcSort`/`funcSortDesc` go through `sort.Sort` (`sort.pdqsort`); `funcSortByLabel*` through
+`slices.SortFunc` (`slices.pdqsortCmpFunc`). Which one runs is observable, so they cannot share an
+implementation. Worse, neither predicate is a strict weak ordering: `vectorByValueHeap.Less` returns
+true for *both* orders of two NaNs, and `natsort.Compare` returns true both ways for `"a01"` vs
+`"a1"`. Passing such a predicate to Swift's `sort(by:)` is undefined behaviour, not merely
+order-unstable — so output fidelity here needs Go's pdqsort ported, including its insertion-sort
+threshold of 12 and its `breakPatterns` xorshift.
+
+**Go map iteration order feeds Kahan accumulation order, so upstream is itself nondeterministic.**
+`rangeEval:1581`, `rangeEvalAgg:1710`, `aggregationCountValues:4215` and
+`mergeSeriesWithSameLabelset:4274` all build their result by ranging a map. The final result is
+sorted, but an *inner* expression's matrix order becomes `aggregation`'s `for si` order, which is the
+order Kahan sums in. Consequences: do not try to reproduce Go's map order; drive `aggregation`
+fixtures with an explicitly ordered input matrix rather than through `rangeEval`; and if the port
+picks a deterministic order, record it as a divergence rather than discovering it later.
+
+**Two smaller ones worth not rediscovering.** `1/Ln10` is a Go untyped constant folded in arbitrary
+precision to `0x3FDBCB7B1526E50E`; the naive Swift `1.0 / 2.302585092994046` is
+`0x3FDBCB7B1526E50D`, one ULP out — hard-code it when `GoMath.log10` lands. (`1/Ln2`, already
+hard-coded, is identical either way; only `Ln10` bites.) And `ts_of_max_over_time` uses `>=` where
+`max_over_time` uses `>`, so the former reports the **last** occurrence of the maximum and the latter
+keeps the **first**.
 
 ### Deliberately not ported yet, so you do not go looking for them
 

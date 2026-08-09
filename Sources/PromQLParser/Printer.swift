@@ -83,11 +83,18 @@ private func atSuffix(timestamp: Int64?, startOrEnd: ItemType) -> String {
 /// The ` offset <duration>` suffix. Note the sign is written explicitly and the
 /// magnitude formatted from the negated value, so a negative offset prints as
 /// `offset -5m` rather than as a negative duration.
+///
+/// The negation **wraps**, matching Go's. That is reachable, not theoretical:
+/// `foo offset -9223372036.8547764` parses to an offset of exactly `Int64.min`
+/// nanoseconds (see ``ParseState/durationOf(_:)``), and `-Int64.min` wraps back to
+/// `Int64.min` — still negative — so `model.Duration.String()` prepends a second
+/// sign and Go prints `foo offset --106751d23h47m16s854ms`. Verified against Go
+/// rather than assumed; a plain `-` traps in Swift. PORTING.md quirk 32.
 private func offsetSuffix(_ offset: GoDuration, _ offsetExpr: DurationExpr?) -> String {
     if let e = offsetExpr { return " offset \(e)" }
     if offset.nanoseconds > 0 { return " offset " + modelDurationString(offset) }
     if offset.nanoseconds < 0 {
-        return " offset -" + modelDurationString(GoDuration(nanoseconds: -offset.nanoseconds))
+        return " offset -" + modelDurationString(GoDuration(nanoseconds: 0 &- offset.nanoseconds))
     }
     return ""
 }
