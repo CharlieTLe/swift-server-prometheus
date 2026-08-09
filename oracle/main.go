@@ -130,6 +130,7 @@ var suites = map[string]func(*emitter){
 	"gocompat/ldexp":            genGoLdexp,
 	"gocompat/duration-seconds": genGoDurationSeconds,
 	"promql/preprocess":         genPromQLPreprocess,
+	"promql/histogram-stats":    genPromQLHistogramStats,
 }
 
 func main() {

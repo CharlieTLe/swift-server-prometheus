@@ -57,6 +57,7 @@
     "promql/bucketquantile.jsonl": { "sha256": "f3636d968cdfba3f0fd77c8fecad9adb810ef0dffa0e0dc753efcfeb6132df94", "lines": 196 },
     "promql/functionnames.jsonl": { "sha256": "d666fe08dfc81f182f3691e76eced10da491293041a999ce92e9d7feee52a235", "lines": 1 },
     "promql/functions.jsonl": { "sha256": "9e4e60dca64cd78e7a9bc43f1613c15bb079f8e47b82fdd265446bc5d966aedd", "lines": 89 },
+    "promql/histogram-stats.jsonl": { "sha256": "07615da20d1ad60650d7d0e7293247219907faace2df207d0234ae046d7da58c", "lines": 38 },
     "promql/histogramfraction.jsonl": { "sha256": "f237afd75d8c26075e4cff83e4c70ae7201b0548315ff476b122ac078b9854ea", "lines": 228 },
     "promql/histogramquantile.jsonl": { "sha256": "a9441f5d785d20901c4ad7a2ad63efc05defa864a27f7b5c984f18682c6bd5df", "lines": 180 },
     "promql/lex.jsonl": { "sha256": "b11abce9c6f7ced2589919ea37eaa55267a5d7fac35dfb5f1562e7c4996194b3", "lines": 550 },
