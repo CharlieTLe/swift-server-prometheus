@@ -108,6 +108,10 @@ var suites = map[string]func(*emitter){
 	"storage/buffer":            genStorageBuffer,
 	"storage/memoized":          genStorageMemoized,
 	"storage/listseries":        genStorageListSeries,
+	// The Phase 5 in-memory Queryable's contract, pinned against a real tsdb.DB
+	// through util/teststorage. See oracle/suites_storage_memselect.go.
+	"storage/mem-select": genStorageMemSelect,
+	"storage/mem-labels": genStorageMemLabels,
 	"promql/value":              genPromQLValue,
 	"promql/value-sort":         genPromQLValueSort,
 	"promql/storageseries":      genPromQLStorageSeries,
