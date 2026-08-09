@@ -154,10 +154,26 @@ changing behaviour.
    `go tool objdump -s '<symbol>'` and grep for `FMADDD`/`FMSUBD`/`FNMSUBD` rather than guessing —
    the helper functions around `TrimBuckets` do *not* fuse, so it is not a blanket rule.
 
+   - **`math.Exp2` is itself assembly on arm64, and fused.** `haveArchExp2` is true for
+     `arm64 || loong64` (`math/exp2_asm.go`), and `exp_arm64.s`'s `archExp2` evaluates its
+     polynomial with `FMADDD`/`FMSUBD`/`FNMULD` where the portable `exp2`/`expmulti` pair does not.
+     Swift's libm `exp2` therefore disagrees with Go's on 19 of 93 probe values, always by one ULP —
+     including `2**0.5`, where **libm is the more accurate of the two** and Go is one ULP low.
+     `GoMath.exp2` ports the assembly's algorithm; `Fixtures/gocompat/exp2.jsonl` pins it over 1,333
+     cases. Every `histogram_quantile` over exponential buckets goes through it.
+   - **`promql/quantile.go` fuses six operations, and which ones is not guessable.**
+     `BucketQuantile` fuses the final interpolation *and* recomputes `rank` as a single
+     `q*observations - previousCount` (quantile.go:165 is one `FNMSUBD`, so the binary search above
+     still sees the unfused product). `HistogramQuantile` fuses its linear interpolation and both
+     exponential ones. `HistogramFraction` fuses only `interpolateExponentially`'s tail — its
+     `interpolateLinearly` sibling is not fused, because a divide sits between the multiply and the
+     add. **`BucketFraction` fuses nothing at all.** Unfusing all six breaks 23 committed cases.
+     Determined per function with `go tool objdump`, not by reading the source.
+
    Caveat worth knowing: `math.Log` has an assembly implementation on amd64 and a pure-Go one on
-   arm64, so Go's own answers can differ between architectures. Our fixtures are generated on arm64
-   and CI runs arm64, so the contract is well defined today; if that ever changes, this is the first
-   thing to re-check.
+   arm64, so Go's own answers can differ between architectures. `math.Exp2` is the mirror image —
+   assembly on arm64, portable elsewhere. Our fixtures are generated on arm64 and CI runs arm64, so
+   the contract is well defined today; if that ever changes, this is the first thing to re-check.
 
 1. **`Histogram.ReduceResolution` clears the side it was reducing when it fails.** `histogram.go:642`
    assigns `reduceResolution`'s result to the fields *before* testing the error, and the failing call
@@ -290,7 +306,24 @@ changing behaviour.
     the stringlabels one per exception 2, and the `len == 2` case short-circuits to a direct hash
     comparison rather than building a set.
 
-25. **`SampleRingIterator` leaves a stale histogram behind in the mixed case.** The homogeneous
+25. **Go's `math.NaN()` is not Swift's `Double.nan`.** Go builds its NaN from
+    `uvnan = 0x7FF8000000000001` (`math/bits.go`); `Double.nan` has a zero payload. Observable
+    bit-for-bit wherever a NaN is returned rather than tested, which in `quantile.go` is six exits.
+    `PromModel.PromValue.normalNaN` is Go's constant and every `math.NaN()` return goes through it.
+
+26. **`BucketQuantile`'s monotonicity outputs are Go named returns, so they start at zero.** Only
+    `ensureMonotonicAndIgnoreSmallDeltas` sets the inverted `+Inf`/`-Inf` range, at its own start
+    (quantile.go:678). So the NaN-`q`, `q < 0`, `q > 1` and no-`+Inf`-bucket exits all report
+    `0/0/0`, while an exit *after* the pass reports the inverted range. Initialising the struct to
+    the inverted range would be wrong on exactly those four paths.
+
+    Related, and not obvious: a NaN quantile and a reported monotonicity fix are **mutually
+    exclusive**. Forcing monotonicity carries the highest accepted count forward through every later
+    bucket including the `+Inf` one, so a trailing zero count is rewritten and the
+    zero-observations exit is never reached; and the `len < 2` exit means the pass's loop never ran.
+    Verified across the whole `promql/bucketquantile` corpus.
+
+27. **`SampleRingIterator` leaves a stale histogram behind in the mixed case.** The homogeneous
     branches cross-nil `h`/`fh`, but the interface buffer's float branch (`buffer.go:403`) sets only
     `f` — so `AtFloatHistogram()` after a float sample in a mixed ring returns the *previous*
     histogram rather than nil. Callers must switch on the returned `ValueType`; the engine does. Not

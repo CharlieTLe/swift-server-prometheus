@@ -1,6 +1,6 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `promql/value.go`.
+Written at the end of the session that landed Phase 5's `promql/quantile.go`.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -14,15 +14,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators and `value.go` landed; an in-memory `Queryable` next |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go` and `quantile.go` landed; the evaluator next |
 | 6–10 | not started |
 
-Green as of this commit: **182,989 committed differential cases, 288 tests**, on both Swift 6.4
+Green as of this commit: **184,998 committed differential cases, 310 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          2,264       193
+  GoCompat          2,357       193
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
@@ -36,9 +36,9 @@ Sources/            src     generated
   PromChunks          117         –
   PromStorage       1,694         –
   PromQLParser      5,948       550
-  PromQL              666         –
-Tests               7,017
-oracle (Go)         8,814
+  PromQL            1,329         –
+Tests               7,513
+oracle (Go)         9,466
 ```
 
 ### Verify everything in one go
@@ -125,6 +125,15 @@ where I had written a plausible expectation and the fixture proved the implement
   loop is `for currT < t` and `currT` starts at `math.MinInt64`, so seeking to exactly that never
   advances, and the tail returns `ValFloat` because `currH` is nil. I asserted the opposite ("always
   advances at least once") and the fixture said no.
+- **`math.Exp2` is assembly on arm64**, the mirror image of `math.Log`, and it is fused. Swift's libm
+  `exp2` is one ULP out on roughly a fifth of realistic inputs — and on `2**0.5` libm is the *correct*
+  one and Go is wrong. Reaching for the platform function would have put a silent one-ULP error in
+  every `histogram_quantile` over exponential buckets. **Probe the platform function against Go before
+  assuming it will do; do not assume the pure-Go source is what runs.**
+- **Which expressions Go fuses is not guessable.** `quantile.go` fuses six, and the surprising one is
+  `BucketQuantile`'s `rank`: `rank -= previousCount` compiles to a single `FNMSUBD` that recomputes
+  `q*observations - previousCount`, so the binary search above still sees the unfused product.
+  `BucketFraction` fuses nothing. `go tool objdump -s '<symbol>'` per function, every time.
 - `-1 * 0.0` in Go is **`+0`**, not `-0`. Untyped constants are arbitrary-precision, where `-1 * 0` is
   exactly `0` and carries no sign. A corpus that wanted negative zero got positive zero and the
   fixture showed `0` where `-0` was expected. Use `math.Copysign(0, -1)`.
@@ -272,6 +281,8 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQLParser.Statements` | `ast.go` | `EvalStmt`, `TestStmt` |
 | `PromQLParser.Value` | `promql/parser/value.go` | the `Value` protocol |
 | `PromQL` | `promql/value.go` | everything but `MarshalJSON` and `fParams` |
+| `PromQL` | `promql/quantile.go` | in full |
+| `GoCompat.GoMath.exp2` | `math.Exp2` | ported from the **arm64 assembly** |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -307,8 +318,10 @@ from Cortex/Thanos.
    Note this one has **no Go counterpart to differentially test against**: `teststorage` is a real
    TSDB, so an in-memory stand-in is our own code. Keep it as thin as possible and put the assertions
    in the `.test` runner above it, rather than inventing an oracle for scaffolding.
-2. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies.
-   `fParams`/`newFParams` from value.go belong here; they take an `*evaluator`.
+2. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies,
+   7,667 lines of Go between them, so this needs splitting. `fParams`/`newFParams` from value.go
+   belong here (they take an `*evaluator`), as do `vectorByValueHeap` and `EvalNodeHelper`, which
+   most of `functions.go` takes as a parameter. `quantile.go` is already in place beneath them.
 3. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
    the exit gate. Its patterns are already reproduced in `oracle/corpus.go`.
 
@@ -399,7 +412,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **ten documented exceptions**, plus 25 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **ten documented exceptions**, plus 27 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

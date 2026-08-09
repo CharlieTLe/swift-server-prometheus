@@ -114,6 +114,93 @@ public enum GoMath: Sendable {
         return Double(exp).addingProduct(log(frac), invLn2)
     }
 
+
+    // MARK: - Exp2
+
+    /// Go: `math.Exp2` — 2**x.
+    ///
+    /// **Ported from the arm64 assembly (`math/exp_arm64.s`, `archExp2`), not from
+    /// the pure-Go `exp2`.** `haveArchExp2` is true for `arm64 || loong64`
+    /// (`math/exp2_asm.go`), so on the architecture this project's fixtures are
+    /// generated on, and that CI runs, Go takes the assembly path. That is the
+    /// mirror image of `math.Log`, which is assembly on amd64 and pure Go on arm64
+    /// — see docs/PORTING.md's note on architecture-dependent answers.
+    ///
+    /// The algorithm is the same as the portable `exp2`/`expmulti` pair, with one
+    /// difference that is entirely observable: the polynomial is evaluated with
+    /// **fused** multiply-adds (`FMADDD`/`FMSUBD`/`FNMULD`), so it rounds once per
+    /// term instead of twice. This is docs/PORTING.md quirk 0, and it is not
+    /// theoretical here — Swift's own `exp2` from libm disagrees with Go's on 19 of
+    /// 93 probe values, always by one ULP, including 2**0.5 where libm is the *more*
+    /// accurate of the two. Matching Go is the requirement.
+    ///
+    /// Pinned by `Fixtures/gocompat/exp2.jsonl`.
+    public static func exp2(_ x: Double) -> Double {
+        // exp_arm64.s constants. Note Overflow2/Underflow2, which are the exp2
+        // thresholds, not Exp's.
+        let ln2Hi = 6.931_471_803_691_238_164_90e-01
+        let ln2Lo = 1.908_214_929_270_587_700_02e-10
+        let overflow = 1.023_999_999_999_999_9e+03
+        let underflow = -1.0740e+03
+
+        let p1 = 1.666_666_666_666_666_574_15e-01
+        let p2 = -2.777_777_777_701_559_338_42e-03
+        let p3 = 6.613_756_321_437_934_361_17e-05
+        let p4 = -1.653_390_220_546_525_153_90e-06
+        let p5 = 4.138_136_797_057_238_460_39e-08
+
+        // Special cases, in the assembly's order. `x > overflow` catches +Inf and
+        // `x < underflow` catches -Inf, so neither needs its own test.
+        if x.isNaN { return x }
+        if x > overflow { return .infinity }
+        if x < underflow { return 0 }
+
+        // Argument reduction: x = r*lg(e) + k with |r| <= ln(2)/2, computed as
+        // r = hi - lo for extra precision. The rounding is truncation
+        // (`FCVTZSD`), applied to x ± 0.5 — so this is round-half-away-from-zero
+        // expressed the long way.
+        let kRounded = x < 0 ? x - 0.5 : x + 0.5
+        let k = Int(kRounded)
+        let kAsDouble = Double(k)
+
+        let t = x - kAsDouble
+        let hi = t * ln2Hi
+        let lo = -t * ln2Lo
+        let r = hi - lo
+        let rr = r * r
+
+        // The fused polynomial. Each step is `a + b*c` and must round once, so
+        // every one goes through addingProduct.
+        var poly = p4.addingProduct(rr, p5)
+        poly = p3.addingProduct(rr, poly)
+        poly = p2.addingProduct(rr, poly)
+        poly = p1.addingProduct(rr, poly)
+        // FMSUBD: c = r - rr*poly, also a single rounding.
+        let c = r.addingProduct(-rr, poly)
+
+        let denominator = 2.0 - c
+        let quotient = (r * c) / denominator
+        var y = lo - quotient
+        y -= hi
+        y = 1.0 - y
+
+        // The assembly inlines Ldexp(y, k) and skips its Inf/NaN/zero checks,
+        // which is safe because y is always a normal near 1.
+        var bits = y.bitPattern
+        let fraction = bits & 0x000f_ffff_ffff_ffff
+        var exponent = Int(bits >> 52)
+        exponent += k
+
+        var m = 1.0
+        if exponent < 1 {
+            // Denormal: shift the exponent up and scale back down by 2**-52.
+            exponent += 52
+            m = Double(bitPattern: 0x3cb0_0000_0000_0000)
+        }
+        bits = (UInt64(exponent) << 52) | fraction
+        return m * Double(bitPattern: bits)
+    }
+
     // MARK: - Bit layout
 
     @usableFromInline static let shift = 64 - 11 - 1
