@@ -111,7 +111,7 @@ struct ParserTests {
 
     /// Runs one query the way the oracle's `runParse` does.
     static func run(_ input: ParseIn) -> ParseOut {
-        let parser = PromQLParser(options: Options.named(input.opts))
+        let parser = Parser(options: Options.named(input.opts))
         let query = Hex.decode(input.query)
 
         let expr: (any Expr)?

@@ -270,7 +270,27 @@ changing behaviour.
     staleness check lives in the engine (`engine.go:2729`), which is what makes the lookback window
     half-open, `(refTime - lookbackDelta, refTime]`.
 
-21. **`SampleRingIterator` leaves a stale histogram behind in the mixed case.** The homogeneous
+21. **`promql.Vector.TotalSamples` and `HPoint.size` disagree about histogram weight.** `HPoint.size`
+    is `(H.Size() + 8) / 16`, counting the timestamp (value.go:180); `Vector.TotalSamples` uses
+    `H.Size() / 16` and omits the `+ 8` (value.go:282), while `Matrix.TotalSamples` goes through
+    `HPoint.size` and includes it. Both feed sample-count limits, so neither can be reconciled to the
+    other. Pinned by `Fixtures/promql/value.jsonl`.
+
+22. **`promql.Series.String()` renders floats then histograms, not merged by timestamp**, and an empty
+    series still emits the trailing newline after `=>`. Upstream's own TODO (value.go:78) wonders
+    whether primary sorting by timestamp would be better; it is not what the code does.
+
+23. **`storageSeriesIterator.Seek(math.MinInt64)` reports a float it never read.** The loop is
+    `for currT < t` and `currT` starts at `math.MinInt64`, so that target never advances; the tail
+    then returns `ValFloat` because `currH` is nil. The caller gets `ValFloat` with the sentinel
+    timestamp and a zero value. Pinned by `promql/storageseries`'s `seek/negative`.
+
+24. **`promql.Vector`/`Matrix.ContainsSameLabelset` compare label-set hashes, not labels.** A
+    collision therefore reports a duplicate that is not one (value.go:296, :349). `Labels.Hash` is
+    the stringlabels one per exception 2, and the `len == 2` case short-circuits to a direct hash
+    comparison rather than building a set.
+
+25. **`SampleRingIterator` leaves a stale histogram behind in the mixed case.** The homogeneous
     branches cross-nil `h`/`fh`, but the interface buffer's float branch (`buffer.go:403`) sets only
     `f` — so `AtFloatHistogram()` after a float sample in a mixed ring returns the *previous*
     histogram rather than nil. Callers must switch on the returned `ValueType`; the engine does. Not

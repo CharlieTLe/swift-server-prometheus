@@ -1,6 +1,6 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's storage sample iterators.
+Written at the end of the session that landed Phase 5's `promql/value.go`.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -14,10 +14,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols and sample iterators landed, `value.go` next |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators and `value.go` landed; an in-memory `Queryable` next |
 | 6–10 | not started |
 
-Green as of this commit: **182,744 committed differential cases, 272 tests**, on both Swift 6.4
+Green as of this commit: **182,989 committed differential cases, 288 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -36,8 +36,9 @@ Sources/            src     generated
   PromChunks          117         –
   PromStorage       1,694         –
   PromQLParser      5,948       550
-Tests               6,454
-oracle (Go)         8,081
+  PromQL              666         –
+Tests               7,017
+oracle (Go)         8,814
 ```
 
 ### Verify everything in one go
@@ -120,6 +121,13 @@ where I had written a plausible expectation and the fixture proved the implement
   is correct iterator behaviour, so the following `Next()` moves to element 1 as it should. The port
   matches Go exactly rather than "fixing" it. **Not every quirk is a quirk — probe before documenting
   a divergence, not just before implementing one.**
+- `storageSeriesIterator.Seek(math.MinInt64)` returns `ValFloat` **without reading anything**. The
+  loop is `for currT < t` and `currT` starts at `math.MinInt64`, so seeking to exactly that never
+  advances, and the tail returns `ValFloat` because `currH` is nil. I asserted the opposite ("always
+  advances at least once") and the fixture said no.
+- `-1 * 0.0` in Go is **`+0`**, not `-0`. Untyped constants are arbitrary-precision, where `-1 * 0` is
+  exactly `0` and carries no sign. A corpus that wanted negative zero got positive zero and the
+  fixture showed `0` where `-0` was expected. Use `math.Copysign(0, -1)`.
 
 When a fixture disagrees with you, **check Go before changing the implementation.** Write a five-line
 Go program in `/tmp` and run it. That habit is the highest-leverage thing in this repo.
@@ -158,6 +166,13 @@ Also: **one fixture file holds one in/out shape.** `Fixtures.check` decodes the 
 pair of types, so mixing shapes fails on decode rather than on comparison. Two suites in Phase 5's
 first step were split for that reason (`promql/timestamp-floatsec`,
 `chunkenc/{encoding,valuetype,compatible}`).
+
+**Swift permits one protocol conformance per type, which forces some Go slice types to become
+structs.** Go's `promql.Vector` is `[]Sample` with methods and `promql.Matrix` is `[]Series` with
+methods, and both implement `parser.Value`. `Array` cannot conditionally conform to `Value` twice, so
+both are structs wrapping the array, with `RandomAccessCollection` + `RangeReplaceableCollection` so
+call sites still read like slices. Same forcing ADR-11 hit with `Expressions`; expect it again for any
+named-slice-with-methods.
 
 **A raw pass-through is only legal while the thing it passes through to is positioned.** Both
 look-back wrappers forward `At`/`AtT`/`AtST`/`AtHistogram` straight onto the wrapped iterator, so
@@ -209,6 +224,14 @@ get one. Two more that only show up once you are writing protocols: `func err() 
 `(any Error)?`, and `InternalImportsByDefault` means a type in a **public** signature needs
 `public import` of its module — `internal import` compiles until the first public method mentions it.
 
+**Never give a type the same name as its module.** `PromQLParser` was both the module and a struct
+inside it, which makes `PromQLParser.ValueType` unresolvable — Swift resolves the prefix to the struct.
+That matters because `PromQLParser.ValueType` (vector, scalar, matrix, string) and
+`PromChunkEnc.ValueType` (float, histogram, floatHistogram) genuinely collide in any module importing
+both, exactly as `parser.ValueType` and `chunkenc.ValueType` do in Go — and Go's fix, package
+qualification, is only available if the module name stays free. The struct is now `Parser` and the
+internal mutable state is `ParseState`.
+
 **`Error` refines `Sendable` in Swift 6.** So a mutable class cannot conform to `Error` without
 comment. `annotations.annoErr` is exactly that (`SetQuery` mutates in place), and it must be an
 `Error` because the engine returns annotations through `error`-typed results. The mutable state is
@@ -247,6 +270,8 @@ The **protocol substrate is done and merged**. What exists now:
 | `GoCompat.GoContext` | `context` | ADR-13 |
 | `PromModel.Timestamp` | `model/timestamp` | |
 | `PromQLParser.Statements` | `ast.go` | `EvalStmt`, `TestStmt` |
+| `PromQLParser.Value` | `promql/parser/value.go` | the `Value` protocol |
+| `PromQL` | `promql/value.go` | everything but `MarshalJSON` and `fParams` |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -273,14 +298,18 @@ from Cortex/Thanos.
 
 ### What Phase 5 still has to bring, in order
 
-1. **An in-memory `Queryable`** — this is the piece `ROADMAP.md` §2 budgeted at "~800 lines of
-   in-memory storage", and it is needed sooner than it looks: upstream's `promqltest` runs against
-   `util/teststorage`, which is a **real `tsdb.DB`**. Phase 5 cannot use that, so the exit gate needs
-   its own `storage.Storage` substitute. `SeriesEntry`/`newListSeries` are already in place as the
-   substrate.
-2. **`promql/value.go`** — `Vector`, `Matrix`, `Scalar`, `Sample`, `HPoint`/`FPoint`.
-3. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies.
-4. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
+1. **An in-memory `Queryable`** — the piece `ROADMAP.md` §2 budgeted at "~800 lines of in-memory
+   storage". It is needed before the exit gate can run at all: upstream's `promqltest` goes through
+   `util/teststorage`, which is a **real `tsdb.DB`**, and Phase 5 cannot use that. `SeriesEntry`,
+   `newListSeries` and now `PromQL.StorageSeries` are the substrate — `StorageSeries` in particular
+   turns a `promql.Series` into a `storage.Series`, which is most of what a fake querier needs.
+
+   Note this one has **no Go counterpart to differentially test against**: `teststorage` is a real
+   TSDB, so an in-memory stand-in is our own code. Keep it as thin as possible and put the assertions
+   in the `.test` runner above it, rather than inventing an oracle for scaffolding.
+2. **`promql/engine.go`** and **`promql/functions.go`** — the evaluator and ~100 function bodies.
+   `fParams`/`newFParams` from value.go belong here; they take an `*evaluator`.
+3. **`promql/promqltest`** — the `.test` file runner, which is what turns the committed testdata into
    the exit gate. Its patterns are already reproduced in `oracle/corpus.go`.
 
 The exit gate is unchanged and is the one that matters most in the whole project: **all 2,201 `eval`
@@ -303,6 +332,11 @@ it:
 - `chunkenc`'s concrete encodings (XOR, XOR2, histogram, float histogram) and the bstream/varbit
   machinery → Phases 6–7. `PromChunkEnc` currently has no conforming `Chunk` at all.
 - `context.WithValue` → Phase 9, for the query logger's `QueryOrigin`.
+- **`MarshalJSON` on every `promql` value type** → Phase 9, with the HTTP API. This needs three
+  byte-exact surfaces `strconv` does not give you: Go's `encoding/json` float encoder (an `'f'`/`'e'`
+  switch at 1e-6 and 1e21, plus exponent cleanup), its HTML escaping of `<`, `>` and `&`, and its
+  sorted map keys. Upstream's own comments say the `FPoint`/`HPoint` ones are unused inside
+  Prometheus, so nothing before Phase 9 wants them.
 
 ### What is already worked out for you
 
@@ -365,7 +399,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **ten documented exceptions**, plus 21 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **ten documented exceptions**, plus 25 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

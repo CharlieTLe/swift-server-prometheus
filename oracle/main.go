@@ -108,6 +108,9 @@ var suites = map[string]func(*emitter){
 	"storage/buffer":            genStorageBuffer,
 	"storage/memoized":          genStorageMemoized,
 	"storage/listseries":        genStorageListSeries,
+	"promql/value":              genPromQLValue,
+	"promql/value-sort":         genPromQLValueSort,
+	"promql/storageseries":      genPromQLStorageSeries,
 }
 
 func main() {

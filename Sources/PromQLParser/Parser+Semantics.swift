@@ -14,7 +14,7 @@ public import PromHistogram
 internal import PromLabels
 internal import PromModel
 
-extension Parser {
+extension ParseState {
 
     // MARK: - Offsets
 

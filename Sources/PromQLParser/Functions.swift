@@ -42,6 +42,18 @@ extension ValueType {
     }
 }
 
+/// Go: `parser.Value` (promql/parser/value.go:17) — anything a query can evaluate
+/// to.
+///
+/// Lives here beside ``ValueType`` for the same reason Go puts them in one file.
+/// The conforming types are all in `PromQL`: `Vector`, `Matrix`, `Scalar` and
+/// `StringValue`. `EvalStmt` holds an `Expr`, not a `Value`; this is the *result*
+/// side.
+public protocol Value: CustomStringConvertible {
+    /// Go: `Type()`.
+    var type: ValueType { get }
+}
+
 /// Go: `Function` — a function of the expression language, referenced by `Call`.
 public struct Function: Sendable, Hashable {
     public var name: String

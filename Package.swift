@@ -32,6 +32,7 @@ let package = Package(
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromQLParser", targets: ["PromQLParser"]),
+        .library(name: "PromQL", targets: ["PromQL"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
         // The fuzz differ: generates candidate inputs and diffs Swift against the Go oracle.
@@ -93,6 +94,16 @@ let package = Package(
             ]
         ),
 
+        // Phase 5: the engine's value types. `promql/value.go`; the evaluator
+        // itself follows.
+        .target(
+            name: "PromQL",
+            dependencies: [
+                "PromQLParser", "PromStorage", "PromChunkEnc", "PromHistogram",
+                "PromLabels", "PromAnnotations", "PromModel", "GoCompat",
+            ]
+        ),
+
         // ── Tooling ──────────────────────────────────────────────────────────
         .executableTarget(
             name: "promdiff",
@@ -130,6 +141,13 @@ let package = Package(
             dependencies: [
                 "PromStorage", "PromChunkEnc", "PromChunks", "PromHistogram", "PromLabels",
                 "PromAnnotations", "PromModel", "GoCompat", "GoOracleSupport",
+            ]
+        ),
+        .testTarget(
+            name: "PromQLTests",
+            dependencies: [
+                "PromQL", "PromQLParser", "PromStorage", "PromChunkEnc", "PromChunks",
+                "PromHistogram", "PromLabels", "PromModel", "GoCompat", "GoOracleSupport",
             ]
         ),
         .testTarget(
