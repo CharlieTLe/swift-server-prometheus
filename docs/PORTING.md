@@ -535,6 +535,48 @@ changing behaviour.
       wrappers' raw pass-throughs (quirks 15–21), and it is why no case in
       `Fixtures/promql/histogram-stats.jsonl` seeks before advancing.
 
+39. **Go's trigonometry is not libm's, and the gap is not a corner case.** `haveArchSin`, `haveArchCos`,
+    `haveArchTan`, `haveArchAsin`, `haveArchAcos`, `haveArchAtan` and `haveArchLog10` are true only on
+    **s390x** (`math/arith_s390x.go` against `math/stubs.go`), so on arm64 and amd64 Go runs its own
+    Cephes-derived code. Measured against Swift's libm over 2,000,052 inputs each:
+
+    | | | | |
+    |---|---|---|---|
+    | `Atan` 296,632 (15%) | `Sin` 466,199 (23%) | `Cos` 573,768 (29%) | `Tan` 817,377 (41%) |
+    | `Acos` 1,258,393 (63%) | `Log10` 1,294,745 (65%) | `Asin` 1,338,076 (67%) | `Round` 81 |
+
+    `Abs`, `Ceil`, `Floor` and `Sqrt` differ on **none** — the same hardware instruction either side —
+    so the port keeps Swift's for those. That asymmetry is the point: `Sqrt` agreeing is no evidence
+    about `Sin`.
+
+    Two sub-quirks that a port will get wrong by default:
+
+    - **NaN payloads differ, and they are observable.** Go's `math.NaN()` is `0x7FF8000000000001`;
+      Swift's `Double.nan` is `0x7FF8000000000000`. Worse, the functions disagree with *each other*:
+      `Sin`, `Tan` and `Atan` `return x` for a NaN argument, so the **argument's** payload survives,
+      while `Cos` and out-of-domain `Asin` return `NaN()` and replace it.
+    - **`1/Ln10` must be hard-coded.** Go folds it in arbitrary precision to `0x3FDBCB7B1526E50E`; the
+      naive Swift `1.0 / 2.302585092994046` is `0x3FDBCB7B1526E50D`, one ULP low, which shifts every
+      `log10` result. `1/Ln2` happens to be identical either way, so `log2` did not expose this.
+
+40. **Where a Go polynomial's leading term is `z + const` and `z` is itself a product, the compiler
+    fuses the product into that add — recomputing it *unrounded*.** Same phenomenon as quirk 29's
+    `rank`, but easier to miss, because the rounded value is sitting in a register and every *other*
+    term of the same expression uses it.
+
+    Two sites, both in this pin's `math`:
+
+    - `xatan` (atan.go:69) writes `(((((z+Q0)*z+Q1)...` with `z := x*x`, and Go emits `fma(x, x, Q0)`.
+      **Observable**: `0xbfe1383384b20da8` distinguishes it both from reusing the rounded `z` and from
+      an unfused `x*x + Q0`, and is committed as a witness.
+    - `tan` (tan.go:129) writes `(((( zz +_tanQ[1])*zz+...` and Go emits `fma(z, z, _tanQ[1])`. Not
+      observable in a 12,000,000-input search — but the port spells it the same way, because the
+      silence is the search's and not the compiler's.
+
+    The general lesson for the evaluator work ahead: an FMA count that exceeds the number of `a*b + c`
+    patterns in the source means a product has been fused into an add that does not look like one.
+    Count the ops before mapping them.
+
 
 ## Not ported
 
