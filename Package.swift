@@ -43,7 +43,12 @@ let package = Package(
         // Phase 2: a real RE2 in Swift. See docs/DECISIONS.md ADR-6.
         .target(name: "PromRegex", dependencies: ["GoCompat"]),
         // Phase 3: native histograms. See docs/DECISIONS.md ADR-7.
-        .target(name: "PromHistogram", dependencies: ["PromModel", "PromMath", "GoCompat"]),
+        // The PromLabels edge is convert.go's: upstream's model/histogram imports
+        // model/labels to emit classic series from an NHCB.
+        .target(
+            name: "PromHistogram",
+            dependencies: ["PromModel", "PromMath", "PromLabels", "GoCompat"]
+        ),
         .target(
             name: "PromLabels",
             dependencies: ["PromModel", "PromHash", "PromRegex", "GoCompat"]
@@ -72,7 +77,9 @@ let package = Package(
         .testTarget(name: "PromModelTests", dependencies: ["PromModel", "GoOracleSupport"]),
         .testTarget(name: "PromRegexTests", dependencies: ["PromRegex", "GoOracleSupport"]),
         .testTarget(
-            name: "PromHistogramTests", dependencies: ["PromHistogram", "GoOracleSupport"]),
+            name: "PromHistogramTests",
+            dependencies: ["PromHistogram", "PromLabels", "PromModel", "GoOracleSupport"]
+        ),
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
     ]

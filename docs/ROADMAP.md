@@ -45,7 +45,10 @@ Tier 0  GoCompat, PromHash, PromULID, PromSnappy, PromMath      (no deps)
 Tier 1  PromModel → GoCompat
         PromRegex → GoCompat
         PromLabels → PromModel, PromHash, PromRegex, GoCompat
-        PromHistogram → PromModel, PromMath, GoCompat
+        PromHistogram → PromModel, PromMath, PromLabels, GoCompat
+                        (the PromLabels edge is convert.go's, mirroring upstream:
+                         model/histogram imports model/labels to emit classic
+                         series from an NHCB)
         PromExemplar, PromMetadata
 Tier 2  PromEncoding → PromHash, GoCompat
         PromFileUtil, PromAnnotations, PromCompression

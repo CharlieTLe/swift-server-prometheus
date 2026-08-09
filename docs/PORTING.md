@@ -85,6 +85,26 @@ The inverse of the list above: places where Go does something that reads like a 
 does it too. Each is pinned by a fixture, so "cleaning it up" fails the build rather than silently
 changing behaviour.
 
+0. **Go fuses multiply-adds, and so must we.** This is the one to internalise, because it will recur
+   in every phase that does float arithmetic. Go's arm64 backend contracts `a + b*c` into a single
+   `FMADDD`, which rounds *once* instead of twice. Where that happens, an unfused Swift `a + b*c`
+   gives a different answer, and not always by an ULP:
+
+   - `math.Log2`'s final `log(frac)*(1/Ln2) + float64(exp)` fuses. For `x` just above a power of two
+     the product lands just under `-exp`, so the addition cancels ~8 significant digits and the
+     unfused form comes out **61 ULP** wrong. Unfused, 33 of 2,350 `gocompat/log2` cases fail.
+   - All nine `updatedSum += bucketMidpoint * count` statements in `TrimBuckets` fuse. Unfused, 574 of
+     9,048 `histogram/float-trim` cases fail.
+
+   Use `Double.addingProduct(_:_:)`, which is guaranteed fused. Confirm with
+   `go tool objdump -s '<symbol>'` and grep for `FMADDD`/`FMSUBD`/`FNMSUBD` rather than guessing —
+   the helper functions around `TrimBuckets` do *not* fuse, so it is not a blanket rule.
+
+   Caveat worth knowing: `math.Log` has an assembly implementation on amd64 and a pure-Go one on
+   arm64, so Go's own answers can differ between architectures. Our fixtures are generated on arm64
+   and CI runs arm64, so the contract is well defined today; if that ever changes, this is the first
+   thing to re-check.
+
 1. **`Histogram.ReduceResolution` clears the side it was reducing when it fails.** `histogram.go:642`
    assigns `reduceResolution`'s result to the fields *before* testing the error, and the failing call
    returns `nil, nil`. So a rejected histogram is left with that side emptied — and if the positive
@@ -105,7 +125,33 @@ changing behaviour.
    interchangeable — `slices.Equal` and `len` cannot tell them apart, so spans and bucket slices are
    plain arrays. But `histogram.go:456` tests `CustomValues != nil` to reject custom bounds on an
    exponential schema, so an *empty non-nil* slice is an error there and nil is not. Collapsing the
-   two would be a silent divergence.
+   two would be a silent divergence. Same for `FloatHistogram` (`float_histogram.go:966`).
+
+5. **`detectReset` only inspects the first previous bucket once the current one runs out.**
+   `float_histogram.go:817` and `:836` both say they check whether *any* remaining bucket in the
+   previous histogram is populated, but neither loop reassigns `prevBucket` — so a populated bucket
+   sitting behind an empty one is never seen and no reset is reported. Verified against Go
+   (`{0, 5}` vs no buckets is `false`; `{5, 0}` vs no buckets is `true`).
+
+6. **`FloatHistogram.CopyToSchema` drops the counter reset hint** on any real reduction, because Go
+   builds the result from a struct literal that omits it. Only the `targetSchema == h.Schema` fast
+   path, which delegates to `Copy`, keeps it. It drops `CustomValues` the same way.
+
+7. **`FloatHistogram.Equals` uses two comparison modes.** `Count`, `Sum`, `ZeroCount` and the bucket
+   values are compared by bit pattern, but `ZeroThreshold` with `!=` — so a NaN threshold never
+   equals itself while a NaN count does, and `-0` vs `+0` goes the other way round.
+
+8. **`Div` by zero returns before the negative-scalar check**, so dividing by `-0` clears the buckets
+   without setting the gauge hint.
+
+9. **`AllBucketIterator`'s zero-threshold clamp is unconditional**, so a bucket lying entirely inside
+   the threshold is reported as an inverted interval — `(0.5,0.25]`.
+
+10. **`FloatHistogram.Validate`'s negative-count message has two spaces**: `observation count is  %v`.
+
+11. **`reconcileZeroBuckets` loops on `!=` over the two zero thresholds**, so a NaN threshold on
+    either side spins forever. Nothing upstream can produce one, and the fixture corpora deliberately
+    do not either.
 
 ## Not ported
 
