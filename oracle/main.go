@@ -125,6 +125,7 @@ var suites = map[string]func(*emitter){
 	"gocompat/minmax":           genGoMinMax,
 	"gocompat/ldexp":            genGoLdexp,
 	"gocompat/duration-seconds": genGoDurationSeconds,
+	"promql/preprocess":         genPromQLPreprocess,
 }
 
 func main() {

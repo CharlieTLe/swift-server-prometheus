@@ -558,10 +558,17 @@ func isSpaceByte(_ b: UInt8) -> Bool {
         || b == UInt8(ascii: "\r")
 }
 
-/// A `Double` to `Int64` conversion that cannot trap, for the one site where Go
-/// performs a conversion its own spec calls implementation-defined. Not a claim
-/// about what Go produces — the value is unreachable through any observable
-/// surface.
+/// A `Double` to `Int64` conversion that saturates instead of trapping, matching
+/// what Go's `int64(float64)` compiles to on arm64: a bare `FCVTZS`, which clamps
+/// to `Int64.min`/`Int64.max` and maps NaN to 0.
+///
+/// Go's own spec calls the out-of-range case implementation-defined, but the
+/// behaviour above is **verified against Go on this architecture**, not assumed:
+/// `time.Duration(math.Round(9223372036.8547764 * 1e9))` is `Int64.max`
+/// nanoseconds and the NaN case is 0. It is reachable from an ordinary query —
+/// `foo[9223372036.8547764]` parses, because the out-of-range check at
+/// `parse.go:1208` has an inclusive bound — so this is a live path, not a
+/// defensive one. See ``ParseState/durationOf(_:)``.
 func clampToInt64(_ v: Double) -> Int64 {
     if v.isNaN { return 0 }
     if v >= Double(Int64.max) { return Int64.max }

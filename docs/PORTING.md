@@ -385,6 +385,38 @@ changing behaviour.
     ~3 inputs per million and `inner` on ~12 per million, so a corpus of this size would otherwise
     miss both by chance. See `GoMath.log`'s doc comment for the per-expression table.
 
+31. **The parser constant-folds literal duration expressions, so the same condition yields two
+    different error messages.** `foo[1h % 0]` never reaches `durationVisitor`: the parser folds it and
+    reports `1:8: parse error: modulo by zero`, a `ParseErr` with a **`line:col`** prefix. Give it an
+    operand it cannot fold — `foo[1h % (1h - 1h)]` — and the visitor reports
+    `4:17: modulo by zero`, with a **byte-offset** prefix and no `parse error:` marker. The same
+    doubling hides `duration is out of range` behind `parse error: duration out of range` for
+    `foo[1e308 * 1e308]`.
+
+    Two consequences. First, `promql/durations.go`'s error strings are *not* `ParseErr`s and must not
+    be rendered like them. Second, a corpus of duration-expression failures written the obvious way
+    tests the parser, not the visitor: three of the five branches of `calculateDuration` were
+    unreachable until the corpus switched to non-foldable operands. Pinned by `promql/preprocess`.
+
+32. **`time.Duration(math.Round(val * 1e9))` saturates, and the printer's negation of the result
+    wraps.** Two `Double`→`Int64` conversions in the parser that Go performs with hardware semantics
+    and Swift traps on:
+
+    - `foo[9223372036.8547764]` is a **legal query**. The out-of-range check at `parse.go:1208` is
+      `val > 1<<63/1e9`, and that constant rounds to the `Double` 9223372036.854776 — so a literal
+      equal to it *passes*, and the product `val * 1e9` is then exactly 2⁶³, one above `Int64.max`.
+      Go's `int64(float64)` is a bare `FCVTZS` on arm64, which clamps: the answer is
+      `foo[106751d23h47m16s854ms]`, i.e. `Int64.max` nanoseconds. NaN maps to 0. Verified against Go.
+    - Printing a negative offset writes the sign itself and formats the **negated** magnitude
+      (`printer.go:266`). For an offset of `Int64.min`, `-Int64.min` wraps back to `Int64.min` —
+      still negative — so `model.Duration.String()` prepends a second sign and Go prints
+      `foo offset --106751d23h47m16s854ms`. The double minus is real.
+
+    Both were latent: the 6,154-case `promql/parse` corpus has no duration literal near the `Int64`
+    boundary, because upstream's `parse_test.go` has none. `promql/preprocess` added one to pin
+    `calculateDuration`'s bound and crashed the parser instead. The general lesson matches quirk 30 —
+    **a corpus inherits its blind spots from the test suite it was extracted from.**
+
 
 ## Not ported
 

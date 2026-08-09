@@ -1526,8 +1526,19 @@ final class ParseState {
     }
 
     /// Go: `time.Duration(math.Round(numLit.Val * float64(time.Second)))`.
+    ///
+    /// The conversion **saturates**, and it has to: `foo[9223372036.8547764]` is
+    /// a legal query whose product rounds to exactly 2**63, one above
+    /// `Int64.max`. Go's `int64(float64)` on arm64 is a bare `FCVTZS`, which
+    /// clamps; Swift's `Int64(_:)` traps. Probed against Go, which answers
+    /// `foo[106751d23h47m16s854ms]` — `Int64.max` nanoseconds — for that input,
+    /// and `0` for a NaN.
+    ///
+    /// The out-of-range *parse error* (`parse.go:1208`) is a separate, earlier
+    /// check with an inclusive bound, so a value equal to `1<<63/1e9` passes it
+    /// and reaches this conversion. That is why saturation is reachable at all.
     func durationOf(_ nl: NumberLiteral) -> GoDuration {
-        GoDuration(nanoseconds: Int64((nl.val * 1e9).rounded()))
+        GoDuration(nanoseconds: clampToInt64((nl.val * 1e9).rounded()))
     }
 
     /// The same conversion for whichever of the two duration node kinds appeared;

@@ -65,6 +65,7 @@
     "promql/modelduration.jsonl": { "sha256": "887a0a3b71f19a02e492d368e38ee45ccb1321b1bb7a90b0206bee1e2e1bc97a", "lines": 1685 },
     "promql/parse.jsonl": { "sha256": "1587de5cf85a8b6ad82cc4337c96a5564741a3db1b66feb079fd546d456109c8", "lines": 6154 },
     "promql/posrange.jsonl": { "sha256": "c8e7dc58f352b67d2fe4180d997a5c9d46e20316e35730afefde9d4fcff4db57", "lines": 330 },
+    "promql/preprocess.jsonl": { "sha256": "156b5a0d658017e73882efa1dcfda0440acd2103214c563c0467a771d8b6317f", "lines": 17665 },
     "promql/seriesdesc.jsonl": { "sha256": "8fe85ec2ea8fcc384885841023c53dd83613bb31f2ba0229965133ff89842981", "lines": 1685 },
     "promql/storageseries.jsonl": { "sha256": "e8c2d1b464a82d7288ad351498a69aa58ebc0f1022b962daea92777f431c92fd", "lines": 13 },
     "promql/testdata/aggregators.test": { "sha256": "d9201ff19258995d2b78fc5e79515a913e62fb60957ff0996a7447ceb1f00d40", "lines": 967 },

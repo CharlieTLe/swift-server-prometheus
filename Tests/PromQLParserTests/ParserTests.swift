@@ -20,36 +20,7 @@ import Testing
 
 // MARK: - The wire shapes
 
-/// A decoded JSON value, so an `ast` can be compared structurally.
-///
-/// Numbers are all integers in this serialisation — millisecond durations,
-/// timestamps and `variadic`. A fractional number would fail to decode, which is
-/// the right outcome: it would mean the shape changed.
-enum JSONValue: Decodable, Equatable, Sendable {
-    case null
-    case bool(Bool)
-    case int(Int64)
-    case string(String)
-    case array([JSONValue])
-    case object([String: JSONValue])
-
-    init(from decoder: any Decoder) throws {
-        let c = try decoder.singleValueContainer()
-        if c.decodeNil() {
-            self = .null
-        } else if let v = try? c.decode(Bool.self) {
-            self = .bool(v)
-        } else if let v = try? c.decode(Int64.self) {
-            self = .int(v)
-        } else if let v = try? c.decode(String.self) {
-            self = .string(v)
-        } else if let v = try? c.decode([JSONValue].self) {
-            self = .array(v)
-        } else {
-            self = .object(try c.decode([String: JSONValue].self))
-        }
-    }
-}
+// `JSONValue` is in GoOracleSupport: promql/preprocess needs it too.
 
 struct ParseErrJSON: Codable, Equatable, Sendable {
     let start: Int32
