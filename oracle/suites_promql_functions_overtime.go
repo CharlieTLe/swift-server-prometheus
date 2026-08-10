@@ -1067,8 +1067,8 @@ func genPromQLFunctionsOverTime(e *emitter) {
 	//
 	// For ts=1500 and [5m], rangeStart is -298500 and rangeEnd is 1500.
 	//
-	// Histogram ranges are excluded: `extendedHistogramRate` is not ported and its
-	// branch raises a precondition.
+	// Histogram ranges are in `extendedHistMatrices` below, against
+	// `extendedHistogramRate`.
 	extendedMatrices := [][][]fnSampleIn{
 		// One sample only, before the range: the `f[last].T <= rangeStart` exit.
 		{otSeries(metric, []otPoint{{t: -400_000, f: 5}})},
@@ -1198,5 +1198,268 @@ func genPromQLFunctionsOverTime(e *emitter) {
 				otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, f: 4}}),
 			},
 		})
+	}
+
+	// --- rate/increase/delta over ANCHORED and SMOOTHED HISTOGRAM ranges, i.e.
+	// `extendedHistogramRate`.
+	//
+	// Same index arithmetic and the same two early exits as the float version, plus a
+	// pre-flight `validateHistogramRange` over the window and a correction that walks its
+	// own indices. Four things the float corpus could not reach:
+	//
+	//   - the schema mix, which ABANDONS the sample rather than annotating and continuing.
+	//     Whether the mix lands inside the WINDOW is what matters, not whether it is in
+	//     the series — so one case puts an NHCB after rangeEnd, where `smoothed` excludes
+	//     it and `anchored` does not, and the two selectors disagree about the same input.
+	//   - the gauge-hint warning, which for a counter is per-sample inside
+	//     `validateHistogramRange` and for `delta` is on the two BOUNDARY values with
+	//     `||` — so a range whose middle sample alone is a gauge distinguishes them.
+	//   - `interpolateHistograms`' counter-reset branch, which returns `h2 * fraction`
+	//     rather than interpolating; only a reset spanning a boundary reaches it.
+	//   - `correctForCounterResetsHistogram` skipping a SECOND sample when the left
+	//     interpolation already spanned a reset, and using that sample as the anchor.
+	//     Needs `smoothed`, a first sample before rangeStart, and a reset from it to the
+	//     next — and then a further reset right after, or the anchor choice is invisible.
+	//
+	// Two NHCBs with DIFFERENT bounds pass validation (both use custom buckets) and then
+	// reconcile inside the arithmetic, so they are how the MismatchedCustomBuckets info
+	// is reached from here — including from inside the interpolation itself.
+	extendedHistMatrices := [][][]fnSampleIn{
+		// One sample only, before the range: the `h[last].T <= rangeStart` exit.
+		{otSeries(metric, []otPoint{{t: -400_000, hist: "std/1"}})},
+		// One sample inside, so firstSampleIndex == lastSampleIndex and the correction
+		// returns early on `first > last+1` with nothing to walk.
+		{otSeries(metric, []otPoint{{t: -100_000, hist: "std/1"}})},
+		// Straddling the START: interpolated when smoothed, taken as-is when anchored.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -200_000, hist: "std/1"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// Straddling the END too, so the right boundary interpolates as well.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -200_000, hist: "std/1"},
+			{t: -100_000, hist: "std/2"}, {t: 100_000, hist: "std/3"},
+		})},
+		// Samples EXACTLY on each boundary, where `<` versus `<=` decides whether the
+		// sample is interpolated at all.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, hist: "std/0"}, {t: -100_000, hist: "std/1"},
+			{t: 1500, hist: "std/2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -298_500, hist: "std/0"}, {t: 1500, hist: "std/2"},
+		})},
+		// TWO samples after rangeEnd, so the smoothed search actually moves
+		// lastSampleIndex; with one it is bounded out and never moves.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/0"}, {t: -100_000, hist: "std/1"},
+			{t: 100_000, hist: "std/2"}, {t: 200_000, hist: "std/3"},
+		})},
+		// Entirely AFTER the range end: the smoothed-only `h[first].T > rangeEnd` exit.
+		{otSeries(metric, []otPoint{
+			{t: 100_000, hist: "std/0"}, {t: 200_000, hist: "std/1"},
+		})},
+		// The last sample exactly at rangeStart: the `<=` in the first exit.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -298_500, hist: "std/1"},
+		})},
+		// A reset strictly inside, which the correction adds back once.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -250_000, hist: "std/3"},
+			{t: -200_000, hist: "std/1"}, {t: -100_000, hist: "std/2"},
+			{t: 100_000, hist: "std/3"},
+		})},
+		// A reset spanning the LEFT boundary: `interpolateHistograms` returns
+		// `h2 * fraction`, and the correction must then skip h[first+1] as well.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/3"}, {t: -200_000, hist: "std/0"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// The same, with a FURTHER reset immediately after — which is the only shape
+		// where `prev = h[firstSampleIndex+1].H` differs from leaving prev at `left`.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/3"}, {t: -200_000, hist: "std/1"},
+			{t: -150_000, hist: "std/0"}, {t: -100_000, hist: "std/2"},
+		})},
+		// A reset spanning the RIGHT boundary, which the final right.DetectReset catches.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/1"}, {t: -100_000, hist: "std/3"},
+			{t: 100_000, hist: "std/0"},
+		})},
+		// Resets at both boundaries.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/3"}, {t: -200_000, hist: "std/0"},
+			{t: -100_000, hist: "std/3"}, {t: 100_000, hist: "std/0"},
+		})},
+		// Several resets inside, so the correction is ACCUMULATED — the `correction != nil`
+		// half of addCorrection, which a single reset never reaches.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -250_000, hist: "std/3"},
+			{t: -200_000, hist: "std/1"}, {t: -150_000, hist: "std/3"},
+			{t: -120_000, hist: "std/0"}, {t: -100_000, hist: "std/2"},
+			{t: 100_000, hist: "std/3"},
+		})},
+		// Identical histograms throughout: no reset, and the difference is empty.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/1"}, {t: -200_000, hist: "std/1"},
+			{t: -100_000, hist: "std/1"}, {t: 100_000, hist: "std/1"},
+		})},
+		// A GAUGE hint on every sample, which is validateHistogramRange's warning for a
+		// counter and no warning at all for delta.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "gauge"}, {t: -200_000, hist: "gauge2"},
+			{t: -100_000, hist: "gauge"}, {t: 100_000, hist: "gauge2"},
+		})},
+		// A gauge hint on the MIDDLE sample only: a counter still warns (the loop sees it),
+		// delta warns too (neither boundary is a gauge). The pair below is what separates
+		// the per-sample loop from the two-boundary `||`.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -200_000, hist: "gauge"},
+			{t: -100_000, hist: "std/2"}, {t: 100_000, hist: "std/3"},
+		})},
+		// Gauges at the BOUNDARIES and a counter in the middle: delta is silent, the
+		// counter warns.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "gauge"}, {t: -200_000, hist: "std/1"},
+			{t: -100_000, hist: "gauge2"}, {t: 100_000, hist: "gauge"},
+		})},
+		// The two explicit reset hints, which DetectReset reads before comparing buckets.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "crhint"}, {t: -200_000, hist: "ncrhint"},
+			{t: -100_000, hist: "crhint"}, {t: 100_000, hist: "ncrhint"},
+		})},
+		// Custom buckets throughout, with the SAME bounds: no reconciliation.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "custom"}, {t: -200_000, hist: "custom"},
+			{t: -100_000, hist: "custom"}, {t: 100_000, hist: "custom"},
+		})},
+		// Custom buckets with DIFFERENT bounds, straddling both boundaries — so the
+		// reconciliation info comes out of the interpolation as well as the subtraction.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "custom"}, {t: -200_000, hist: "custom2"},
+			{t: -100_000, hist: "custom"}, {t: 100_000, hist: "custom2"},
+		})},
+		// A GAUGE hint exactly ON rangeStart, followed by counters. This is the only shape
+		// that can tell `pickOrInterpolateLeftHistogram`'s `<` from `<=`: interpolating at
+		// Δt = 0 returns h1 unchanged in VALUE either way, but the arithmetic path runs
+		// Sub/Mul/Add and the result's CounterResetHint is then adjusted rather than
+		// inherited — and `delta`'s warning reads exactly that hint.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, hist: "gauge"}, {t: -200_000, hist: "std/1"},
+			{t: -100_000, hist: "std/2"}, {t: 100_000, hist: "std/3"},
+		})},
+		// The same on the RIGHT: a gauge exactly ON rangeEnd, which is where `>` versus
+		// `>=` decides whether `right` inherits the hint or has one computed for it.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/1"}, {t: 1500, hist: "gauge"},
+			{t: 100_000, hist: "std/2"},
+		})},
+		// An explicit counterReset hint exactly ON rangeStart. `left` becomes the
+		// correction's first `prev`, so its hint — inherited or computed — is what
+		// DetectReset reads for the first sample inside the range.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, hist: "crhint"}, {t: -200_000, hist: "std/0"},
+			{t: -100_000, hist: "std/2"}, {t: 100_000, hist: "std/3"},
+		})},
+		// A gauge exactly ON rangeStart with a gauge on rangeEnd too, and a COUNTER
+		// between them. `delta`'s warning is `||`, so both boundaries must be gauges for it
+		// to stay silent — and that silence is what the left boundary's hint can break.
+		// This is the shape where `pickOrInterpolateLeftHistogram`'s `<=` becomes visible,
+		// but only together with dropping interpolateHistograms' `t == t1` short-circuit:
+		// each perturbation alone is absorbed by the other. See the port's header.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, hist: "gauge"}, {t: -200_000, hist: "std/1"},
+			{t: 1500, hist: "gauge2"},
+		})},
+		// NHCBs with DIFFERENT bounds whose first sample sits exactly ON rangeStart. This
+		// is the shape where `pickOrInterpolateLeftHistogram`'s `<` versus `<=` finally
+		// becomes visible — but only together with dropping interpolateHistograms'
+		// `t == t1` short-circuit, because each perturbation alone is absorbed by the
+		// other. At Δt = 0 the arithmetic path still RECONCILES the two bucket layouts,
+		// so it returns h1's counts on intersected bounds and emits two extra infos,
+		// where `h1.Copy()` keeps h1's own bounds and says nothing.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, hist: "custom"}, {t: -200_000, hist: "custom2"},
+			{t: -100_000, hist: "custom"}, {t: 100_000, hist: "custom2"},
+		})},
+		// The same interlock on the RIGHT: NHCBs with different bounds whose LAST in-window
+		// sample sits exactly ON rangeEnd, so `>` versus `>=` and the `t == t2`
+		// short-circuit protect each other the way the left pair does.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "custom"}, {t: 1500, hist: "custom2"},
+			{t: 100_000, hist: "custom"},
+		})},
+		// A mix of exponential and custom INSIDE the window: validation fails and the
+		// sample is abandoned.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/1"}, {t: -200_000, hist: "custom"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// The mix only AFTER rangeEnd. `smoothed` pulls lastSampleIndex back to the first
+		// sample at or after rangeEnd and never sees the NHCB; `anchored` keeps
+		// len(h)-1 and fails validation. The same input, two answers.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/1"}, {t: -100_000, hist: "std/2"},
+			{t: 100_000, hist: "std/3"}, {t: 200_000, hist: "custom"},
+		})},
+		// A mix only BEFORE the window: two samples precede rangeStart and the earlier is
+		// an NHCB, so firstSampleIndex shadows it and validation never sees it.
+		{otSeries(metric, []otPoint{
+			{t: -500_000, hist: "custom"}, {t: -400_000, hist: "std/1"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// Mixed exponential SCHEMAS, which is upstream's own TODO: the schema is reduced
+		// on the fly during the pairwise Sub/Add rather than pre-scanned as histogramRate
+		// does. Pinned so the divergence cannot drift silently.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/1"}, {t: -200_000, hist: "zeroneg"},
+			{t: -100_000, hist: "std/2"}, {t: 100_000, hist: "zeroneg"},
+		})},
+		// Zero and negative buckets across a boundary.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "zeroneg"}, {t: -100_000, hist: "zeroneg"},
+			{t: 100_000, hist: "zeroneg"},
+		})},
+		// An EMPTY histogram in the middle, which is a reset against anything.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/2"}, {t: -200_000, hist: "empty"},
+			{t: -100_000, hist: "std/1"}, {t: 100_000, hist: "std/2"},
+		})},
+		// A NaN sum, and tiny beside huge so the interpolation's fraction is applied to
+		// buckets of wildly different magnitudes.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "nansum"}, {t: -100_000, hist: "nansum"},
+			{t: 100_000, hist: "negonly"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "tiny"}, {t: -200_000, hist: "huge"},
+			{t: -100_000, hist: "tiny"}, {t: 100_000, hist: "huge"},
+		})},
+		// Sub-second spacing at both boundaries, where the interpolation's Δt is 1ms out
+		// of 2ms — the fraction is 0.5 but the arithmetic runs on the real timestamps.
+		{otSeries(metric, []otPoint{
+			{t: -298_501, hist: "std/0"}, {t: -298_499, hist: "std/1"},
+			{t: 1499, hist: "std/2"}, {t: 1501, hist: "std/3"},
+		})},
+		// With the metadata labels, so every warning above carries a metric name.
+		{otSeries(withMetadata, []otPoint{
+			{t: -400_000, hist: "std/1"}, {t: -200_000, hist: "custom"},
+			{t: -100_000, hist: "std/2"},
+		})},
+	}
+	for _, fn := range []string{"rate", "increase", "delta"} {
+		for _, sel := range []string{
+			"[5m] anchored", "[5m] smoothed", "[2m] anchored", "[2m] smoothed",
+			"[5m] anchored offset 1m", "[5m] smoothed offset 1m",
+		} {
+			for _, m := range extendedHistMatrices {
+				emit(fnIn{
+					Fn: fn, Ts: "1500",
+					Expr:     fn + "(http_requests_total" + sel + ")",
+					Args:     [][]fnSampleIn{},
+					MatrixIn: m,
+				})
+			}
+		}
 	}
 }

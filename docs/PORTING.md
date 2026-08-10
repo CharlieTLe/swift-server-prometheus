@@ -1117,9 +1117,64 @@ changing behaviour.
     `left` removes exactly one `+= prev`. The two cancel. Worth recording because the
     control looks like a corpus gap and is not.
 
-    `extendedHistogramRate` remains unported — it needs `validateHistogramRange`, two
-    histogram interpolators, `correctForCounterResetsHistogram`, the add/sub annotation
-    wrappers and `annosFromInterpolationError`. Its branch raises a precondition.
+    A second non-finding, resolved by the histogram port below: bounding the first
+    `sort.Search` by `lastSampleIndex` rather than `len(f)` is **also** unobservable. The
+    two differ only when the predicate is false throughout, i.e. every sample is at or
+    before `rangeStart` — and then `f[lastSampleIndex].T <= rangeStart` exits before the
+    index is ever used.
+
+64. **`extendedHistogramRate` is the same function with five differences, and one of them
+    makes the whole error-handling apparatus dead code.** The index arithmetic, both
+    `sort.Search` bounds and both early exits are identical to `extendedRate`. Beyond
+    that:
+
+    | | float | histogram |
+    |---|---|---|
+    | pre-flight validation | none | `validateHistogramRange` over the window |
+    | boundary interpolation | cannot fail | **fails** on a mix of exponential and custom schemas |
+    | `delta`'s not-a-gauge warning | absent | on `left`/`right`, `\|\|` not `&&` |
+    | the inward index walk | in `extendedRate` itself | inside `correctForCounterResetsHistogram` |
+    | the result's hint | n/a | forced to `gaugeType`, then compacted |
+
+    The dead code: **once `validateHistogramRange` passes, nothing downstream can fail.**
+    Every histogram the arithmetic touches — both interpolation operands, `left`, `right`,
+    each `prev`, the accumulated correction — comes from the validated window, and
+    `checkSchemaAndBounds` is the only thing that raises. So both `err != nil` returns,
+    both `catch` blocks in the add/sub wrappers, and `annosFromInterpolationError` itself
+    are unreachable from this caller. Transcribed because upstream has them (the exception
+    9 pattern), not because a corpus case reaches them.
+
+    Whether the schema mix lands inside the **window** is what decides the outcome, not
+    whether it is in the series. So one corpus case puts an NHCB after `rangeEnd`, where
+    `smoothed` excludes it and `anchored` does not — the same input, two answers.
+
+    The histogram correction can skip a **second** sample. When the left interpolation
+    already spanned a reset (`smoothed`, first sample before `rangeStart`, and `h[first+1]`
+    resets against `h[first]`), that sample is skipped *and becomes the comparison anchor*
+    for whatever follows. Both halves matter and they matter separately. The right boundary
+    is excluded for a different reason than the left: `right` inherits `h[last]`'s
+    `CounterResetHint`, so `right.DetectReset(h[last])` would self-detect on it.
+
+    Upstream's own TODO (functions.go:364) is pinned rather than fixed: `histogramRate`
+    pre-computes the minimum schema across the range, while `extendedHistogramRate`
+    reduces on the fly during the pairwise `Sub`/`Add`. Both reach the same final schema;
+    intermediate values differ.
+
+65. **Two negative controls can protect each other, so a control that survives alone is
+    not evidence of a corpus gap.** `pickOrInterpolateLeftHistogram`'s `<` versus `<=` on
+    a sample exactly at `rangeStart` is invisible — because `interpolateHistograms`
+    short-circuits on `t == t1` and returns `h1.Copy()`, which is what the
+    non-interpolating branch returns anyway. Drop *both* and the arithmetic path runs: for
+    NHCBs with different bounds it reconciles the layouts, so it returns h1's counts on
+    intersected bounds plus two extra infos. `>` versus `>=` and `t == t2` interlock the
+    same way on the right.
+
+    So the corpus needs a shape for the **pair**, and the tell that one is missing is not
+    a failing control — both look green. 30 controls, 22 break; of the eight survivors
+    four are interlocked in two pairs (each pair witnessed jointly) and four are provably
+    unobservable: the `last > 0` guard, `validateHistogramRange`'s choice of anchor
+    sample, the `sort.Search` bound above, and `right.Copy()` — which Swift's value
+    semantics make unobservable by construction.
 
 ## Not ported
 

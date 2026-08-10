@@ -4,13 +4,9 @@
 // `correctForCounterResets`.
 //
 // This is the `anchored`/`smoothed` branch of `rate`, `increase` and `delta` for
-// **float** ranges. `extendedHistogramRate` is still deferred: it needs
-// `validateHistogramRange`, `pickOrInterpolateLeft`/`RightHistogram`,
-// `interpolateHistograms`, `correctForCounterResetsHistogram`,
-// `add`/`subHistogramWithAnnotations` and `annosFromInterpolationError` — six more
-// helpers and its own annotation vocabulary. The dispatch reaches a
-// `preconditionFailure` for it, so a histogram query with those modifiers fails
-// loudly rather than silently taking a float path.
+// **float** ranges; the native-histogram counterpart is
+// `Functions+ExtendedHistogramRate.swift`, whose header records the five places the
+// two diverge.
 //
 // ## `anchored` and `smoothed` are different modifiers with one code path
 //

@@ -2,10 +2,10 @@
 // Ported from promql/functions.go @ v3.13.2 — `extrapolatedRate` and
 // `histogramRate`, and with them `rate`, `increase` and `delta`.
 //
-// The `anchored`/`smoothed` dispatch is here; `extendedRate` itself is in
-// `Functions+ExtendedRate.swift`. **`extendedHistogramRate` is still deferred** and
-// its branch reaches a `preconditionFailure`, so a histogram query with those
-// modifiers fails loudly rather than silently taking the float path.
+// The `anchored`/`smoothed` dispatch is here; `extendedRate` lives in
+// `Functions+ExtendedRate.swift` and `extendedHistogramRate` in
+// `Functions+ExtendedHistogramRate.swift`. Note the dispatch checks histograms FIRST,
+// so a series holding both kinds is rejected before either path is reached.
 //
 // ## Extrapolation is the whole function, and it is not a slope
 //
@@ -212,14 +212,7 @@ func extrapolatedRate(
             return (enh.out, annos)
         }
         if !samples.histograms.isEmpty {
-            // `extendedHistogramRate` is still deferred: it needs six more helpers of
-            // its own (`validateHistogramRange`, the two histogram interpolators,
-            // `correctForCounterResetsHistogram`, the add/sub annotation wrappers and
-            // `annosFromInterpolationError`). Loud rather than silently taking a float
-            // path. See `Functions+ExtendedRate.swift`.
-            preconditionFailure(
-                "rate/increase/delta over an anchored or smoothed range of HISTOGRAMS "
-                    + "needs extendedHistogramRate, which is not ported yet")
+            return extendedHistogramRate(vals, args, enh, isCounter, isRate)
         }
         if !samples.floats.isEmpty {
             return extendedRate(vals, args, enh, isCounter, isRate)
