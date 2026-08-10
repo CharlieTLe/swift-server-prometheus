@@ -564,18 +564,99 @@ changing behaviour.
     `rank`, but easier to miss, because the rounded value is sitting in a register and every *other*
     term of the same expression uses it.
 
-    Two sites, both in this pin's `math`:
+    Five sites, all in this pin's `math`:
 
     - `xatan` (atan.go:69) writes `(((((z+Q0)*z+Q1)...` with `z := x*x`, and Go emits `fma(x, x, Q0)`.
       **Observable**: `0xbfe1383384b20da8` distinguishes it both from reusing the rounded `z` and from
       an unfused `x*x + Q0`, and is committed as a witness.
     - `tan` (tan.go:129) writes `(((( zz +_tanQ[1])*zz+...` and Go emits `fma(z, z, _tanQ[1])`. Not
-      observable in a 12,000,000-input search — but the port spells it the same way, because the
-      silence is the search's and not the compiler's.
+      observable in a 12,000,000-input search.
+    - `sinh` (sinh.go:63) writes `(((sq+Q2)*sq+Q1)*sq + Q0` with `sq := x*x`, and Go emits
+      `fma(x, x, Q2)`. Not observable in 34,000,052 inputs.
+    - `tanh` (tanh.go:102) writes `((s+tanhQ[0])*s+tanhQ[1])*s+tanhQ[2]` with `s := x*x`, and Go emits
+      `fma(x, x, tanhQ[0])`. Not observable in 34,000,052 inputs.
+    - `log1p` (log1p.go:200, :202) writes `s*(hfsq+R)` with `hfsq := 0.5*f*f`, and Go emits
+      `fma(f, 0.5*f, R)`. **Loudly observable** — see quirk 42.
+
+    The port spells all five the way the disassembly does, because being unobservable *by search* is
+    not the same as being equivalent.
+
+    **Why three of the five are silent and two are not** is the transferable part, and it took the
+    hyperbolics to see it: observability tracks *position in the Horner chain*, not the fusion itself.
+    Unfusing each term of a chain one at a time and counting differences over 34,000,052 inputs gives
+    a monotone gradient — `sinh`'s numerator 0 → 122 → 25,280, its denominator 0 → 5 → 4,426; `tanh`'s
+    0 → 2 → 1,545 and 0 → 122 → 10,513; and the six adds of `log1p`'s seven-term `Lp` chain 0, 0, 0, 0, 8, 315. The leading
+    term is always the most diluted, because everything downstream multiplies its error by a value
+    below 1 and then adds a constant orders of magnitude larger. `sinh`'s and `tanh`'s unrounded
+    recomputations happen to *be* the leading term; `xatan`'s and `log1p`'s are not. So a search that
+    finds nothing at a chain's head has said nothing about the fusion — only about where it sits.
 
     The general lesson for the evaluator work ahead: an FMA count that exceeds the number of `a*b + c`
     patterns in the source means a product has been fused into an add that does not look like one.
     Count the ops before mapping them.
+
+41. **The hyperbolics are portable Go on arm64 too, and every one of them diverges from libm.**
+    `haveArchSinh`, `haveArchCosh`, `haveArchTanh`, `haveArchAsinh`, `haveArchAcosh`, `haveArchAtanh`
+    and `haveArchLog1p` are all true only on **s390x**, exactly as the trig block (quirk 39) — so
+    `promql`'s `sinh`/`cosh`/`tanh`/`asinh`/`acosh`/`atanh` run Go's own Hart & Cheney, Cephes and
+    FDLIBM code. Measured against Swift's libm over 1,921,867 inputs each:
+
+    | | | |
+    |---|---|---|
+    | `Tanh` 103,074 (5.4%) | `Asinh` 166,942 (8.7%) | `Cosh` 260,500 (13.6%) |
+    | `Log1p` 346,161 (18.0%) | `Sinh` 472,471 (24.6%) | `Atanh` 968,192 (50.4%) |
+    | `Acosh` 1,334,959 (69.5%) | | |
+
+    `Acosh`'s and `Atanh`'s figures are 98% and 93% NaN payload — their out-of-domain branch is shared
+    with their NaN branch, so both return Go's `NaN()` and *replace* the argument's payload, where
+    `Sinh`, `Tanh` and `Asinh` let it through. Strip that out and 27,509 and 64,610 genuine one-ULP
+    disagreements remain.
+
+    `Cosh` is the instructive one: it fuses nothing, and its whole body is
+    `x = Abs(x); return (Exp(x) + 1/Exp(x)) * 0.5`. It still differs on one input in seven, entirely
+    inherited from `Exp`. **A routine with no arithmetic of its own still cannot be delegated.**
+
+    `math.Log1p` is ported even though PromQL has no `log1p` function, because `Asinh`, `Acosh` and
+    `Atanh` are all built on it.
+
+42. **The same Go expression can compile to two different roundings two lines apart, decided by
+    register pressure.** `log1p` writes `hfsq := 0.5 * f * f` once and then reads it in two returns:
+
+    - log1p.go:200, `f - (hfsq - s*(hfsq+R))` — the **inner** `hfsq` is `fma(f, 0.5*f, R)`, unrounded
+      (quirk 40); the **outer** one is the rounded value from log1p.go:180, still live in `F4`.
+    - log1p.go:202, `k*Ln2Hi - ((hfsq - (s*(hfsq+R) + …)) - f)` — **both** are unrounded, because
+      `SCVTFD R1, F4` has put `float64(k)` in `F4` and the rounded `hfsq` no longer exists to be read.
+
+    So the port needs `hfsq`, `0.5*f` and two different spellings of "hfsq minus something", and which
+    one goes where cannot be derived from the Go text at all. Unfusing the outer one at :202 moves
+    188,208 of 20,000,000 results, so it is not a subtlety that stays hidden either.
+
+    The same file has a smaller instance on one line: `asinh`'s
+    `Log1p(x + x*x/(1+Sqrt(1+x*x)))` contains `x*x` twice, and the compiler fuses the one under the
+    `Sqrt` into its `+ 1` while leaving the numerator's as a plain rounded `FMULD`.
+
+    **Read the disassembly per *use*, not per expression.** A `hfsq :=` in the source is a hint about
+    intent, not a statement about how many roundings there will be.
+
+43. **Two of upstream's own hex annotations are wrong, and one of Go's constant pairs is deliberately
+    redundant.** Three transcription traps in one file:
+
+    - `log1p.go` annotates `Sqrt2M1 = 4.142135623730950488017e-01` as `0x3fda827999fcef34` and
+      `Sqrt2HalfM1 = -2.928932188134524755992e-01` as `0xbfd2bec333018866`. Go compiles the
+      **decimals**, which round to `0x3FDA827999FCEF32` and `0xBFD2BEC333018867` — two ULP and one ULP
+      away. Trusting the comment moves a branch boundary.
+    - Only the `Sqrt2M1` error is *observable*, and the asymmetry is worth understanding rather than
+      shrugging at: a one-ULP change to a boundary alters behaviour for exactly the inputs in the
+      ULP-wide gap it opens, which here is a single value. For `Sqrt2HalfM1` the `k = 0` shortcut and
+      the full reduction agree to the last bit at that value, so no corpus can catch it; for
+      `Sqrt2M1` they do not, and the negative control breaks. **A wrong branch constant is only
+      testable if the two branches disagree in the gap.**
+    - `sinh.go`'s `P0` and `Q0` are *different* decimals — `…9911847872 51e+6` and `…9912120772 77e+6`
+      — that round to the same `float64`, `0xC1233FDEBA64BB4F`. Go's compiler notices and loads one
+      constant for both. Neither is a typo and the port keeps both names.
+
+    Corollary, and it applies to every remaining `math` port: **round-trip each constant through Go,
+    never read the hex out of the comment.**
 
 
 ## Not ported

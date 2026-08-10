@@ -1,7 +1,7 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `HistogramStatsIterator` and `GoMath`'s
-trigonometry — the two prerequisites for `promql/functions.go`.
+Written at the end of the session that landed Phase 5's `GoMath` hyperbolics and `Log1p` — the last
+prerequisite for `promql/functions.go`'s element-wise wrappers.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -15,15 +15,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and transcendental* layers, `durations.go`, `PreprocessExpr`, the in-memory `Queryable` and `histogram_stats_iterator.go` are landed. Next: `functions.go`'s bodies, then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable` and `histogram_stats_iterator.go` are landed. **Every `GoMath` function `functions.go` needs now exists.** Next: `functions.go`'s bodies, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **277,676 committed differential cases, 380 tests**, on both Swift 6.4
+Green as of this commit: **315,409 committed differential cases, 396 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          3,469       193
+  GoCompat          4,043       193
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
@@ -39,8 +39,8 @@ Sources/            src     generated
   PromTestStorage     453         –
   PromQLParser      5,993       550
   PromQL            2,196         –
-Tests               9,652
-oracle (Go)        12,242
+Tests               9,923
+oracle (Go)        12,815
 ```
 
 ### Verify everything in one go
@@ -230,6 +230,48 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **Observability of a fusion tracks its position in the Horner chain, and that is what reconciles
+  the two halves of the previous bullet.** `xatan`'s unrounded `fma(x, x, Q0)` is observable and
+  `tan`'s structurally identical site is not, which read as luck until the hyperbolics gave four more
+  data points. Unfusing each term of a chain one at a time over 34,000,052 inputs produces a monotone
+  gradient every time: `sinh`'s numerator 0 → 122 → 25,280 witnesses head to tail, its denominator
+  0 → 5 → 4,426; `tanh`'s 0 → 2 → 1,545 and 0 → 122 → 10,513; and the six adds of `log1p`'s
+  seven-term `Lp` chain 0, 0, 0, 0, 8, 315. The head is always the most diluted, because everything downstream scales its error by a
+  value below 1 and adds a constant orders of magnitude larger. `sinh`'s and `tanh`'s unrounded
+  recomputations happen to *be* the head; `xatan`'s and `log1p`'s are not. **So a search that finds
+  nothing at a chain's head has measured position, not fusion** — which also means the cheap way to
+  find out whether a corpus can see a chain at all is to perturb its *last* term first.
+  PORTING.md quirk 40 has the table.
+- **A broad corpus and a targeted one find different fusions, and you need both.** The first
+  14,000,052-input search left `log1p`'s `Lp2` term silent; a second 20,000,000-input run weighted
+  toward `|x| <= 0.625` and toward `1+x` within 2**-20 of a power of two found 8 witnesses for it. The
+  branch was *reached* 180,873 times in the broad pass — coverage was never the problem, density was.
+  Count branch hits before concluding a site is unobservable, then re-run weighted at the thin ones.
+- **Read the disassembly per *use*, not per expression.** `log1p` writes `hfsq := 0.5*f*f` once and
+  reads it in two returns two lines apart: at log1p.go:200 the inner `hfsq` is `fma(f, 0.5*f, R)` and
+  the outer one is the rounded value; at :202 **both** are unrounded, because `SCVTFD R1, F4` has put
+  `float64(k)` in the register the rounded `hfsq` was living in. Register pressure decided the
+  rounding. No amount of care with the Go text produces that, and unfusing the :202 outer one moves
+  188,208 of 20,000,000 results, so it is not hiding either. Quirk 42.
+- **Do not read a constant's hex out of upstream's comment.** `log1p.go` annotates `Sqrt2M1` as
+  `0x3fda827999fcef34` and `Sqrt2HalfM1` as `0xbfd2bec333018866`; Go compiles the decimal literals,
+  which are `0x3FDA827999FCEF32` and `0xBFD2BEC333018867` — two ULP and one ULP away. Both are branch
+  boundaries. Round-trip every constant through Go. Quirk 43, which also records why only *one* of
+  the two errors is testable: a wrong boundary changes behaviour only for inputs in the ULP-wide gap
+  it opens, and for `Sqrt2HalfM1` the two branches agree to the last bit at that single value. **A
+  wrong branch constant is only catchable if the branches disagree in the gap** — which is worth
+  knowing before writing a negative control and concluding the corpus is weak.
+- **"Zero differences" has three causes, and only one of them is "unobservable".** Perturbing
+  `log1p`'s 21 fused sites left 14 silent, and they were not one group: four are *provably exact*
+  (a `×0.5`, and three `k*Ln2Hi` products where `Ln2Hi`'s 32 significant bits make the product exact),
+  one is *unreachable code* (log1p.go:192 needs `iu == 0 && k == 0`, which implies `|x| <= 2**-53`,
+  which log1p.go:141 has already returned for), and nine are *diluted*. Only the last deserves the
+  word "unobservable", and only the first deserves a comment saying it can never matter. Instrument
+  branch coverage alongside the perturbation and the three separate immediately.
+- **A routine with no arithmetic of its own still cannot be delegated to libm.** `cosh` fuses nothing
+  and its whole body is `x = Abs(x); return (Exp(x) + 1/Exp(x)) * 0.5` — and it differs from Swift's
+  `cosh` on 13.6% of inputs, every one of them inherited from `Exp`. The probe is what says so; "there
+  is nothing here to get wrong" is not an argument.
 - **21 negative controls, 2 survivors, and both survivors were the answer rather than a gap.**
   Perturbing the stats iterator one behaviour at a time broke 19 of 21 fixture runs. The two that
   stayed green — ignoring the reuse buffer entirely, and clearing `current` in `Reset` — are precisely
@@ -401,6 +443,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromTestStorage` | **not a port** — fills `util/teststorage`'s role | the in-memory `Queryable`; see below |
 | `PromQL` | `promql/histogram_stats_iterator.go` | in full, plus `histogramStatsSeries` from engine.go:4785 — its only constructor. PORTING.md quirks 37-38 |
 | `GoCompat.GoMath` | `math.Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Log10` + `trigReduce` | portable Go on arm64, not assembly and **not libm** — see below |
+| `GoCompat.GoMath` | `math.Log1p`, `Sinh`, `Cosh`, `Tanh`, `Asinh`, `Acosh`, `Atanh` | portable Go on arm64. 36 fused sites, 19 witnessed. PORTING.md quirks 41-43 |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -439,8 +482,9 @@ differentially testable *now* and `engine.go` is not, which inverts the obvious 
 1. **`promql/functions.go`'s bodies**, driven through `FunctionCalls` from the oracle. Needs
    `EvalNodeHelper` and its reset helpers (engine.go:1217-1408) as the parameter, plus
    `EvalSeriesHelper`, `getMetricName`, `stringFromArg`, `stringSliceFromArgs`. Suggested slices:
-   - the element-wise ones — `simpleFloatFunc` + the ~26 math wrappers (the `GoMath` transcendentals
-     below are what unblock these), `clamp`, `funcRound` (a fused site), `funcScalar`, `funcVector`,
+   - the element-wise ones — `simpleFloatFunc` + the ~26 math wrappers (**no longer blocked on
+     anything**: every `GoMath` function they reach now exists, hyperbolics included), `clamp`,
+     `funcRound` (a fused site), `funcScalar`, `funcVector`,
      `funcTime`, `funcTimestamp`, `funcPi`, `funcSgn`, `dateWrapper` + the 8 date functions (the
      `Int64(Double)` trap), `simpleHistogramFunc` + the `histogram_*` family, and
      `funcHistogramQuantile`/`Fraction`/`Quantiles` on top of the already-ported `quantile.go`;
@@ -652,10 +696,22 @@ file (two provably exact, four unobservable in a 12,000,000-input search). Obser
 harvested witnesses, as `gocompat/log` does. See `Sources/GoCompat/GoMath+Trig.swift` and PORTING.md
 quirks 39-40.
 
-**Still missing from `GoMath`, and blocking the hyperbolic wrappers:** `Sinh`, `Cosh`, `Tanh`, `Asinh`,
-`Acosh`, `Atanh` — and the last three all need **`Log1p`**, which is its own port with its own
-polynomial and corpus. `Sinh`/`Cosh`/`Tanh` need only the already-ported `Exp`. That is the natural
-next `GoCompat` slice.
+**`GoMath` is now complete for everything `functions.go` reaches.** The hyperbolics and `Log1p`
+landed with the same discipline as the trig block: libm probed first (all seven diverge — `Tanh` least
+at 5.4%, `Acosh` most at 69.5%), 36 fused sites mapped by disassembly, each unfused on its own over
+34,000,052 inputs, 19 observable ones given harvested witnesses, and 39 negative controls run against
+the committed fixtures of which 25 break. See `Sources/GoCompat/GoMath+Hyperbolic.swift` and PORTING.md
+quirks 41-43.
+
+Three findings from that slice that the evaluator work will meet again: observability of a fusion is
+decided by its **position in the Horner chain** (quirk 40's new table), the same Go expression can get
+**two different roundings two lines apart** because of register pressure (quirk 42), and upstream's own
+**hex comments for two constants are wrong** (quirk 43). All three are in §3.
+
+Nothing in `GoMath` is known to be missing. `math.Sqrt`, `Abs`, `Ceil` and `Floor` are deliberately
+Swift's — they are the same hardware instruction either side and agreed on every probe input. If a
+later phase needs `Gamma`, `Erf` or the `Bessel` family, probe libm before porting; if it needs
+`Cbrt`, note that `Sqrt` agreeing is no evidence about it.
 
 **The numeric risk is Kahan summation.** `PromMath` has it, pinned. A wrong Kahan term is exactly the
 kind of silent divergence `docs/ROADMAP.md` warns about when it argues for PromQL before TSDB, and it
@@ -700,7 +756,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 40 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 43 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
