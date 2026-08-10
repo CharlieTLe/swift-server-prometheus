@@ -1219,6 +1219,48 @@ changing behaviour.
     `continue`, and the next iteration's `if i >= nChunksB { return false }` then holds. In
     each case a negative control *cannot* fail, and that is a proof rather than a gap.
 
+68. **`engine.go`'s query planner is all ±1 millisecond, and every one of them is
+    deliberate.** The lookback window is half-open — a sample exactly `lookbackDelta`
+    before the evaluation time is excluded — so `getTimeRangesForSelector` moves the start
+    back by `lookbackDelta - 1`, and a range selector by `range - 1` for the same reason.
+    The extended modifiers widen it further, asymmetrically:
+
+    | selector | start | end |
+    |---|---|---|
+    | instant, plain | `- (lookbackDelta - 1)` | unchanged |
+    | instant, `smoothed` | `- (lookbackDelta - 1)` | **`+ lookbackDelta`** |
+    | range, plain | `- (range - 1)` | unchanged |
+    | range, `anchored` | `- (lookbackDelta + range - 1)` | unchanged |
+    | range, `smoothed` | `- (lookbackDelta + range - 1)` | **`+ lookbackDelta`** |
+
+    `smoothed` is the only modifier that reaches *forward* in time, which is what lets
+    `extendedRate` interpolate to a right boundary sitting after the last in-range sample.
+    The instant rows are reachable: `foo smoothed` parses without a range.
+
+    Precedence: a selector's own `@` replaces both ends and skips the subquery-offset
+    arithmetic entirely; failing that, an enclosing subquery's `@` replaces them. The
+    selector's own `offset` is applied last and **unconditionally**, so it shifts a pinned
+    timestamp too. And an `@` on a subquery *resets* `subqueryTimes`' accumulation rather
+    than adding to it, because the timestamp makes everything inside it absolute.
+
+    With no selector at all the answer is `(0, 0)`, not `(MaxInt64, MinInt64)`.
+
+69. **A control that survives can fail for the opposite reason to the one you assume.** Two
+    survivors in this sweep were proofs — the `anchored`/`smoothed` test order cannot matter
+    because `foo[5m] anchored smoothed` is a parse error, and `Double(UInt64.max)` *is*
+    2^64 because `float64(math.MaxUint64)` rounds up (which is also why `SampleOffset` can
+    return exactly 1.0). Two others looked equally provable and were gaps:
+
+    * the `if n.Smoothed` in the instant branch reads as dead code until you notice that
+      `foo smoothed` parses on its own;
+    * clearing `evalRange` after each `VectorSelector` is invisible on
+      `rate(foo[10m]) + bar`, because the leaked range hands `bar` the same start `foo`
+      already had. It takes `rate(foo[10m]) + bar offset 1h`, where the offset makes the
+      trailing selector the global minimum, to separate them.
+
+    The distinguishing question in both cases was not "is this reachable?" but "what shape
+    would make the two answers differ?" — quirk 65's lesson arriving from the other side.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
