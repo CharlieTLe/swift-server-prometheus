@@ -110,16 +110,16 @@ var suites = map[string]func(*emitter){
 	"storage/listseries":        genStorageListSeries,
 	// The Phase 5 in-memory Queryable's contract, pinned against a real tsdb.DB
 	// through util/teststorage. See oracle/suites_storage_memselect.go.
-	"storage/mem-select": genStorageMemSelect,
-	"storage/mem-labels": genStorageMemLabels,
-	"promql/value":              genPromQLValue,
-	"promql/value-sort":         genPromQLValueSort,
-	"promql/storageseries":      genPromQLStorageSeries,
-	"gocompat/exp2":             genGoExp2,
-	"promql/bucketquantile":     genPromQLBucketQuantile,
-	"promql/bucketfraction":     genPromQLBucketFraction,
-	"promql/histogramquantile":  genPromQLHistogramQuantile,
-	"promql/histogramfraction":  genPromQLHistogramFraction,
+	"storage/mem-select":       genStorageMemSelect,
+	"storage/mem-labels":       genStorageMemLabels,
+	"promql/value":             genPromQLValue,
+	"promql/value-sort":        genPromQLValueSort,
+	"promql/storageseries":     genPromQLStorageSeries,
+	"gocompat/exp2":            genGoExp2,
+	"promql/bucketquantile":    genPromQLBucketQuantile,
+	"promql/bucketfraction":    genPromQLBucketFraction,
+	"promql/histogramquantile": genPromQLHistogramQuantile,
+	"promql/histogramfraction": genPromQLHistogramFraction,
 	// Phase 5: the math routines the evaluator reaches that neither Swift's
 	// standard library nor libm reproduce. See oracle/suites_gomath.go.
 	"gocompat/log":              genGoLog,
@@ -141,6 +141,17 @@ var suites = map[string]func(*emitter){
 	"gocompat/acos":  genGoAcos,
 	"gocompat/atan":  genGoAtan,
 	"gocompat/log10": genGoLog10,
+	// Phase 5: the hyperbolics `promql/functions.go` reaches through
+	// `simpleFloatFunc`, plus `math.Log1p`, which three of them are built on and
+	// which has no PromQL wrapper of its own. Every one diverges from libm on
+	// 5-70% of inputs. See oracle/suites_gomath_hyperbolic.go.
+	"gocompat/sinh":  genGoSinh,
+	"gocompat/cosh":  genGoCosh,
+	"gocompat/tanh":  genGoTanh,
+	"gocompat/asinh": genGoAsinh,
+	"gocompat/acosh": genGoAcosh,
+	"gocompat/atanh": genGoAtanh,
+	"gocompat/log1p": genGoLog1p,
 }
 
 func main() {
