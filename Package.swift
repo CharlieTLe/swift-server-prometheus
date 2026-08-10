@@ -173,6 +173,9 @@ let package = Package(
             dependencies: [
                 "PromQL", "PromQLParser", "PromStorage", "PromChunkEnc", "PromChunks",
                 "PromHistogram", "PromLabels", "PromModel", "GoCompat", "GoOracleSupport",
+                // The selector corpus loads its series into the in-memory storage, the same
+                // one PromTestStorageTests pins against a real tsdb.DB.
+                "PromTestStorage",
             ]
         ),
         .testTarget(

@@ -79,6 +79,7 @@
 
 public import GoCompat
 public import PromAnnotations
+public import PromHistogram
 public import PromLabels
 public import PromQLParser
 public import PromStorage
@@ -219,11 +220,17 @@ final class Evaluator {
                     }
                 }
                 if !enableDelayedNameRemoval && mat.series.count > 1 {
-                    // `mergeSeriesWithSameLabelset` only matters once two series can share a
-                    // label set, which needs selectors.
-                    throw EvaluatorNotPorted(
-                        nodeType: "UnaryExpr",
-                        detail: "mergeSeriesWithSameLabelset needs multi-series input")
+                    // `mergeSeriesWithSameLabelset` exists because dropping `__name__` can
+                    // make two series collide — `-foo` and `-bar` both become `{}`. Merging
+                    // them is its own slice; a range that does NOT collide needs nothing, so
+                    // only the colliding case is refused. Detected the way Go does it
+                    // elsewhere, by label-set hash.
+                    var seen = Set<UInt64>(minimumCapacity: mat.series.count)
+                    for series in mat.series where !seen.insert(series.metric.goHash()).inserted {
+                        throw EvaluatorNotPorted(
+                            nodeType: "UnaryExpr",
+                            detail: "mergeSeriesWithSameLabelset for colliding label sets")
+                    }
                 }
             }
             return mat
@@ -275,7 +282,37 @@ final class Evaluator {
             throw EvaluatorNotPorted(
                 nodeType: "StepInvariantExpr", detail: "step duplication needs range queries")
 
+        case let e as VectorSelector:
+            // `checkAndExpandSeriesSet` is where a storage error surfaces, wrapped so the
+            // warnings collected before the failure still come back.
+            let ws2: Annotations
+            do {
+                ws2 = try checkAndExpandSeriesSet(ctx, e)
+            } catch {
+                var carried = ws
+                throw ErrWithWarnings(StorageExpansionError(underlying: error), carried.merge(ws))
+            }
+            _ = ws.merge(ws2)
+            if e.smoothed {
+                // `smoothSeries` interpolates a selector's own samples; it lands with the
+                // rest of the smoothing machinery.
+                throw EvaluatorNotPorted(
+                    nodeType: "VectorSelector", detail: "the `smoothed` modifier needs smoothSeries")
+            }
+            return try evalSeries(ctx, e.series, e.offset, false)
+
         case let e as Call:
+            if e.function?.name == "timestamp", e.args.first is VectorSelector {
+                // Upstream's `rangeEvalTimestampFunctionOverVectorSelector`: a matrix
+                // evaluation always reports the STEP's timestamp, so `timestamp` over a
+                // selector needs its own path to report the SAMPLE's instead. The difference
+                // is visible whenever a series' last sample is older than the step — which
+                // the corpus caught immediately — so this refuses rather than answering with
+                // the step.
+                throw EvaluatorNotPorted(
+                    nodeType: "Call",
+                    detail: "timestamp over a vector selector needs its own eval path")
+            }
             for a in e.args where a is MatrixSelector || a is SubqueryExpr {
                 throw EvaluatorNotPorted(
                     nodeType: "Call", detail: "\((e.function?.name ?? "")) over a range")
@@ -475,15 +512,30 @@ func scalarBinop(_ op: ItemType, _ lhs: Double, _ rhs: Double) throws -> Double 
     }
 }
 
+/// Go: `fmt.Errorf("expanding series: %w", err)` — the prefix a storage failure reaches the
+/// user with.
+public struct StorageExpansionError: Error, CustomStringConvertible {
+    public var underlying: any Error
+    public var description: String { "expanding series: \(String(describing: underlying))" }
+}
+
 /// Go: `ev.errorf("vector cannot contain metrics with the same labelset")` and friends —
 /// the evaluator's own messages, which reach the user verbatim.
 public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable {
     case duplicateLabelset
+    /// Go: `evalSeries`' `this should be an info metric, with float samples: %s`.
+    case infoMetricWithHistogram(String)
+    /// Go: `vectorSelectorSingle`'s `unknown value type %v` panic.
+    case unknownValueType(String)
 
     public var description: String {
         switch self {
         case .duplicateLabelset:
             return "vector cannot contain metrics with the same labelset"
+        case .infoMetricWithHistogram(let metric):
+            return "this should be an info metric, with float samples: \(metric)"
+        case .unknownValueType(let t):
+            return "unknown value type \(t)"
         }
     }
 }
@@ -581,9 +633,8 @@ extension Engine {
         // the comment is here because dropping an error deliberately should be visible.
         defer { try? querier.close() }
 
-        // `populateSeries` walks the AST and attaches a SeriesSet to every selector. With no
-        // selector arm ported there is nothing to populate, and reaching a selector is an
-        // error anyway — so this is where that lands rather than in the middle of evaluation.
+        // Attach a SeriesSet to every selector, with the hints the storage may use to plan.
+        populateSeries(ctx, querier, s)
 
         // The `@` rewrite happens ONCE, on the start time, before evaluation.
         setOffsetForAtModifier(Timestamp.fromTime(s.start), s.expr)
@@ -644,5 +695,255 @@ extension Engine {
             throw EvaluatorNotPorted(
                 nodeType: "EvalStmt", detail: "unexpected expression type \(s.expr.type.documented)")
         }
+    }
+}
+
+// MARK: - Selectors
+
+extension Engine {
+    /// Go: `populateSeries` — attach an unexpanded `SeriesSet` to every selector, with the
+    /// hints the storage may use to plan.
+    ///
+    /// The hints are advisory: `Select` is allowed to ignore every one of them and return a
+    /// superset. What is *not* advisory is `Start`/`End`, which come from
+    /// `getTimeRangesForSelector` — the same arithmetic `FindMinMaxTime` unions.
+    func populateSeries(_ ctx: GoContext, _ querier: any Querier, _ s: EvalStmt) {
+        // As in `findMinMaxTime`: set by a MatrixSelector, consumed and cleared by the
+        // VectorSelector inside it.
+        var evalRange = GoDuration(nanoseconds: 0)
+
+        inspect(s.expr) { node, path in
+            if let n = node as? VectorSelector {
+                let (start, end) = getTimeRangesForSelector(s, n, path, evalRange)
+                var interval = getLastSubqueryInterval(path)
+                if interval.nanoseconds == 0 {
+                    interval = s.interval
+                }
+                var hints = SelectHints(start: start, end: end)
+                hints.step = durationMilliseconds(interval)
+                hints.range = durationMilliseconds(evalRange)
+                hints.func_ = extractFuncFromPath(path)
+                evalRange = GoDuration(nanoseconds: 0)
+                let (by, grouping) = extractGroupsFromPath(path)
+                hints.by = by
+                hints.grouping = grouping
+                n.unexpandedSeriesSet = querier.select(
+                    ctx, sortSeries: false, hints: hints,
+                    matchers: n.labelMatchers.compactMap { $0 })
+            } else if let n = node as? MatrixSelector {
+                evalRange = n.range
+            }
+        }
+    }
+
+    /// Go: `getLastSubqueryInterval` — the innermost enclosing subquery's step, or zero.
+    ///
+    /// A subquery with no step written gets `noStepSubqueryIntervalFn(range)`, which is where
+    /// the engine's default subquery interval finally lands.
+    func getLastSubqueryInterval(_ path: [any Node]) -> GoDuration {
+        var interval = GoDuration(nanoseconds: 0)
+        for node in path {
+            guard let n = node as? SubqueryExpr else { continue }
+            if n.step.nanoseconds != 0 {
+                interval = n.step
+            } else {
+                let ms = noStepSubqueryIntervalFn?(durationMilliseconds(n.range)) ?? 0
+                interval = GoDuration(nanoseconds: ms * 1_000_000)
+            }
+        }
+        return interval
+    }
+}
+
+/// Go: `extractFuncFromPath` — the innermost enclosing function or aggregation's name, or ""
+/// once a binary operator is reached.
+///
+/// The `BinaryExpr` case terminates deliberately: the hint is meant to describe a function
+/// over a *single* metric, and past an operator it no longer does.
+func extractFuncFromPath(_ p: [any Node]) -> String {
+    if p.isEmpty {
+        return ""
+    }
+    switch p[p.count - 1] {
+    case let n as AggregateExpr:
+        return n.op.description
+    case let n as Call:
+        return n.function?.name ?? ""
+    case is BinaryExpr:
+        return ""
+    default:
+        return extractFuncFromPath(Array(p.dropLast()))
+    }
+}
+
+/// Go: `extractGroupsFromPath` — the immediately enclosing aggregation's grouping, if any.
+///
+/// Note it looks only at the LAST element, not up the whole path, and reports `!Without` so
+/// `by` is true and `without` is false.
+func extractGroupsFromPath(_ p: [any Node]) -> (Bool, [String]) {
+    if p.isEmpty {
+        return (false, [])
+    }
+    if let n = p[p.count - 1] as? AggregateExpr {
+        return (!n.without, n.grouping)
+    }
+    return (false, [])
+}
+
+/// Go: `checkAndExpandSeriesSet` — drain the selector's `SeriesSet` into its `Series`, once.
+///
+/// Idempotent by design: a non-nil `Series` is a no-op, which is what makes it safe to call
+/// from every arm that touches a selector.
+func checkAndExpandSeriesSet(_ ctx: GoContext, _ expr: any Expr) throws -> Annotations {
+    if let e = expr as? MatrixSelector {
+        return try checkAndExpandSeriesSet(ctx, e.vectorSelector)
+    }
+    guard let e = expr as? VectorSelector else {
+        return Annotations()
+    }
+    if !e.series.isEmpty {
+        return Annotations()
+    }
+    guard let set = e.unexpandedSeriesSet else {
+        return Annotations()
+    }
+    var (series, ws) = try expandSeriesSet(ctx, set)
+    if e.skipHistogramBuckets {
+        series = series.map { HistogramStatsSeries($0) }
+    }
+    e.series = series
+    return ws
+}
+
+/// Go: `expandSeriesSet` — every series in the set, plus its warnings.
+///
+/// The context is checked *inside* the loop, so a cancellation during expansion is reported
+/// rather than waited out.
+// `PromStorage.Series` is qualified throughout: `PromQL.Series` is the value type and
+// shadows it.
+func expandSeriesSet(_ ctx: GoContext, _ it: any SeriesSet) throws -> ([any PromStorage.Series], Annotations) {
+    var res: [any PromStorage.Series] = []
+    while it.next() {
+        if let err = ctx.err() {
+            throw err
+        }
+            // `at()` is optional in the port where Go's is not; a `next()` that returned
+            // true and then nil would be a broken SeriesSet, so this is a precondition
+            // rather than a skip.
+        guard let s = it.at() else {
+            preconditionFailure("SeriesSet.next() returned true but at() was nil")
+        }
+        res.append(s)
+    }
+    if let err = it.err() {
+        throw err
+    }
+    return (res, it.warnings())
+}
+
+extension Evaluator {
+    /// Go: `evalSeries` — one series per input, sampled at every step through the lookback
+    /// window.
+    ///
+    /// A series that yields no point at any step is **dropped entirely** rather than kept
+    /// empty, which is why an instant query over a stale series returns nothing rather than a
+    /// series with no samples.
+    ///
+    /// `recordOrigT` replaces the value with the sample's own timestamp — that is for `info`
+    /// metrics, whose values are 1 by convention, so the space is reused. It raises for a
+    /// histogram, since an info metric must be a float.
+    func evalSeries(
+        _ ctx: GoContext, _ series: [any PromStorage.Series], _ offset: GoDuration,
+        _ recordOrigT: Bool
+    ) throws -> Matrix {
+        var mat = Matrix()
+        mat.series.reserveCapacity(series.count)
+
+        for s in series {
+            if let err = contextDone(ctx, "expression evaluation") {
+                throw err
+            }
+            let memo = MemoizedSeriesIterator(s.iterator(nil), delta: durationMilliseconds(lookbackDelta))
+            var ss = Series(metric: s.labels())
+
+            var ts = startTimestamp
+            while ts <= endTimestamp {
+                guard let (origT, f, h) = try vectorSelectorSingle(memo, offset, ts) else {
+                    ts += interval
+                    continue
+                }
+                if h == nil {
+                    currentSamples += 1
+                    if currentSamples > maxSamples {
+                        throw QueryError.tooManySamples(evaluationEnv)
+                    }
+                    ss.floats.append(FPoint(t: ts, f: recordOrigT ? Double(origT) : f))
+                } else {
+                    if recordOrigT {
+                        throw EvaluationError.infoMetricWithHistogram(ss.metric.description)
+                    }
+                    let point = HPoint(t: ts, h: h!)
+                    // A histogram costs its own size, not 1 — the sample limit is in
+                    // float-equivalents.
+                    currentSamples += point.size
+                    if currentSamples > maxSamples {
+                        throw QueryError.tooManySamples(evaluationEnv)
+                    }
+                    ss.histograms.append(point)
+                }
+                ts += interval
+            }
+
+            if !ss.floats.isEmpty || !ss.histograms.isEmpty {
+                mat.series.append(ss)
+            }
+        }
+        return mat
+    }
+
+    /// Go: `vectorSelectorSingle` — the sample for one series at one step, or nil.
+    ///
+    /// The lookback rule in full: seek to `ts - offset`; if there is nothing there or the
+    /// sample found is *after* it, fall back to the previous one — and accept that only if it
+    /// is **strictly newer** than `refTime - lookbackDelta`. That `<=` is the half-open window
+    /// `getTimeRangesForSelector` widens by `lookbackDelta - 1` to match.
+    ///
+    /// A stale marker is dropped as if there were no sample at all, and for a histogram the
+    /// marker lives in `Sum`.
+    func vectorSelectorSingle(
+        _ it: MemoizedSeriesIterator, _ offset: GoDuration, _ ts: Int64
+    ) throws -> (origT: Int64, f: Double, h: FloatHistogram?)? {
+        let refTime = ts - durationMilliseconds(offset)
+        var t: Int64 = 0
+        var v = 0.0
+        var h: FloatHistogram? = nil
+
+        let valueType = it.seek(refTime)
+        switch valueType {
+        case .none:
+            if let err = it.err() {
+                throw err
+            }
+        case .float:
+            (t, v) = it.at()
+        case .floatHistogram:
+            (t, h) = it.atFloatHistogram()
+        default:
+            throw EvaluationError.unknownValueType(String(describing: valueType))
+        }
+        if valueType == .none || t > refTime {
+            guard let prev = it.peekPrev(),
+                prev.t > refTime - durationMilliseconds(lookbackDelta)
+            else {
+                return nil
+            }
+            t = prev.t
+            v = prev.value
+            h = prev.fh
+        }
+        if PromValue.isStaleNaN(v) || (h != nil && PromValue.isStaleNaN(h!.sum)) {
+            return nil
+        }
+        return (t, v, h)
     }
 }

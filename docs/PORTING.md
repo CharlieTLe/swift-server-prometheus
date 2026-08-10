@@ -1374,6 +1374,29 @@ changing behaviour.
     Recorded because the alternative is a file that reads as verified and is not. Those
     controls become witnessable when the selectors land, and the file header names each one.
 
+76. **The lookback window is half-open at the far end, and a stale marker is an absence.**
+    `vectorSelectorSingle` seeks to `ts - offset`; if there is nothing there, or the sample
+    found is *after* it, it falls back to the previous sample and accepts that only if it is
+    **strictly newer** than `refTime - lookbackDelta`. So a sample exactly `lookbackDelta` old
+    is invisible — which is the other half of `getTimeRangesForSelector` widening the query
+    window by `lookbackDelta - 1` (quirk 68). A stale marker is then dropped as if there were
+    no sample at all, rather than surfacing as a NaN, and for a histogram the marker lives in
+    `Sum`.
+
+    `evalSeries` **drops a series entirely** when no step yielded a point, so an instant query
+    over a stale series returns nothing rather than an empty series. A histogram sample costs
+    its own `HPoint.size` against `maxSamples`, not 1 — the limit is in float-equivalents.
+
+    Two things the selector corpus caught immediately, both now refused by name rather than
+    answered wrongly:
+
+    * `timestamp(<selector>)` goes through `rangeEvalTimestampFunctionOverVectorSelector`,
+      which reports the **sample's** timestamp where a matrix evaluation reports the **step's**.
+      With three series whose last samples differ, the two disagree on the first case.
+    * `-foo` needs `mergeSeriesWithSameLabelset`, because dropping `__name__` can make two
+      series collide. Only the *colliding* case is refused: a range whose label sets stay
+      distinct needs no merge, and refusing it would have been a stub where none was required.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

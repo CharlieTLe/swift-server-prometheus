@@ -52,6 +52,9 @@ type execIn struct {
 	// Nanoseconds.
 	Lookback   string `json:"lookback"`
 	MaxSamples int    `json:"maxSamples"`
+	// The series to load before running. Empty means the querier returns nothing, which is
+	// all the selector-free arms need.
+	Series []memSeriesInJSON `json:"series"`
 }
 
 type execOut struct {
@@ -83,8 +86,16 @@ func runExecCase(in execIn) execOut {
 		}),
 	})
 	ts := time.UnixMilli(parseI64(in.Ts)).UTC()
+	var queryable storage.Queryable = execEmptyQueryable{}
+	if len(in.Series) > 0 {
+		// A real tsdb.DB through util/teststorage, which is what the Swift side's in-memory
+		// Queryable is itself pinned against (PR #20).
+		st := loadMemStorage(in.Series)
+		defer st.Close()
+		queryable = st
+	}
 	q, err := eng.NewInstantQuery(
-		context.Background(), execEmptyQueryable{}, nil, in.Query, ts)
+		context.Background(), queryable, nil, in.Query, ts)
 	if err != nil {
 		return execOut{Err: err.Error(), Warnings: []string{}}
 	}
@@ -111,6 +122,9 @@ func genPromQLExec(e *emitter) {
 	emit := func(in execIn) {
 		if in.MaxSamples == 0 {
 			in.MaxSamples = 50_000_000
+		}
+		if in.Series == nil {
+			in.Series = []memSeriesInJSON{}
 		}
 		e.emit(fmt.Sprintf("exec/%d", n), in, runExecCase(in))
 		n++
@@ -199,6 +213,105 @@ func genPromQLExec(e *emitter) {
 				Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
 			})
 		}
+	}
+
+	// --- SELECTORS, over a real tsdb.DB. This is where the lookback window, the offset and
+	// the multi-series behaviours become observable — several negative controls for
+	// rangeEval and execEvalStmt could not fail without more than one series.
+	fs := func(labels []string, points ...[2]int64) memSeriesInJSON {
+		out := memSeriesInJSON{Labels: labels}
+		for _, p := range points {
+			out.T = append(out.T, i64(p[0]))
+			out.ST = append(out.ST, i64(0))
+			out.F = append(out.F, fbits(float64(p[1])))
+		}
+		return out
+	}
+	// Three series sharing a name, so the vector has several members and their ORDER — which
+	// rangeEval's instant shortcut takes from the result vector — is pinned.
+	threeSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "http_requests", "job", "b"}, [2]int64{0, 1}, [2]int64{60_000, 2}),
+		fs([]string{"__name__", "http_requests", "job", "a"}, [2]int64{0, 10}, [2]int64{60_000, 20}),
+		fs([]string{"__name__", "http_requests", "job", "c"}, [2]int64{0, 100}),
+	}
+	// A single series with a gap, for the lookback boundary.
+	gapped := []memSeriesInJSON{
+		fs([]string{"__name__", "gap"}, [2]int64{0, 1}, [2]int64{600_000, 2}),
+	}
+	// A stale marker, which drops the sample as if it were absent.
+	staleSeries := []memSeriesInJSON{
+		{
+			Labels: []string{"__name__", "stale"},
+			T:      []string{i64(0), i64(60_000)},
+			ST:     []string{i64(0), i64(0)},
+			F:      []string{fbits(1), "7ff0000000000002"},
+		},
+	}
+
+	selectorCases := []struct {
+		query  string
+		series []memSeriesInJSON
+		ts     int64
+	}{
+		// A bare selector at a sample, between samples, and past the lookback window.
+		{`http_requests`, threeSeries, 0},
+		{`http_requests`, threeSeries, 60_000},
+		{`http_requests`, threeSeries, 120_000},
+		// 5m lookback: 300_000 still sees the 60s sample, 360_001 does not.
+		{`http_requests`, threeSeries, 359_999},
+		{`http_requests`, threeSeries, 360_000},
+		{`http_requests`, threeSeries, 360_001},
+		// A matcher that selects one series, and one that selects none.
+		{`http_requests{job="a"}`, threeSeries, 60_000},
+		{`http_requests{job="zzz"}`, threeSeries, 60_000},
+		{`{__name__="http_requests", job=~"a|b"}`, threeSeries, 60_000},
+		// `offset`, which shifts the reference time.
+		{`http_requests offset 1m`, threeSeries, 60_000},
+		{`http_requests offset -1m`, threeSeries, 0},
+		// `@`, which setOffsetForAtModifier turns into an offset — and this is the first
+		// corpus case where that rewrite changes an ANSWER rather than just an AST.
+		{`http_requests @ 0`, threeSeries, 300_000},
+		{`http_requests @ 60`, threeSeries, 0},
+		// The lookback boundary in isolation, which is half-open: a sample exactly
+		// lookbackDelta old is EXCLUDED.
+		{`gap`, gapped, 300_000},
+		{`gap`, gapped, 300_001},
+		{`gap`, gapped, 600_000},
+		{`gap`, gapped, 900_000},
+		{`gap`, gapped, 900_001},
+		// A stale marker: no sample, not a NaN sample.
+		{`stale`, staleSeries, 60_000},
+		{`stale`, staleSeries, 0},
+		// The selector-consuming arms that ARE ported: parens, unary minus over several
+		// series (where DropName and the metadata drop finally show), and `scalar` over a
+		// multi-member vector (which is NaN, not the first value).
+		{`(http_requests)`, threeSeries, 60_000},
+		{`-http_requests`, threeSeries, 60_000},
+		{`scalar(http_requests)`, threeSeries, 60_000},
+		{`scalar(http_requests{job="a"})`, threeSeries, 60_000},
+		// `timestamp(<selector>)` is deliberately absent: upstream routes it through
+		// rangeEvalTimestampFunctionOverVectorSelector, which reports the SAMPLE's timestamp
+		// where a matrix evaluation reports the STEP's. The port refuses it by name rather
+		// than answering with the step, so a case here could not pass. It is the next thing
+		// this file needs.
+		// A function over a selector, which is the ordinary Call path.
+		{`abs(-http_requests)`, threeSeries, 60_000},
+		{`ceil(http_requests)`, threeSeries, 60_000},
+	}
+	for _, c := range selectorCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(c.ts), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
+		})
+	}
+
+	// The sample limit over real series, where each series costs one.
+	for _, maxSamples := range []int{1, 2, 3, 4} {
+		emit(execIn{
+			Query: `http_requests`, Ts: i64(60_000),
+			Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
+			Series: threeSeries,
+		})
 	}
 
 	// A query that fails to build still comes back through Exec's Result, not as a panic.
