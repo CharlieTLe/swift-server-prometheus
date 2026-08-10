@@ -872,6 +872,35 @@ changing behaviour.
     was true only until a *caller* was ported. **"Unreachable by the oracle" is a
     statement about today's callers.**
 
+53. **Two of `linearRegression`'s three unfusable groupings need *catastrophic
+    cancellation* to be visible, and only one caller can produce it.**
+    `covXY := sumXY - sumX*sumY/n` and `varX := sumX2 - sumX*sumX/n` have the same
+    shape, and hoisting `1/n` out of either both fuses and reassociates. Yet with an
+    ordinary corpus the `covXY` change breaks and the `varX` one does not.
+
+    The reason is `interceptTime`. `deriv` passes `samples.Floats[0].T`, so `x` starts
+    at 0 and `sumX2` is comfortably larger than `sumX*sumX/n`. `predict_linear` passes
+    **`enh.Ts`**, so a tight cluster of samples far from the evaluation time gives `x`
+    values that are nearly equal and huge — and then `sumX2 - sumX*sumX/n` is a tiny
+    difference of enormous numbers, which is exactly where the grouping matters.
+
+    Five samples 1 ms apart at `t = 1.7e12` with `enh.Ts = 0` is what closed it. The
+    general point: **when two expressions share a shape but only one is pinned, the
+    difference is usually in the caller, not in the expression.**
+
+54. **`calcTrendValue`'s fusion is invisible on tidy inputs.** `tf*(s1-s0) + (1-tf)*b`
+    is one `FMADDD` (functions.go:900). With `tf` of 0.5 and small integer data both
+    products are exact and the fusion cannot be observed at all. Values with no exact
+    binary representation — `tf = 1/7`, data of `0.1`, `1/3`, `1e8 + 0.7` — are what
+    make it break. Same for the operand order: fusing `(1-tf)*b` instead of
+    `tf*(s1-s0)` is a different answer, and also only on such inputs.
+
+    Two perturbations in the same file are **provably** unobservable and are recorded
+    so nobody reads their silence as a gap: `double_exponential_smoothing`'s initial
+    `s0` (only read when `i-1 == 0`, where `calcTrendValue` short-circuits to `b`), and
+    `linearRegression`'s `i > 0` guard on the `constY` test (at `i == 0` the sample
+    *is* `initY`, so the comparison is false either way).
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

@@ -289,6 +289,136 @@ func genPromQLFunctionsOverTime(e *emitter) {
 		}
 	}
 
+	// --- deriv, predict_linear and double_exponential_smoothing.
+	//
+	// `linearRegression`'s constant-series short-circuit is the interesting part: an
+	// exactly flat series returns (0, initY) without touching the sums, and a flat
+	// INFINITE series returns (NaN, NaN). Both are in `regressionMatrices` below,
+	// along with series long and large enough for the four Kahan accumulators to
+	// carry a non-negligible compensation — the lesson from varianceOverTime.
+	regressionMatrices := [][][]fnSampleIn{
+		{},
+		{otSeries(metric, nil)},
+		// Fewer than two floats: nothing, and the ONE-float-plus-histogram case
+		// annotates where the zero-float case is silent.
+		{otSeries(metric, []otPoint{{t: 1000, f: 5}})},
+		{otSeries(metric, []otPoint{{t: 1000, f: 5}, {t: 2000, hist: "std/1"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}})},
+		// A clean straight line, where the slope is exact.
+		{otSeriesRun(metric, 0, 10, 2)},
+		// Flat: the constY short-circuit.
+		{otSeriesRun(metric, 7, 10, 0)},
+		// Flat and infinite: (NaN, NaN).
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: math.Inf(1)}, {t: 2000, f: math.Inf(1)}, {t: 3000, f: math.Inf(1)},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: math.Inf(-1)}, {t: 2000, f: math.Inf(-1)},
+		})},
+		// Flat except for the LAST sample, so constY is cleared late.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 3}, {t: 2000, f: 3}, {t: 3000, f: 3}, {t: 4000, f: 4},
+		})},
+		// Descending, and non-monotonic.
+		{otSeriesRun(metric, 100, 8, -3)},
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 9}, {t: 3000, f: 2}, {t: 4000, f: 8},
+			{t: 5000, f: 3},
+		})},
+		// Long runs at large magnitude: the Kahan compensation in all four sums.
+		{otSeriesRun(metric, 1e15, 60, 1)},
+		{otSeriesRun(metric, 1e10, 101, 7)},
+		{otSeriesAlternating(metric, 1e17, 1, 21)},
+		// NaN, which propagates through the sums.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, f: math.NaN()}, {t: 3000, f: 3}})},
+		// Sub-second spacing, so `x` keeps its fractional part.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 1001, f: 2}, {t: 1002, f: 4}})},
+		// Negative timestamps, and a span wide enough that the interceptTime choice
+		// matters.
+		{otSeries(metric, []otPoint{{t: -5000, f: 1}, {t: 0, f: 2}, {t: 5000, f: 4}})},
+		{otSeries(metric, []otPoint{{t: 1_700_000_000_000, f: 1}, {t: 1_700_000_060_000, f: 2}})},
+		// Mixed, so the annotation fires alongside a real answer.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 3}, {t: 3000, hist: "std/1"},
+		})},
+		{otSeries(withMetadata, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 3}, {t: 3000, hist: "std/1"},
+		})},
+		// `varX := sumX2 - sumX*sumX/n` is catastrophic cancellation when the x values
+		// are nearly equal — a tight cluster of samples FAR from interceptTime, which
+		// only predict_linear can produce because its interceptTime is enh.Ts. Without
+		// this, hoisting `1/n` out of that one expression was invisible while the same
+		// change to covXY was caught.
+		{otSeries(metric, []otPoint{
+			{t: 1_700_000_000_000, f: 1}, {t: 1_700_000_000_001, f: 2},
+			{t: 1_700_000_000_002, f: 4}, {t: 1_700_000_000_003, f: 7},
+			{t: 1_700_000_000_004, f: 11},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: 1_700_000_000_000, f: 1e9 + 1}, {t: 1_700_000_000_007, f: 1e9 + 3},
+			{t: 1_700_000_000_013, f: 1e9 + 2}, {t: 1_700_000_000_029, f: 1e9 + 9},
+		})},
+		// Values with no exact binary representation and a wide dynamic range, which is
+		// what makes calcTrendValue's fused `tf*(s1-s0) + (1-tf)*b` observable: with
+		// tidy inputs both products are exact and the fusion cannot be seen.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 0.1}, {t: 2000, f: 0.3}, {t: 3000, f: 0.7},
+			{t: 4000, f: 1.0 / 3.0}, {t: 5000, f: 1e8 + 0.7}, {t: 6000, f: 0.2},
+			{t: 7000, f: 1e-8}, {t: 8000, f: 12345.6789},
+		})},
+		{otSeriesRun(metric, 1.0/7.0, 30, 1.0/13.0)},
+	}
+
+	for _, m := range regressionMatrices {
+		for _, delayed := range []bool{false, true} {
+			emit(fnIn{
+				Fn: "deriv", Delayed: delayed, Ts: "1500",
+				Expr:     "deriv(http_requests_total[5m])",
+				Args:     [][]fnSampleIn{},
+				MatrixIn: m,
+			})
+		}
+		// predict_linear's interceptTime is enh.Ts, so the timestamp is part of the
+		// answer and not just context.
+		for _, ts := range []string{"0", "1500", "3000", "-1500"} {
+			for _, d := range []float64{0, 60, -60, 3600, 1e6, math.Inf(1), math.NaN()} {
+				emit(fnIn{
+					Fn: "predict_linear", Ts: ts,
+					Expr:     "predict_linear(http_requests_total[5m], 60)",
+					Args:     [][]fnSampleIn{{{F: fbits(d)}}},
+					MatrixIn: m,
+				})
+			}
+		}
+		// Only VALID factors: Go panics outside (0, 1), which would take the fixture
+		// generator down. The panic is a contract and is pinned Swift-side instead.
+		for _, sf := range []float64{0.1, 0.5, 0.9, 0.3, 1.0 / 7.0} {
+			for _, tf := range []float64{0.1, 0.5, 0.9, 0.7, 1.0 / 3.0} {
+				emit(fnIn{
+					Fn: "double_exponential_smoothing", Ts: "1500",
+					Expr: "double_exponential_smoothing(http_requests_total[5m], 0.5, 0.5)",
+					Args: [][]fnSampleIn{
+						{{F: fbits(sf)}}, {{F: fbits(tf)}},
+					},
+					MatrixIn: m,
+				})
+			}
+		}
+	}
+	// The guards: a missing scalar argument in each position.
+	emit(fnIn{
+		Fn: "predict_linear", Ts: "1500",
+		Expr:     "predict_linear(http_requests_total[5m], 60)",
+		Args:     [][]fnSampleIn{{}},
+		MatrixIn: regressionMatrices[5],
+	})
+	emit(fnIn{
+		Fn: "double_exponential_smoothing", Ts: "1500",
+		Expr:     "double_exponential_smoothing(http_requests_total[5m], 0.5, 0.5)",
+		Args:     [][]fnSampleIn{{{F: fbits(0.5)}}, {}},
+		MatrixIn: regressionMatrices[5],
+	})
+
 	for _, fn := range names {
 		for _, m := range matrices {
 			for _, delayed := range []bool{false, true} {
