@@ -1,8 +1,8 @@
 # Handoff
 
-Written at the end of the session that landed `promql/functions.go`'s eight **date** functions, and
-with them the `GoTime` calendar work they needed — including reproducing the band where Go's own
-calendar wraps, which `year(vector(-Inf))` reaches.
+Written at the end of the session that landed `promql/functions.go`'s **histogram family** — the five
+direct readers plus `histogram_fraction`/`quantile`/`quantiles`, and the bucket caches and
+classic/native split they sit on.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -16,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **42 of `FunctionCalls`' 89 bodies** are landed. Next: the rest of `functions.go`'s bodies (histograms, `*_over_time`, the sorts), then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **50 of `FunctionCalls`' 89 bodies** are landed. Next: the rest of `functions.go`'s bodies (`*_over_time` and the rate family, then the sorts), then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **320,758 committed differential cases, 433 tests**, on both Swift 6.4
+Green as of this commit: **321,471 committed differential cases, 440 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -40,9 +40,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,993       550
-  PromQL            2,903         –
-Tests              10,859
-oracle (Go)        13,838
+  PromQL            3,469         –
+Tests              11,124
+oracle (Go)        14,249
 ```
 
 ### Verify everything in one go
@@ -232,6 +232,28 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **Read the label-dropping predicate at each call site, not from its neighbour.** `simpleFloatFunc`
+  drops all three schema metadata labels; `simpleHistogramFunc`, eight lines away in the same file,
+  drops **only `__name__`** through an inline closure. The port used the neighbour's predicate and
+  failed 5 of 599 fixture cases. `histogram_quantile` then goes back to the three-label version, so
+  the same file has both. Quirk 48.
+- **Go reassigns a loop variable and then reads it, which inverts an annotation's metric name.**
+  `funcHistogramQuantile` does `sample.Metric = sample.Metric.DropReserved(…)` and *then*
+  `getMetricName(sample.Metric)`, so under the server's default settings the annotation is nameless
+  and under `promqltest`'s it is not. Keeping the original sample and passing *its* name is the
+  natural port and is wrong in the common case — 30 fixture cases, all annotation text. Quirk 49.
+- **An annotation's position range is invisible unless the fixture passes the query.**
+  `Annotations.AsStrings(query, …)` renders `(line:col)` only when `query` is non-empty, so a corpus
+  that passes `""` cannot see *which argument* an annotation is reported against. Four negative
+  controls survived on that alone, and `histogram_quantile`'s argument choices are genuinely strange
+  — `args[0]` for the quantile checks, `args[1]` for the reset and the monotonicity info, and for
+  `histogram_quantiles` the monotonicity info goes against the *string literal*. Pass the expression
+  as the query.
+- **A corpus needs a shape that makes the annotating branch fire, and "has a NaN" is not enough.**
+  `HistogramQuantile`'s two NaN annotations test `count < rank` and `count < h.Count`, where `count`
+  is the bucket total — so a histogram whose buckets sum to `Count` triggers neither, NaN sum or not.
+  Only a shape where `Count` **exceeds** the bucket total (real NaN observations, counted but in no
+  bucket) reaches them. Until that shape existed, every position-range control passed.
 - **"Reproducing a wrap would hide a bug rather than match anything observable" was a claim about
   reachability, and it was wrong.** `GoTime` computed the calendar straight from `unixSeconds` and said
   so in a comment. But Go computes it from `absSeconds(sec + unixToAbsolute)` — an `int64` add then a
@@ -501,7 +523,8 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromSchema` | `schema/labels.go` | new target. `isMetadataLabel` + `Metadata`; `IgnoreOverriddenMetadataLabelScratchBuilder` deferred to Phase 8 |
 | `PromQL` | `promql/engine.go`'s `EvalNodeHelper`, `EvalSeriesHelper` | **three fields only** — `ts`, `out`, `enableDelayedNameRemoval`. The caches arrive with their callers; the file lists which and whose |
 | `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` |
-| `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | 42 of `FunctionCalls`' 89 entries between them |
+| `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
+| `PromQL` | `promql/functions.go`'s histogram family | `simpleHistogramFunc` + the 5 readers, `histogram_fraction`/`quantile`/`quantiles`, `resetHistograms`, `metricWithBuckets`. 50 of `FunctionCalls`' 89 entries in total. Quirks 48-49, exception 13 |
 | `GoCompat.GoTime` | the calendar half of `time.Time` | `utcDate`/`utcClock` rebuilt on Go's **absolute** second count, plus `utcWeekday`, `utcYearDay`, `dateToAbsDays`, `daysInMonth`. Quirks 46-47 |
 | `GoCompat.GoConv.int64` | Go's `int64(float64)` | the saturating `FCVTZS`. `PromQLParser`'s `clampToInt64` now delegates to it |
 
@@ -546,10 +569,6 @@ differentially testable *now* and `engine.go` is not, which inverts the obvious 
    `hour`/`minute`/`month`/`year`. `Tests/PromQLTests/FunctionsTests.swift` asserts the table is a subset of
    Go's whose complement is **exactly** the named deferred set, so the next slice is a matter of
    deleting names from that list. What is left, and what each needs:
-   - `simpleHistogramFunc` + the `histogram_*` family, and
-     `funcHistogramQuantile`/`Fraction`/`Quantiles` on top of the already-ported `quantile.go` —
-     these need `EvalNodeHelper`'s bucket caches and `resetHistograms`, plus `getMetricName`,
-     `stringFromArg`, `stringSliceFromArgs`;
    - the range ones — `extrapolatedRate`/`extendedRate`/`histogramRate` and the `*_over_time` family,
      which need `interpolate`, `correctForCounterResets` and the load-bearing groupings below;
    - the sorts, which need **Go's pdqsort ported** — see the note further down, and note that
@@ -836,7 +855,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 47 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 49 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
