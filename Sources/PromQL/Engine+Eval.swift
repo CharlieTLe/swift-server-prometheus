@@ -335,6 +335,17 @@ final class Evaluator {
             }
             return try evalSeries(ctx, e.series, e.offset, false)
 
+        case let e as MatrixSelector:
+            // A range selector carries its own timestamps, so it is only ever evaluated once —
+            // `StepInvariantExpr` returns its result unduplicated for exactly that reason, and
+            // `rangeEval` never drives one.
+            if startTimestamp != endTimestamp {
+                throw EvaluationError.rangeEvaluationOfMatrixSelector
+            }
+            let (mat, ws2) = try matrixSelector(ctx, e)
+            _ = ws.merge(ws2)
+            return mat
+
         case let e as Call:
             if e.function?.name == "timestamp", let vs = e.args.first as? VectorSelector {
                 guard let call = functionCalls["timestamp"] else {
@@ -623,6 +634,14 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     case infoMetricWithHistogram(String)
     /// Go: `vectorSelectorSingle`'s `unknown value type %v` panic.
     case unknownValueType(String)
+    /// Go: `matrixSelector`'s two `errorf`s for a range modifier over histogram data.
+    case anchoredWithHistograms
+    case smoothedWithHistograms
+    /// Go: the `MatrixSelector` arm's `panic(errors.New(...))`, which asserts that a range
+    /// selector is only ever evaluated at one timestamp. `rangeEval` never drives one, and the
+    /// `Call` arm reads the matrix itself, so this is an internal invariant rather than a user
+    /// error — but it is modelled as a thrown error because Swift cannot recover a trap.
+    case rangeEvaluationOfMatrixSelector
 
     public var description: String {
         switch self {
@@ -632,6 +651,12 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
             return "this should be an info metric, with float samples: \(metric)"
         case .unknownValueType(let t):
             return "unknown value type \(t)"
+        case .anchoredWithHistograms:
+            return "anchored modifier is not supported with histograms"
+        case .smoothedWithHistograms:
+            return "smoothed modifier is not supported with histograms"
+        case .rangeEvaluationOfMatrixSelector:
+            return "cannot do range evaluation of matrix selector"
         }
     }
 }

@@ -87,6 +87,32 @@ public enum QueryError: Error, CustomStringConvertible {
     }
 }
 
+/// Go: the `runtime.Error` values `recover` wraps as `unexpected error: %w`.
+///
+/// Only the shapes the port can actually reach are modelled. A Swift index-out-of-range
+/// **traps**, and a trap is not catchable (PORTING.md exception 9), so where upstream's own
+/// panic is *reachable from a query* the port has to raise it deliberately and with Go's exact
+/// text — otherwise a query that Go answers with an error would crash the process.
+///
+/// The message shapes are Go's runtime's, and they differ by sign: a negative index has no
+/// length suffix, a too-large one does.
+///
+///     index out of range [-1]
+///     index out of range [0] with length 0
+public enum GoRuntimeError: Error, CustomStringConvertible, Equatable, Sendable {
+    case indexOutOfRange(Int, length: Int)
+
+    public var description: String {
+        switch self {
+        case .indexOutOfRange(let i, let length):
+            if i < 0 {
+                return "runtime error: index out of range [\(i)]"
+            }
+            return "runtime error: index out of range [\(i)] with length \(length)"
+        }
+    }
+}
+
 /// Go: `errWithWarnings` — an error carrying annotations that survive it.
 ///
 /// The only way a failed evaluation still returns warnings: `recover` unwraps this and

@@ -83,6 +83,9 @@ func runExecCase(in execIn) execOut {
 		NoStepSubqueryIntervalFn: func(int64) int64 { return int64(time.Minute / time.Millisecond) },
 		Parser: parser.NewParser(parser.Options{
 			EnableExperimentalFunctions: true,
+			// `anchored` and `smoothed` on a range selector, which `matrixSelector`'s
+			// `extendFloats` path needs. Parser-only: the engine has no matching flag.
+			EnableExtendedRangeSelectors: true,
 		}),
 	})
 	ts := time.UnixMilli(parseI64(in.Ts)).UTC()
@@ -349,6 +352,139 @@ func genPromQLExec(e *emitter) {
 			Query: `http_requests`, Ts: i64(60_000),
 			Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
 			Series: threeSeries,
+		})
+	}
+
+	// --- MATRIX SELECTORS. `foo[5m]` as a value in its own right, which is `matrixSelector`
+	// plus `matrixIterSlice`. Its window is `(mint, maxt]` — HALF-OPEN at the bottom and CLOSED
+	// at the top — so a point exactly on `mint` is excluded and one exactly on `maxt` is not.
+	// The `[2m]` cases at ts=120000 straddle that boundary on purpose.
+	//
+	// Note what a bare matrix selector does NOT go through: `rangeEval`. The `MatrixSelector`
+	// arm returns `matrixSelector`'s output directly, so the sample accounting here is
+	// `matrixIterSlice`'s alone.
+	matrixSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "m", "job", "b"},
+			[2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 3}),
+		fs([]string{"__name__", "m", "job", "a"},
+			[2]int64{0, 10}, [2]int64{60_000, 20}, [2]int64{120_000, 30}),
+		fs([]string{"__name__", "m", "job", "c"}, [2]int64{0, 100}),
+	}
+	// A stale marker inside the window: the point is dropped, and it does not count against
+	// the sample limit either.
+	matrixStale := []memSeriesInJSON{
+		{
+			Labels: []string{"__name__", "ms"},
+			T:      []string{i64(0), i64(60_000), i64(120_000)},
+			ST:     []string{i64(0), i64(0), i64(0)},
+			F:      []string{fbits(1), "7ff0000000000002", fbits(3)},
+		},
+	}
+	// Samples at irregular offsets, which is what makes `anchored` and `smoothed` differ from
+	// the plain form at all: with samples on the step grid the synthetic boundary points
+	// coincide with real ones.
+	matrixIrregular := []memSeriesInJSON{
+		fs([]string{"__name__", "mi"},
+			[2]int64{10_000, 1}, [2]int64{47_000, 5}, [2]int64{83_000, 9},
+			[2]int64{131_000, 20}),
+	}
+
+	// A chunk that SPANS the anchored window with no sample inside it. The querier admits the
+	// series (visibility is at chunk granularity) and then trims it to nothing (quirk 34), so
+	// `extendFloats` is handed an EMPTY slice — and `floats[len(floats)-1]` on an empty slice is
+	// an index out of range. Included to find out what upstream actually does.
+	matrixGap := []memSeriesInJSON{
+		fs([]string{"__name__", "mg"}, [2]int64{0, 1}, [2]int64{1_000_000, 2}),
+	}
+	// A sample exactly on the ORIGINAL maxt with a further sample inside the smoothed widening.
+	// That is the only shape where `extendFloats`' upper search can tell `>= maxt` from
+	// `> maxt`: with the boundary sample at the last index both spellings agree.
+	matrixTail := []memSeriesInJSON{
+		fs([]string{"__name__", "mt"},
+			[2]int64{10_000, 1}, [2]int64{47_000, 5}, [2]int64{83_000, 9},
+			[2]int64{131_000, 20}, [2]int64{200_000, 50}),
+	}
+
+	matrixCases := []struct {
+		query  string
+		series []memSeriesInJSON
+		ts     int64
+	}{
+		// The boundary. At ts=120000 with `[2m]`, mint is 0 (EXCLUDED) and maxt is 120000
+		// (INCLUDED) — so `c`, whose only sample is at 0, disappears entirely.
+		{`m[2m]`, matrixSeries, 120_000},
+		// `[2m1ms]` moves mint to -1000, which lets the sample at 0 back in.
+		{`m[2m1ms]`, matrixSeries, 120_000},
+		// Windows that hold everything, one point, and nothing.
+		{`m[10m]`, matrixSeries, 120_000},
+		{`m[1m]`, matrixSeries, 120_000},
+		{`m[1s]`, matrixSeries, 120_000},
+		{`m[10m]`, matrixSeries, 0},
+		{`m[10m]`, matrixSeries, 1_000_000},
+		{`m[5m]`, matrixSeries, 60_000},
+		// A matcher selecting one series, and one selecting none.
+		{`m{job="a"}[10m]`, matrixSeries, 120_000},
+		{`m{job="zzz"}[10m]`, matrixSeries, 120_000},
+		// `offset` shifts both ends of the window by the same amount.
+		{`m[2m] offset 1m`, matrixSeries, 180_000},
+		{`m[2m] offset -1m`, matrixSeries, 60_000},
+		// `@`, which `setOffsetForAtModifier` turns into an offset before evaluation — so the
+		// window is pinned and the evaluation time is irrelevant.
+		{`m[2m] @ 120`, matrixSeries, 1_000_000},
+		{`m[2m] @ 60`, matrixSeries, 0},
+		// A stale marker in the middle of the window.
+		{`ms[10m]`, matrixStale, 120_000},
+		{`ms[10m]`, matrixStale, 60_000},
+		// Irregular sample times, plain.
+		{`mi[2m]`, matrixIrregular, 120_000},
+		{`mi[2m]`, matrixIrregular, 131_000},
+		// `anchored`: `extendFloats` adds a point at each end of the ORIGINAL window, taking
+		// the nearest sample at or before it. The buffer is widened by one lookbackDelta to
+		// find that sample, which is the storage-side half of quirk 68.
+		{`mi[2m] anchored`, matrixIrregular, 120_000},
+		{`mi[1m] anchored`, matrixIrregular, 120_000},
+		{`mi[10m] anchored`, matrixIrregular, 131_000},
+		{`m[2m] anchored`, matrixSeries, 120_000},
+		// A window whose samples are ALL at or before mint: `extendFloats` returns empty, and
+		// the series is then dropped for having no points.
+		{`mi[1s] anchored`, matrixIrregular, 120_000},
+		// `smoothed`: two lookbackDeltas of buffer, mint back and maxt FORWARD, and the
+		// boundary points are interpolated rather than picked.
+		{`mi[2m] smoothed`, matrixIrregular, 120_000},
+		{`mi[1m] smoothed`, matrixIrregular, 120_000},
+		{`mi[10m] smoothed`, matrixIrregular, 131_000},
+		{`m[2m] smoothed`, matrixSeries, 120_000},
+		{`mi[1s] smoothed`, matrixIrregular, 120_000},
+		// The empty-window probe.
+		{`mg[2m] anchored`, matrixGap, 500_000},
+		{`mg[2m] smoothed`, matrixGap, 500_000},
+		{`mg[2m]`, matrixGap, 500_000},
+		// The smoothed upper-boundary search, where a sample sits exactly on the original maxt
+		// and another lies inside the widening.
+		{`mt[2m] smoothed`, matrixTail, 131_000},
+		{`mt[1m] smoothed`, matrixTail, 131_000},
+		{`mt[2m] anchored`, matrixTail, 131_000},
+		{`mt[2m]`, matrixTail, 131_000},
+	}
+	for _, c := range matrixCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(c.ts), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
+		})
+	}
+	// The sample limit against a matrix selector, which counts per POINT rather than per
+	// series — nine points across three series at `[10m]`, so the boundary is at 9.
+	for _, maxSamples := range []int{1, 2, 3, 5, 6, 7, 8, 9, 10} {
+		emit(execIn{
+			Query: `m[10m]`, Ts: i64(120_000),
+			Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
+			Series: matrixSeries,
+		})
+		// And with a stale marker in the window, where the dropped point does not count.
+		emit(execIn{
+			Query: `ms[10m]`, Ts: i64(120_000),
+			Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
+			Series: matrixStale,
 		})
 	}
 

@@ -70,7 +70,11 @@ struct EngineExecTests {
                     noStepSubqueryIntervalFn: { _ in 60_000 },
                     enableAtModifier: true,
                     enableNegativeOffset: true,
-                    parserOptions: Options(enableExperimentalFunctions: true)))
+                    // `enableExtendedRangeSelectors` is what admits `foo[5m] anchored` and
+                    // `smoothed`, which is `matrixSelector`'s `extendFloats` path. Parser-only:
+                    // the engine has no matching flag.
+                    parserOptions: Options(
+                        enableExperimentalFunctions: true, enableExtendedRangeSelectors: true)))
 
             let ts = Timestamp.time(Int64(input.ts)!)
             // A loaded in-memory storage when the case has series, and a querier that knows
@@ -134,7 +138,8 @@ struct EngineExecInvariantTests {
                 lookbackDelta: GoDuration(nanoseconds: 300_000_000_000),
                 noStepSubqueryIntervalFn: { _ in 60_000 },
                 enableAtModifier: true, enableNegativeOffset: true,
-                parserOptions: Options(enableExperimentalFunctions: true)))
+                parserOptions: Options(
+                    enableExperimentalFunctions: true, enableExtendedRangeSelectors: true)))
     }
 
     private func run(_ query: String, maxSamples: Int = 50_000_000, at ms: Int64 = 0) throws
