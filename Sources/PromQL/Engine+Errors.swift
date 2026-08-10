@@ -91,7 +91,13 @@ public enum QueryError: Error, CustomStringConvertible {
 ///
 /// The only way a failed evaluation still returns warnings: `recover` unwraps this and
 /// merges the annotations into the ones being returned.
-public struct ErrWithWarnings: Error, CustomStringConvertible {
+///
+/// `@unchecked Sendable` because `Error` refines `Sendable` in Swift 6 while `Annotations`
+/// is not: `AnnotationError` is an `AnyObject` protocol (ADR-6), so an `Annotations` holds
+/// references. They are immutable once constructed and never mutated through this value, so
+/// the checked conformance is what is missing, not the safety. Swift 6.1 rejects the
+/// unannotated form where 6.2 does not, which is what the floor build in CI is for.
+public struct ErrWithWarnings: Error, CustomStringConvertible, @unchecked Sendable {
     public var err: any Error
     public var warnings: Annotations
 
