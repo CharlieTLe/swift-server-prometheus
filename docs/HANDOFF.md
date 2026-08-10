@@ -939,6 +939,30 @@ will not announce itself — `sum_over_time` will just be a few ULPs out.
 
 
 
+### 5d. Where Phase 6 starts, and what already exists for it
+
+Recorded now so "the TSDB" stops being one undifferentiated 68k-line lump. Two targets already
+exist and are **protocol surface only**, which is exactly where Phase 6 begins:
+
+* `PromChunkEnc` — `Chunk.swift` declares `Encoding` (`none`, `xor`, `xor2`, `histogram`,
+  `floatHistogram`), `MaxBytesPerXORChunk` and the iterator protocol; its own header says "the
+  concrete encodings — XOR, XOR2, histogram, float histogram — arrive in Phase 6". `NopIterator`
+  is the only implementation.
+* `PromChunks` — `Chunks.swift` and `Sample.swift`, the metadata and sample protocols the
+  encodings and the block reader both need.
+
+So the first Phase 6 slice is **`tsdb/chunkenc/xor.go`**: `xorAppender`/`xorIterator`, the
+bit-level reader and writer, and the delta-of-delta plus XOR-of-value encoding. It is the right
+entry point because it is self-contained (bytes in, samples out, no index and no WAL), it has an
+obvious differential shape — append a sample sequence, compare the encoded BYTES and then the
+decoded round trip — and everything downstream in Phase 6 reads chunks, so nothing else can be
+verified end to end until it exists.
+
+Order after that, from the phase table: XOR2, the histogram encodings, then `tsdb/index`
+(postings, the symbol table, the label index), then the WAL and tombstones, then `tsdb.DB`
+itself. `PromTestStorage`'s in-memory `Queryable` (#20) is already pinned against a real
+`tsdb.DB`, so it can act as the differential reference for block reads as they land.
+
 ### 5c. The next slice, scoped: `matrixSelector` / `matrixIterSlice`
 
 Read once so the next session does not spend context re-deriving it. Everything it needs on the
