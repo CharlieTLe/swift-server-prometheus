@@ -157,7 +157,7 @@ struct EngineExecInvariantTests {
         // selector and a function over a range all WORK now. What is left is the aggregations,
         // the vector binops, subqueries, and the three series-shaped functions.
         for query in [
-            "sum(foo)", "foo + bar", "1 + foo", "foo unless bar",
+            "sum(foo)", "avg without (a) (foo)", "topk(3, foo)", "count_values(\"v\", foo)",
             "rate(foo[5m:1m])", "max_over_time(foo[5m])[1h:1m]",
             "label_replace(foo, \"a\", \"b\", \"c\", \"d\")",
         ] {
@@ -180,6 +180,10 @@ struct EngineExecInvariantTests {
             "rate(foo[5m])", "sum_over_time(foo[5m])", "absent_over_time(foo[5m])",
             "quantile_over_time(0.5, foo[5m])", "last_over_time(foo[5m])",
             "predict_linear(foo[5m], 3600)", "foo[5m]", "foo[5m] anchored",
+            // The vector binops, all four shapes.
+            "foo + bar", "foo and bar", "foo or bar", "foo unless bar",
+            "foo > bar", "foo * on(a) group_left bar", "1 + foo", "foo > 1",
+            "foo > bool 1", "1 < foo",
         ] {
             let res = try run(query)
             #expect(

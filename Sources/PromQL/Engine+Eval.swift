@@ -205,7 +205,7 @@ final class Evaluator {
 
         switch expr {
         case let e as NumberLiteral:
-            return try rangeEval(ctx, &ws, []) { _, enh in
+            return try rangeEval(ctx, nil, &ws, []) { _, _, enh in
                 var out = enh.out
                 out.append(Sample(f: e.val, metric: .empty))
                 return (out, Annotations())
@@ -248,17 +248,73 @@ final class Evaluator {
         case let e as BinaryExpr:
             let lt = e.lhs.type
             let rt = e.rhs.type
-            guard lt == .scalar && rt == .scalar else {
+            switch (lt, rt) {
+            case (.scalar, .scalar):
+                return try rangeEval(ctx, nil, &ws, [e.lhs, e.rhs]) { v, _, enh in
+                    // `try` rather than `try?`: an unported operator must surface, not become NaN.
+                    let val = try scalarBinop(e.op, v[0].samples[0].f, v[1].samples[0].f)
+                    var out = enh.out
+                    out.append(Sample(f: val))
+                    return (out, Annotations())
+                }
+
+            case (.vector, .vector):
+                // The three set operators short-circuit to their own functions; everything else
+                // goes through `VectorBinop`. All four pass the matching, which is what turns on
+                // `rangeEval`'s signature machinery.
+                guard let matching = e.vectorMatching else {
+                    throw EvaluatorNotPorted(
+                        nodeType: "BinaryExpr", detail: "vector/vector with no matching")
+                }
+                switch e.op {
+                case .land:
+                    return try rangeEval(ctx, matching, &ws, [e.lhs, e.rhs]) { v, sh, enh in
+                        (try self.vectorAnd(v[0], v[1], matching, sh[0], sh[1], enh), Annotations())
+                    }
+                case .lor:
+                    return try rangeEval(ctx, matching, &ws, [e.lhs, e.rhs]) { v, sh, enh in
+                        (try self.vectorOr(v[0], v[1], matching, sh[0], sh[1], enh), Annotations())
+                    }
+                case .lunless:
+                    return try rangeEval(ctx, matching, &ws, [e.lhs, e.rhs]) { v, sh, enh in
+                        (
+                            try self.vectorUnless(v[0], v[1], matching, sh[0], sh[1], enh),
+                            Annotations()
+                        )
+                    }
+                default:
+                    return try rangeEval(ctx, matching, &ws, [e.lhs, e.rhs]) { v, sh, enh in
+                        let (vec, err) = try self.vectorBinop(
+                            e.op, v[0], v[1], matching, e.returnBool, sh[0], sh[1], enh,
+                            e.positionRange)
+                        return (vec, handleVectorBinopError(err, e))
+                    }
+                }
+
+            case (.vector, .scalar):
+                return try rangeEval(ctx, nil, &ws, [e.lhs, e.rhs]) { v, _, enh in
+                    let (vec, err) = self.vectorScalarBinop(
+                        e.op, v[0], Scalar(t: 0, v: v[1].samples[0].f), false, e.returnBool, enh,
+                        e.positionRange)
+                    return (vec, handleVectorBinopError(err, e))
+                }
+
+            case (.scalar, .vector):
+                // Note the argument order: the VECTOR is still passed as `lhs`, with `swap` true.
+                // That is what lets the metric always come from the vector.
+                return try rangeEval(ctx, nil, &ws, [e.lhs, e.rhs]) { v, _, enh in
+                    let (vec, err) = self.vectorScalarBinop(
+                        e.op, v[1], Scalar(t: 0, v: v[0].samples[0].f), true, e.returnBool, enh,
+                        e.positionRange)
+                    return (vec, handleVectorBinopError(err, e))
+                }
+
+            default:
+                // Go falls out of the switch and returns nil, which panics later. The parser
+                // rejects every remaining combination, so this is unreachable.
                 throw EvaluatorNotPorted(
                     nodeType: "BinaryExpr",
                     detail: "\(lt.documented) \(e.op.description) \(rt.documented)")
-            }
-            return try rangeEval(ctx, &ws, [e.lhs, e.rhs]) { v, enh in
-                // `try` rather than `try?`: an unported operator must surface, not become NaN.
-                let val = try scalarBinop(e.op, v[0].samples[0].f, v[1].samples[0].f)
-                var out = enh.out
-                out.append(Sample(f: val))
-                return (out, Annotations())
             }
 
         case let e as StepInvariantExpr:
@@ -399,7 +455,7 @@ final class Evaluator {
                 _ = ws.merge(warnings)
                 return mat
             }
-            return try rangeEval(ctx, &ws, e.args) { v, enh in
+            return try rangeEval(ctx, nil, &ws, e.args) { v, _, enh in
                 let (vec, annos) = try call(v, Matrix(), e.args, enh)
                 return (vec, warnings.merge(annos))
             }
@@ -414,8 +470,11 @@ final class Evaluator {
     /// `matching` is always nil here: the vector-matching path arrives with the vector
     /// binops. The instant shortcut is reproduced exactly, including its ordering guarantee.
     func rangeEval(
-        _ ctx: GoContext, _ warnings: inout Annotations, _ exprs: [any Expr],
-        _ funcCall: ([Vector], EvalNodeHelper) throws -> (Vector, Annotations)
+        _ ctx: GoContext, _ matching: VectorMatching?, _ warnings: inout Annotations,
+        _ exprs: [any Expr],
+        _ funcCall: ([Vector], [[EvalSeriesHelper]], EvalNodeHelper) throws -> (
+            Vector, Annotations
+        )
     ) throws -> Matrix {
         let originalNumSamples = currentSamples
 
@@ -441,6 +500,50 @@ final class Evaluator {
         let enh = EvalNodeHelper()
         enh.enableDelayedNameRemoval = enableDelayedNameRemoval
         var tempNumSamples = currentSamples
+
+        // The join signatures, computed ONCE across both sides before the step loop and turned
+        // into small integers so the per-step lookups are array indexing. `useSignatures` is
+        // just `matching != nil`, which the caller decides — the set operators and the
+        // vector/vector arms pass one, the scalar arms pass nil.
+        //
+        // `sigf`'s two branches are not mirror images: `on` keeps the named labels, while
+        // `ignoring` drops them **plus `__name__`**, which it arranges by prepending
+        // `labels.MetricName` to the list before sorting. `bytesWithoutLabels` does not drop the
+        // name of its own accord, so that prepend is load-bearing.
+        var seriesHelpers: [[EvalSeriesHelper]] = []
+        var bufHelpers: [[EvalSeriesHelper]] = []
+        let useSignatures = matching != nil
+        if let matching {
+            var names = matching.matchingLabels
+            let sigf: (Labels) -> [UInt8]
+            if matching.on {
+                names.sort()
+                sigf = { $0.bytesWithLabels(names) }
+            } else {
+                names = [LabelName.metricName] + names
+                names.sort()
+                sigf = { $0.bytesWithoutLabels(names) }
+            }
+
+            seriesHelpers = matrixes.map {
+                [EvalSeriesHelper](repeating: EvalSeriesHelper(), count: $0?.series.count ?? 0)
+            }
+            bufHelpers = seriesHelpers.map { _ in [] }
+
+            var signatureToOrdinal: [[UInt8]: Int] = [:]
+            for i in matrixes.indices {
+                for (si, series) in (matrixes[i]?.series ?? []).enumerated() {
+                    let strSig = sigf(series.metric)
+                    if let ord = signatureToOrdinal[strSig] {
+                        seriesHelpers[i][si] = EvalSeriesHelper(sigOrdinal: ord)
+                        continue
+                    }
+                    signatureToOrdinal[strSig] = enh.numSigs
+                    seriesHelpers[i][si] = EvalSeriesHelper(sigOrdinal: enh.numSigs)
+                    enh.numSigs += 1
+                }
+            }
+        }
 
         // Go: `seriess map[uint64]seriesAndTimestamp` — the output series, keyed by label
         // hash, with the last timestamp each was written at so a duplicate *within one step*
@@ -468,11 +571,16 @@ final class Evaluator {
             var vectors = [Vector]()
             vectors.reserveCapacity(exprs.count)
             for i in matrixes.indices {
-                vectors.append(try gatherVector(ts, &matrixes[i]))
+                var bh: [EvalSeriesHelper] = []
+                let sh = useSignatures ? seriesHelpers[i] : []
+                vectors.append(try gatherVector(ts, &matrixes[i], &bh, sh))
+                if useSignatures {
+                    bufHelpers[i] = bh
+                }
             }
 
             enh.ts = ts
-            let (result, ws) = try funcCall(vectors, enh)
+            let (result, ws) = try funcCall(vectors, bufHelpers, enh)
             enh.out = Vector()
             _ = warnings.merge(ws)
 
@@ -563,7 +671,10 @@ final class Evaluator {
     /// The histogram size is deliberately NOT added: Go's comment says it only copies the
     /// pointer. Swift's value semantics make that a real copy, but the *accounting* stays
     /// Go's — the count is the contract, not the allocation.
-    private func gatherVector(_ ts: Int64, _ input: inout Matrix?) throws -> Vector {
+    private func gatherVector(
+        _ ts: Int64, _ input: inout Matrix?, _ bufHelpers: inout [EvalSeriesHelper],
+        _ seriesHelpers: [EvalSeriesHelper]
+    ) throws -> Vector {
         guard input != nil else { return Vector() }
         var out = Vector()
         out.samples.reserveCapacity(input!.series.count)
@@ -579,6 +690,12 @@ final class Evaluator {
                 input!.series[i].histograms.removeFirst()
             } else {
                 continue
+            }
+            // The helper travels WITH the sample, so `bufHelpers` is parallel to the gathered
+            // vector rather than to the input matrix — a series with no sample at this step
+            // contributes neither.
+            if !seriesHelpers.isEmpty {
+                bufHelpers.append(seriesHelpers[i])
             }
             currentSamples += 1
             if currentSamples > maxSamples {
@@ -662,6 +779,21 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     /// `Call` arm reads the matrix itself, so this is an internal invariant rather than a user
     /// error — but it is modelled as a thrown error because Swift cannot recover a trap.
     case rangeEvaluationOfMatrixSelector
+    /// Go: the three panics of the vector-matching machinery. All are `panic(...)` or
+    /// `ev.errorf`, so `recover` turns them into ordinary query errors.
+    ///
+    /// The first two are Go `panic("...")` with a bare string, which `recover`'s default arm
+    /// formats with `%v` — so the message is the string itself.
+    case setOperatorCardinality
+    case manyToManyOnlyForSetOperators
+    /// Go: `found duplicate series for the match group %s on the %s hand-side of the
+    /// operation: [%s, %s];many-to-many matching not allowed: matching labels must be unique on
+    /// one side`. Note the **missing space** after the semicolon — upstream concatenates two
+    /// literals and the second starts with `;`.
+    case duplicateSeriesForMatchGroup(
+        matchedLabels: String, oneSide: String, a: String, b: String)
+    case multipleMatchesNeedExplicitGrouping
+    case groupingLabelsMustEnsureUniqueMatches
     /// Go: the `Call` arm's `anchored/smoothed modifier can only be used with: %s - not with %s`.
     /// The permitted names are `slices.Sorted(maps.Keys(...))` over a Go map, so the sort is
     /// upstream's own defence against a nondeterministic message.
@@ -681,6 +813,19 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
         case .invalidTrendFactor(let tf):
             return
                 "invalid trend factor. Expected: 0 < tf < 1, got: \(GoFloat.format(tf, .f, precision: 6))"
+        case .setOperatorCardinality:
+            return "set operations must only use many-to-many matching"
+        case .manyToManyOnlyForSetOperators:
+            return "many-to-many only allowed for set operators"
+        case .duplicateSeriesForMatchGroup(let matchedLabels, let oneSide, let a, let b):
+            var s = "found duplicate series for the match group \(matchedLabels) on the "
+            s += "\(oneSide) hand-side of the operation: [\(a), \(b)]"
+            s += ";many-to-many matching not allowed: matching labels must be unique on one side"
+            return s
+        case .multipleMatchesNeedExplicitGrouping:
+            return "multiple matches for labels: many-to-one matching must be explicit (group_left/group_right)"
+        case .groupingLabelsMustEnsureUniqueMatches:
+            return "multiple matches for labels: grouping labels must ensure unique matches"
         case .anchoredWithHistograms:
             return "anchored modifier is not supported with histograms"
         case .smoothedWithHistograms:
@@ -1204,7 +1349,7 @@ extension Evaluator {
             MemoizedSeriesIterator($0.iterator(nil), delta: durationMilliseconds(lookbackDelta) - 1)
         }
 
-        return try rangeEval(ctx, &ws, []) { _, enh in
+        return try rangeEval(ctx, nil, &ws, []) { _, _, enh in
             if let t = vs.timestamp {
                 // Issue 8433: without this an `@`-pinned selector yields one point in total
                 // rather than one per step.

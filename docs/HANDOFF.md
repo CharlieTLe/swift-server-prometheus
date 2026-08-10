@@ -1,11 +1,12 @@
 # Handoff
 
-Written at the end of the session that landed **range queries**, the **matrix selector** and
-the **`matrixArg` half of the `Call` arm** — so `rate(foo[5m])`, `sum_over_time(foo[1h])` and
-`absent_over_time(foo[5m])` now evaluate, as instant *and* range queries. **All 82 ported
-`FunctionCalls` bodies are reachable from a query.** What is left in Phase 5 is the
-aggregations, the vector binops, subqueries, the three series-shaped functions
-(`label_replace`/`label_join`/`info`), and then `promqltest`.
+Written at the end of the session that landed **range queries**, the **matrix selector**, the
+**`matrixArg` half of the `Call` arm** and the **vector binary operators**. So
+`rate(foo[5m])`, `sum_over_time(foo[1h])`, `foo + on(job) group_left bar`, `foo and bar` and
+`1 < foo` all evaluate, as instant *and* range queries, and all 82 ported `FunctionCalls`
+bodies are reachable. What is left in Phase 5 is the **aggregations**, **subqueries**, the
+three series-shaped functions (`label_replace`/`label_join`/`info`) and the binop **fill
+modifiers** — then `promqltest`, which is the exit gate.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -19,11 +20,11 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. Next: the aggregations and the vector binops, then subqueries (`evalSubquery`), then `label_replace`/`label_join`/`info`, then `promqltest` |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). Next: the **aggregations** (`rangeEvalAgg`, `aggregation`, `fParams`, `vectorByValueHeap`), then subqueries (`evalSubquery`), then `label_replace`/`label_join`/`info` and the binop fill modifiers, then `promqltest` |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started |
 
-Green as of this commit: **348,913 committed differential cases, 499 tests**, on both Swift 6.4
+Green as of this commit: **349,029 committed differential cases, 504 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -32,7 +33,7 @@ Sources/            src     generated
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
-  PromLabels          798         –
+  PromLabels          854         –
   PromSchema          148         –
   PromEncoding        343         –
   PromRegex         3,312     3,974
@@ -44,9 +45,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,995       550
-  PromQL            9,438         –
-Tests             12,947
-oracle (Go)       18,755
+  PromQL           10,272         –
+Tests             13,131
+oracle (Go)       18,958
 ```
 
 ### Verify everything in one go
@@ -91,7 +92,8 @@ mistaken for a failing test, and it requires the `"Test run with"` line, so a `-
 nothing cannot masquerade as green (§4). Copy one for the next slice rather than perturbing by
 hand; a patch string that no longer matches reports `SKIP`, which is loud. Current scores:
 range queries **12 of 15**, matrix selector **24 of 25**, the Call arm's matrix half **22 of
-31**, with every survivor's argument written into the source next to the code it concerns.
+31**, the vector binops **29 of 34**, with every survivor's argument written into the source
+next to the code it concerns.
 
 **Never format a float with Swift's defaults.** `Double.description`, `"\(x)"` and
 `String(describing:)` do not match Go. Use `GoFloat.format`. This is ADR-4 and it is the single
@@ -262,6 +264,25 @@ where I had written a plausible expectation and the fixture proved the implement
   controls into failures. Quirk 59. Alongside quirks 51 (magnitude for Kahan) and 54 (inexactness for
   fusion, cancellation for grouping), the rule is: **ask which *field* of the input each branch reads,
   and make sure two cases differ in it.**
+- **Five green controls in one slice, and every one of them a proof — because the *type* was the
+  argument.** The vector binops' survivors all came down to an invariant somewhere else:
+  `VectorAnd`'s empty-right short-circuit is redundant because no ordinal can be marked present;
+  `resultMetric`'s two-sided cache key is redundant because two rights for one left *is* the
+  many-to-many error; `bytesWithLabels`' trailing separator is redundant because `Labels` admits
+  neither an empty name nor an empty value, so `v1 n2` cannot split two ways; and
+  `VectorscalarBinop`'s `!errors.Is(err, PromQLWarning)` cannot fire because the only warning
+  `vectorElemBinop` produces needs a right-hand histogram, which a scalar never is. The habit
+  worth taking: when a control survives, the argument is often about a *neighbouring type's*
+  guarantees, not about the corpus.
+- **A float-only corpus leaves three quarters of a four-quadrant function untested, and the fix is
+  a unit test rather than more cases.** `vectorElemBinop` dispatches on `(hlhs, hrhs)`, and
+  `promql/exec` is float-only on purpose — a histogram through a real `tsdb.DB` re-derives
+  `CounterResetHint`, which is Phases 6-7's subject. So three controls survived. It is a free
+  function over plain values, and the arithmetic beneath it is already pinned by
+  `Fixtures/histogram/*`, so `VectorElemBinopTests` asserts the **dispatch** — which operator each
+  quadrant allows, and that every rejection is an *info* rather than an error. Same shape as
+  `MatrixIterSliceTests`: when the corpus cannot reach a layer, drop a level rather than
+  contorting the corpus.
 - **"Unreachable by the oracle" cost a crash this time, not just a blind spot — and the fix
   changed a type.** `funcDoubleExponentialSmoothing` panics in Go on a smoothing or trend factor
   outside `(0, 1)`, and the port had `preconditionFailure`. That was defensible while the oracle
@@ -727,6 +748,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
 | `PromQL` | `promql/functions.go`'s float-only range aggregations | `aggrOverTime`, `compareOverTime`, `varianceOverTime`, `quantile_over_time`, `mad_over_time` and the 13 entries around them. Quirks 50-52 |
 | `PromQL` | `promql/functions.go`'s `extendedRate` | plus `interpolate`, `pickOrInterpolateLeft`/`Right`, `correctForCounterResets`. Quirk 63 |
+| `PromQL` | `promql/engine.go`'s vector binops | `VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, `changesMetricSchema`, `handleVectorBinopError`, plus `rangeEval`'s signature ordinals and `Labels.bytesWith(out)Labels`. Quirks 87-90 |
 | `PromQL` | `promql/engine.go`'s `matrixArg` half of the `Call` arm | plus the `absent_over_time` tail, the extended-modifier validation and the rate/increase non-counter infos. **All 82 bodies now reachable.** Quirks 85-86 |
 | `PromQL` | `promql/engine.go`'s `matrixSelector`, `matrixIterSlice`, `extendFloats` and the `MatrixSelector` arm of `eval` | the range selector as a value, `anchored` and `smoothed` included. Quirks 82-84 |
 | `PromQL` | `promql/engine.go`'s `execEvalStmt` (range), `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication, the sort-in-range-query warning | **range queries in full**, for every arm that was already reachable. Quirks 80-81, exception 14 |
@@ -1139,7 +1161,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **fourteen documented exceptions**, plus 86 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **fourteen documented exceptions**, plus 90 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

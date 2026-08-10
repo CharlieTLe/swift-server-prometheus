@@ -74,7 +74,7 @@
     "promql/bucketfraction.jsonl": { "sha256": "d6a77ad868c3a9266ccffb479d84372e896d8877d60f2aaa416c2a3e4f9b24f1", "lines": 72 },
     "promql/bucketquantile.jsonl": { "sha256": "f3636d968cdfba3f0fd77c8fecad9adb810ef0dffa0e0dc753efcfeb6132df94", "lines": 196 },
     "promql/exec-range.jsonl": { "sha256": "dc7a5c0c30e79163e7a5100901865ba7860d08ef9ec0ba35a9de234a3e50fa1f", "lines": 491 },
-    "promql/exec.jsonl": { "sha256": "67dd5646dedc769563896609482eb07b57447a38f858275adad265165a4562b2", "lines": 467 },
+    "promql/exec.jsonl": { "sha256": "546b7cc2746e6f3dced79b38efb97e9463dbb04530989c9e28ecaa1379f44ac8", "lines": 583 },
     "promql/functioncallnames.jsonl": { "sha256": "d666fe08dfc81f182f3691e76eced10da491293041a999ce92e9d7feee52a235", "lines": 1 },
     "promql/functionnames.jsonl": { "sha256": "d666fe08dfc81f182f3691e76eced10da491293041a999ce92e9d7feee52a235", "lines": 1 },
     "promql/functions-date.jsonl": { "sha256": "e74b04a106f4646893ac584cd95483af10bbea38b2be700a409669eea73bf310", "lines": 152 },
