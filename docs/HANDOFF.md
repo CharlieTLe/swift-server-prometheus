@@ -17,7 +17,8 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
 | 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`), the last four being the sorts — which needed Go's pdqsort and `natsort.Compare` ported first. `engine.go` has started: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime` and the `limit_ratio` sampler. the error vocabulary, and `Matrix.Sort` through the ported pdqsort. `Exec`, and the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`). `timestamp` over a selector and `mergeSeriesWithSameLabelset`. Next: `matrixSelector`/`matrixIterSlice` — which makes all 82 `FunctionCalls` bodies reachable — then the vector binops and the aggregations, then `promqltest` |
-| 6–10 | not started |
+| 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
+| 7–10 | not started |
 
 Green as of this commit: **336,812 committed differential cases, 484 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
