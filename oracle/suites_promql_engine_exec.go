@@ -152,6 +152,11 @@ func genPromQLExec(e *emitter) {
 		// Right-associativity of `^`, and precedence against unary minus.
 		`2 ^ 3 ^ 2`, `-2 ^ 2`, `(-2) ^ 2`,
 		// Division and modulo by zero, and NaN operands — the rendering is GoFloat's.
+		// atan2, PromQL's only binary math operator: the sign of zero and the quadrant are
+		// what its nine ordered special cases decide.
+		`1 atan2 1`, `-1 atan2 1`, `1 atan2 -1`, `-1 atan2 -1`,
+		`0 atan2 0`, `0 atan2 -1`, `1 atan2 0`, `-1 atan2 0`,
+		`Inf atan2 Inf`, `Inf atan2 -Inf`, `NaN atan2 1`, `1 atan2 NaN`,
 		`1 / 0`, `-1 / 0`, `0 / 0`, `1 % 0`, `NaN + 1`, `NaN == NaN`, `NaN != NaN`,
 		`Inf - Inf`, `Inf / Inf`, `Inf * 0`,
 		// Functions with no matrix argument, over scalars and over `vector()`.

@@ -60,6 +60,15 @@ struct GoMathTrigTests {
         }
     }
 
+    @Test("Atan2 matches Go on every committed case, sign of zero included")
+    func atan2() throws {
+        // Two inputs, so the case is a pair. The zero/infinity grid is the point: atan2's nine
+        // special cases are ORDERED, and every one of them carries y's sign.
+        try Fixtures.check("gocompat/atan2.jsonl", FixtureCase<[String], String>.self) { pair in
+            hexBits(GoMath.atan2(doubleFromHexBits(pair[0]), doubleFromHexBits(pair[1])))
+        }
+    }
+
     @Test("Log10 matches Go on every committed case")
     func log10() throws {
         try Fixtures.check("gocompat/log10.jsonl", FixtureCase<String, String>.self) { hex in

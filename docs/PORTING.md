@@ -1425,6 +1425,22 @@ changing behaviour.
     Alongside quirks 75 and 71 this is the third form of honest partial coverage: not "a control
     that cannot fail", but a *whole function* whose callers cannot yet reach it.
 
+79. **`math.Atan2`'s nine special cases are ORDERED, and its NaN carries Go's payload.**
+    `y == 0` is tested *before* `x == 0`, so `atan2(0, 0)` is `+0` and not `π/2`. Every result
+    goes through `Copysign` with `y`'s sign, which is what separates `atan2(-0, -1) == -π` from
+    `atan2(+0, -1) == +π`. The `y == 0` guard is `x >= 0 && !Signbit(x)`: the first half is
+    redundant, because `-0 >= 0` is true, so the `Signbit` test is the one doing the work.
+
+    After the special cases it is `Atan(y/x)` plus a quadrant shift — the division rounds first,
+    then Go's own `satan` runs on the result — so it inherits `atan`'s divergence from libm
+    (quirks 39-40). PromQL's `atan2` operator now goes through it instead of refusing.
+
+    34 of 3,309 corpus cases failed on the first run, all for one reason: `Double.nan` is
+    `0x7FF8000000000000` and Go's `math.NaN()` is `0x7FF8000000000001`. `GoMath.goNaN` already
+    existed with a comment saying exactly that, and the new code still reached for Swift's. The
+    payload is observable because results are rendered as text — so a corpus that included the
+    NaN grid caught in one run what review had already written down and missed.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

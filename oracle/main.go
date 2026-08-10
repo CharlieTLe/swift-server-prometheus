@@ -134,12 +134,15 @@ var suites = map[string]func(*emitter){
 	// Phase 5: the transcendentals `promql/functions.go` reaches through
 	// `simpleFloatFunc`. Every one of them diverges from libm on 15-67% of
 	// inputs. See oracle/suites_gomath_trig.go.
-	"gocompat/sin":   genGoSin,
-	"gocompat/cos":   genGoCos,
-	"gocompat/tan":   genGoTan,
-	"gocompat/asin":  genGoAsin,
-	"gocompat/acos":  genGoAcos,
-	"gocompat/atan":  genGoAtan,
+	"gocompat/sin":  genGoSin,
+	"gocompat/cos":  genGoCos,
+	"gocompat/tan":  genGoTan,
+	"gocompat/asin": genGoAsin,
+	"gocompat/acos": genGoAcos,
+	"gocompat/atan": genGoAtan,
+	// `atan2` is PromQL's only binary math operator, and scalarBinop refuses it until
+	// GoMath.atan2 exists. See the tail of oracle/suites_gomath_trig.go.
+	"gocompat/atan2": genGoAtan2,
 	"gocompat/log10": genGoLog10,
 	// Phase 5: the hyperbolics `promql/functions.go` reaches through
 	// `simpleFloatFunc`, plus `math.Log1p`, which three of them are built on and

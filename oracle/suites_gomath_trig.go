@@ -449,3 +449,71 @@ func parseFloatExp(k int) (float64, error) {
 	}
 	return v, nil
 }
+
+// ------------------------------------------------------------- gocompat/atan2
+
+// Atan2 is nine special cases and then `Atan(y/x)` with a quadrant shift, so it inherits
+// atan's divergence from libm — and adds its own trap: the special cases are ORDERED, with
+// `y == 0` tested before `x == 0`, so atan2(0, 0) is +0 and not Pi/2. Every result carries y's
+// sign through Copysign, which is what separates atan2(-0, -1) from atan2(+0, -1).
+//
+// The corpus is therefore the sign/zero/infinity grid in full, plus values that land either
+// side of satan's branch boundaries once divided.
+func genGoAtan2(e *emitter) {
+	specials := []float64{
+		0, math.Copysign(0, -1), 1, -1, 2, -2,
+		math.Inf(1), math.Inf(-1), math.NaN(),
+		math.MaxFloat64, -math.MaxFloat64,
+		math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64,
+		// Ratios that straddle satan's 0.66 and 2.414 boundaries.
+		0.66, 2.41421356237309504880, 3, 0.5,
+	}
+	pairs := [][2]float64{}
+	for _, y := range specials {
+		for _, x := range specials {
+			pairs = append(pairs, [2]float64{y, x})
+		}
+	}
+	// Ratios at the branch boundaries, approached from both sides.
+	for _, r := range []float64{0.66, 2.41421356237309504880} {
+		for _, d := range []float64{0, 1, -1} {
+			v := r
+			if d > 0 {
+				v = math.Nextafter(r, math.Inf(1))
+			} else if d < 0 {
+				v = math.Nextafter(r, math.Inf(-1))
+			}
+			pairs = append(pairs,
+				[2]float64{v, 1}, [2]float64{-v, 1}, [2]float64{v, -1}, [2]float64{-v, -1})
+		}
+	}
+	rng := rand.New(rand.NewSource(20260815))
+	for i := 0; i < 3000; i++ {
+		switch i % 3 {
+		case 0:
+			pairs = append(pairs, [2]float64{rng.Float64()*2 - 1, rng.Float64()*2 - 1})
+		case 1:
+			pairs = append(pairs, [2]float64{
+				math.Float64frombits(rng.Uint64()), math.Float64frombits(rng.Uint64())})
+		case 2:
+			e1 := float64(rng.Intn(120) - 60)
+			e2 := float64(rng.Intn(120) - 60)
+			pairs = append(pairs, [2]float64{
+				(rng.Float64()*2 - 1) * math.Pow(2, e1),
+				(rng.Float64()*2 - 1) * math.Pow(2, e2)})
+		}
+	}
+
+	seen := map[[2]uint64]bool{}
+	n := 0
+	for _, p := range pairs {
+		k := [2]uint64{math.Float64bits(p[0]), math.Float64bits(p[1])}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		e.emit(fmt.Sprintf("atan2/%d", n),
+			[]string{fbits(p[0]), fbits(p[1])}, fbits(math.Atan2(p[0], p[1])))
+		n++
+	}
+}

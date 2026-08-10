@@ -468,10 +468,9 @@ final class Evaluator {
 /// filter, which is why `1 > 2` is `0` and not "no data". `bool` is irrelevant here: the
 /// parser rejects it on a scalar/scalar comparison.
 ///
-/// `ATAN2` is the one operator missing: it needs `math.Atan2`, which — like the rest of Go's
-/// trigonometry — is Go's own algorithm rather than libm's and so needs its own differential
-/// fixture (PORTING.md quirks 41-43 for the same problem with the hyperbolics). Until then it
-/// throws rather than quietly using Foundation's.
+/// `ATAN2` goes through `GoMath.atan2`, Go's own algorithm — nine ordered special cases and then
+/// `Atan(y/x)` with a quadrant shift, which inherits `atan`'s divergence from libm (quirks
+/// 39-40). Not Foundation's.
 func scalarBinop(_ op: ItemType, _ lhs: Double, _ rhs: Double) throws -> Double {
     switch op {
     case .add: return lhs + rhs
@@ -486,9 +485,7 @@ func scalarBinop(_ op: ItemType, _ lhs: Double, _ rhs: Double) throws -> Double 
     case .lss: return lhs < rhs ? 1 : 0
     case .gte: return lhs >= rhs ? 1 : 0
     case .lte: return lhs <= rhs ? 1 : 0
-    case .atan2:
-        throw EvaluatorNotPorted(
-            nodeType: "scalarBinop", detail: "atan2 needs GoMath.atan2")
+    case .atan2: return GoMath.atan2(lhs, rhs)
     default:
         // Go panics with `operator %q not allowed for Scalar operations`; the parser makes
         // this unreachable.
