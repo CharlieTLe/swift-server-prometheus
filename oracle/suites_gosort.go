@@ -49,7 +49,7 @@ import (
 	"strconv"
 )
 
-// parseU64 reads a decimal uint64, which is how float bit patterns cross the wire.
+// parseU64 reads a decimal uint64.
 func parseU64(s string) uint64 {
 	v, err := strconv.ParseUint(s, 10, 64)
 	if err != nil {

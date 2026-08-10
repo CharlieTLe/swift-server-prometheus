@@ -182,6 +182,12 @@ var suites = map[string]func(*emitter){
 	"gocompat/sort":         genGoPdqsort,
 	"gocompat/natsort":      genGoNatsort,
 	"promql/functions-sort": genPromQLFunctionsSort,
+	// Phase 5: the first of engine.go — the query planner's time arithmetic
+	// (`FindMinMaxTime`) and `limit_ratio`'s sampler. Both exported and both
+	// storage-free, which is what makes them portable before the evaluator exists.
+	// See oracle/suites_promql_engine_range.go.
+	"promql/minmaxtime":   genPromQLMinMaxTime,
+	"promql/ratiosampler": genPromQLRatioSampler,
 }
 
 func main() {

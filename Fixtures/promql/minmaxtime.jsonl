@@ -1,0 +1,282 @@
+{"id":"minmax/0","in":{"expr":"1","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/1","in":{"expr":"1","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/2","in":{"expr":"1","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/3","in":{"expr":"1","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/4","in":{"expr":"1","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/5","in":{"expr":"1","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/6","in":{"expr":"1 + 2","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/7","in":{"expr":"1 + 2","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/8","in":{"expr":"1 + 2","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/9","in":{"expr":"1 + 2","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/10","in":{"expr":"1 + 2","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/11","in":{"expr":"1 + 2","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/12","in":{"expr":"time()","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/13","in":{"expr":"time()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/14","in":{"expr":"time()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/15","in":{"expr":"time()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/16","in":{"expr":"time()","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/17","in":{"expr":"time()","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/18","in":{"expr":"vector(1)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/19","in":{"expr":"vector(1)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/20","in":{"expr":"vector(1)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/21","in":{"expr":"vector(1)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/22","in":{"expr":"vector(1)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/23","in":{"expr":"vector(1)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/24","in":{"expr":"\"a string\"","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/25","in":{"expr":"\"a string\"","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/26","in":{"expr":"\"a string\"","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/27","in":{"expr":"\"a string\"","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/28","in":{"expr":"\"a string\"","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/29","in":{"expr":"\"a string\"","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/30","in":{"expr":"foo","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/31","in":{"expr":"foo","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/32","in":{"expr":"foo","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/33","in":{"expr":"foo","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/34","in":{"expr":"foo","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/35","in":{"expr":"foo","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000010000"}}
+{"id":"minmax/36","in":{"expr":"foo{job=\"a\"}","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/37","in":{"expr":"foo{job=\"a\"}","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/38","in":{"expr":"foo{job=\"a\"}","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/39","in":{"expr":"foo{job=\"a\"}","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/40","in":{"expr":"foo{job=\"a\"}","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/41","in":{"expr":"foo{job=\"a\"}","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000010000"}}
+{"id":"minmax/42","in":{"expr":"{__name__=\"foo\"}","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/43","in":{"expr":"{__name__=\"foo\"}","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/44","in":{"expr":"{__name__=\"foo\"}","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/45","in":{"expr":"{__name__=\"foo\"}","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/46","in":{"expr":"{__name__=\"foo\"}","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/47","in":{"expr":"{__name__=\"foo\"}","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000010000"}}
+{"id":"minmax/48","in":{"expr":"foo smoothed","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"300000"}}
+{"id":"minmax/49","in":{"expr":"foo smoothed","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000300000"}}
+{"id":"minmax/50","in":{"expr":"foo smoothed","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000001"}}
+{"id":"minmax/51","in":{"expr":"foo smoothed","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/52","in":{"expr":"foo smoothed","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000360000"}}
+{"id":"minmax/53","in":{"expr":"foo smoothed","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000070000"}}
+{"id":"minmax/54","in":{"expr":"foo anchored","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/55","in":{"expr":"foo anchored","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/56","in":{"expr":"foo anchored","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/57","in":{"expr":"foo anchored","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/58","in":{"expr":"foo anchored","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/59","in":{"expr":"foo anchored","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000010000"}}
+{"id":"minmax/60","in":{"expr":"foo smoothed offset 5m","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"0"}}
+{"id":"minmax/61","in":{"expr":"foo smoothed offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000000000"}}
+{"id":"minmax/62","in":{"expr":"foo smoothed offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700000","max":"1599999700001"}}
+{"id":"minmax/63","in":{"expr":"foo smoothed offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1599999700000"}}
+{"id":"minmax/64","in":{"expr":"foo smoothed offset 5m","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000060000"}}
+{"id":"minmax/65","in":{"expr":"foo smoothed offset 5m","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1599999770000"}}
+{"id":"minmax/66","in":{"expr":"foo smoothed @ 100","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"400000"}}
+{"id":"minmax/67","in":{"expr":"foo smoothed @ 100","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"400000"}}
+{"id":"minmax/68","in":{"expr":"foo smoothed @ 100","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"100000","max":"100001"}}
+{"id":"minmax/69","in":{"expr":"foo smoothed @ 100","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"100001","max":"100000"}}
+{"id":"minmax/70","in":{"expr":"foo smoothed @ 100","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-199999","max":"400000"}}
+{"id":"minmax/71","in":{"expr":"foo smoothed @ 100","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"40001","max":"160000"}}
+{"id":"minmax/72","in":{"expr":"foo anchored offset 5m","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"-300000"}}
+{"id":"minmax/73","in":{"expr":"foo anchored offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1599999700000"}}
+{"id":"minmax/74","in":{"expr":"foo anchored offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700000","max":"1599999700000"}}
+{"id":"minmax/75","in":{"expr":"foo anchored offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1599999700000"}}
+{"id":"minmax/76","in":{"expr":"foo anchored offset 5m","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1599999760000"}}
+{"id":"minmax/77","in":{"expr":"foo anchored offset 5m","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1599999710000"}}
+{"id":"minmax/78","in":{"expr":"sum(foo smoothed)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"300000"}}
+{"id":"minmax/79","in":{"expr":"sum(foo smoothed)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000300000"}}
+{"id":"minmax/80","in":{"expr":"sum(foo smoothed)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000001"}}
+{"id":"minmax/81","in":{"expr":"sum(foo smoothed)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/82","in":{"expr":"sum(foo smoothed)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000360000"}}
+{"id":"minmax/83","in":{"expr":"sum(foo smoothed)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000070000"}}
+{"id":"minmax/84","in":{"expr":"foo offset 5m","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"-300000"}}
+{"id":"minmax/85","in":{"expr":"foo offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1599999700000"}}
+{"id":"minmax/86","in":{"expr":"foo offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700000","max":"1599999700000"}}
+{"id":"minmax/87","in":{"expr":"foo offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1599999700000"}}
+{"id":"minmax/88","in":{"expr":"foo offset 5m","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1599999760000"}}
+{"id":"minmax/89","in":{"expr":"foo offset 5m","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1599999710000"}}
+{"id":"minmax/90","in":{"expr":"foo offset -5m","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"1","max":"300000"}}
+{"id":"minmax/91","in":{"expr":"foo offset -5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1600000000001","max":"1600000300000"}}
+{"id":"minmax/92","in":{"expr":"foo offset -5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000300000","max":"1600000300000"}}
+{"id":"minmax/93","in":{"expr":"foo offset -5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000300001","max":"1600000300000"}}
+{"id":"minmax/94","in":{"expr":"foo offset -5m","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1600000000001","max":"1600000360000"}}
+{"id":"minmax/95","in":{"expr":"foo offset -5m","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1600000240001","max":"1600000310000"}}
+{"id":"minmax/96","in":{"expr":"foo @ 100","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/97","in":{"expr":"foo @ 100","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/98","in":{"expr":"foo @ 100","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"100000","max":"100000"}}
+{"id":"minmax/99","in":{"expr":"foo @ 100","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"100001","max":"100000"}}
+{"id":"minmax/100","in":{"expr":"foo @ 100","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/101","in":{"expr":"foo @ 100","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"40001","max":"100000"}}
+{"id":"minmax/102","in":{"expr":"foo @ 100 offset 5m","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"-200000"}}
+{"id":"minmax/103","in":{"expr":"foo @ 100 offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"-200000"}}
+{"id":"minmax/104","in":{"expr":"foo @ 100 offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-200000","max":"-200000"}}
+{"id":"minmax/105","in":{"expr":"foo @ 100 offset 5m","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-199999","max":"-200000"}}
+{"id":"minmax/106","in":{"expr":"foo @ 100 offset 5m","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-499999","max":"-200000"}}
+{"id":"minmax/107","in":{"expr":"foo @ 100 offset 5m","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-259999","max":"-200000"}}
+{"id":"minmax/108","in":{"expr":"foo @ start()","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/109","in":{"expr":"foo @ start()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/110","in":{"expr":"foo @ start()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/111","in":{"expr":"foo @ start()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/112","in":{"expr":"foo @ start()","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/113","in":{"expr":"foo @ start()","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000010000"}}
+{"id":"minmax/114","in":{"expr":"foo @ end()","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/115","in":{"expr":"foo @ end()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/116","in":{"expr":"foo @ end()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/117","in":{"expr":"foo @ end()","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000001","max":"1600000000000"}}
+{"id":"minmax/118","in":{"expr":"foo @ end()","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/119","in":{"expr":"foo @ end()","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999940001","max":"1600000010000"}}
+{"id":"minmax/120","in":{"expr":"rate(foo[5m])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-299999","max":"0"}}
+{"id":"minmax/121","in":{"expr":"rate(foo[5m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/122","in":{"expr":"rate(foo[5m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/123","in":{"expr":"rate(foo[5m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/124","in":{"expr":"rate(foo[5m])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999700001","max":"1600000060000"}}
+{"id":"minmax/125","in":{"expr":"rate(foo[5m])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999700001","max":"1600000010000"}}
+{"id":"minmax/126","in":{"expr":"rate(foo[5m] offset 10m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-899999","max":"-600000"}}
+{"id":"minmax/127","in":{"expr":"rate(foo[5m] offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999100001","max":"1599999400000"}}
+{"id":"minmax/128","in":{"expr":"rate(foo[5m] offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999100001","max":"1599999400000"}}
+{"id":"minmax/129","in":{"expr":"rate(foo[5m] offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999100001","max":"1599999400000"}}
+{"id":"minmax/130","in":{"expr":"rate(foo[5m] offset 10m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999100001","max":"1599999460000"}}
+{"id":"minmax/131","in":{"expr":"rate(foo[5m] offset 10m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999100001","max":"1599999410000"}}
+{"id":"minmax/132","in":{"expr":"rate(foo[5m] @ 100)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/133","in":{"expr":"rate(foo[5m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/134","in":{"expr":"rate(foo[5m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/135","in":{"expr":"rate(foo[5m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/136","in":{"expr":"rate(foo[5m] @ 100)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/137","in":{"expr":"rate(foo[5m] @ 100)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/138","in":{"expr":"rate(foo[5m] @ 100 offset 10m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-799999","max":"-500000"}}
+{"id":"minmax/139","in":{"expr":"rate(foo[5m] @ 100 offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-799999","max":"-500000"}}
+{"id":"minmax/140","in":{"expr":"rate(foo[5m] @ 100 offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-799999","max":"-500000"}}
+{"id":"minmax/141","in":{"expr":"rate(foo[5m] @ 100 offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-799999","max":"-500000"}}
+{"id":"minmax/142","in":{"expr":"rate(foo[5m] @ 100 offset 10m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-799999","max":"-500000"}}
+{"id":"minmax/143","in":{"expr":"rate(foo[5m] @ 100 offset 10m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-799999","max":"-500000"}}
+{"id":"minmax/144","in":{"expr":"count_over_time(foo[1s])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-999","max":"0"}}
+{"id":"minmax/145","in":{"expr":"count_over_time(foo[1s])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999999001","max":"1600000000000"}}
+{"id":"minmax/146","in":{"expr":"count_over_time(foo[1s])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999999001","max":"1600000000000"}}
+{"id":"minmax/147","in":{"expr":"count_over_time(foo[1s])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999999001","max":"1600000000000"}}
+{"id":"minmax/148","in":{"expr":"count_over_time(foo[1s])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999999001","max":"1600000060000"}}
+{"id":"minmax/149","in":{"expr":"count_over_time(foo[1s])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999999001","max":"1600000010000"}}
+{"id":"minmax/150","in":{"expr":"count_over_time(foo[1ms])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"0","max":"0"}}
+{"id":"minmax/151","in":{"expr":"count_over_time(foo[1ms])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/152","in":{"expr":"count_over_time(foo[1ms])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/153","in":{"expr":"count_over_time(foo[1ms])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1600000000000","max":"1600000000000"}}
+{"id":"minmax/154","in":{"expr":"count_over_time(foo[1ms])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1600000000000","max":"1600000060000"}}
+{"id":"minmax/155","in":{"expr":"count_over_time(foo[1ms])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1600000000000","max":"1600000010000"}}
+{"id":"minmax/156","in":{"expr":"rate(foo[5m] anchored)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"0"}}
+{"id":"minmax/157","in":{"expr":"rate(foo[5m] anchored)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000000000"}}
+{"id":"minmax/158","in":{"expr":"rate(foo[5m] anchored)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700000","max":"1600000000000"}}
+{"id":"minmax/159","in":{"expr":"rate(foo[5m] anchored)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/160","in":{"expr":"rate(foo[5m] anchored)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000060000"}}
+{"id":"minmax/161","in":{"expr":"rate(foo[5m] anchored)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1600000010000"}}
+{"id":"minmax/162","in":{"expr":"rate(foo[5m] smoothed)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"300000"}}
+{"id":"minmax/163","in":{"expr":"rate(foo[5m] smoothed)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000300000"}}
+{"id":"minmax/164","in":{"expr":"rate(foo[5m] smoothed)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700000","max":"1600000000001"}}
+{"id":"minmax/165","in":{"expr":"rate(foo[5m] smoothed)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/166","in":{"expr":"rate(foo[5m] smoothed)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000360000"}}
+{"id":"minmax/167","in":{"expr":"rate(foo[5m] smoothed)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1600000070000"}}
+{"id":"minmax/168","in":{"expr":"rate(foo[5m] anchored offset 10m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-1199999","max":"-600000"}}
+{"id":"minmax/169","in":{"expr":"rate(foo[5m] anchored offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599998800001","max":"1599999400000"}}
+{"id":"minmax/170","in":{"expr":"rate(foo[5m] anchored offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999100000","max":"1599999400000"}}
+{"id":"minmax/171","in":{"expr":"rate(foo[5m] anchored offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999100001","max":"1599999400000"}}
+{"id":"minmax/172","in":{"expr":"rate(foo[5m] anchored offset 10m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599998800001","max":"1599999460000"}}
+{"id":"minmax/173","in":{"expr":"rate(foo[5m] anchored offset 10m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999040001","max":"1599999410000"}}
+{"id":"minmax/174","in":{"expr":"rate(foo[5m] smoothed offset 10m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-1199999","max":"-300000"}}
+{"id":"minmax/175","in":{"expr":"rate(foo[5m] smoothed offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599998800001","max":"1599999700000"}}
+{"id":"minmax/176","in":{"expr":"rate(foo[5m] smoothed offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999100000","max":"1599999400001"}}
+{"id":"minmax/177","in":{"expr":"rate(foo[5m] smoothed offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999100001","max":"1599999400000"}}
+{"id":"minmax/178","in":{"expr":"rate(foo[5m] smoothed offset 10m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599998800001","max":"1599999760000"}}
+{"id":"minmax/179","in":{"expr":"rate(foo[5m] smoothed offset 10m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999040001","max":"1599999470000"}}
+{"id":"minmax/180","in":{"expr":"rate(foo[5m] smoothed @ 100)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"400000"}}
+{"id":"minmax/181","in":{"expr":"rate(foo[5m] smoothed @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"400000"}}
+{"id":"minmax/182","in":{"expr":"rate(foo[5m] smoothed @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-200000","max":"100001"}}
+{"id":"minmax/183","in":{"expr":"rate(foo[5m] smoothed @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/184","in":{"expr":"rate(foo[5m] smoothed @ 100)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-499999","max":"400000"}}
+{"id":"minmax/185","in":{"expr":"rate(foo[5m] smoothed @ 100)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-259999","max":"160000"}}
+{"id":"minmax/186","in":{"expr":"foo + bar offset 1h","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-3899999","max":"0"}}
+{"id":"minmax/187","in":{"expr":"foo + bar offset 1h","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599996100001","max":"1600000000000"}}
+{"id":"minmax/188","in":{"expr":"foo + bar offset 1h","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599996400000","max":"1600000000000"}}
+{"id":"minmax/189","in":{"expr":"foo + bar offset 1h","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599996400001","max":"1600000000000"}}
+{"id":"minmax/190","in":{"expr":"foo + bar offset 1h","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599996100001","max":"1600000060000"}}
+{"id":"minmax/191","in":{"expr":"foo + bar offset 1h","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599996340001","max":"1600000010000"}}
+{"id":"minmax/192","in":{"expr":"rate(foo[10m]) + bar","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"0"}}
+{"id":"minmax/193","in":{"expr":"rate(foo[10m]) + bar","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000000000"}}
+{"id":"minmax/194","in":{"expr":"rate(foo[10m]) + bar","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999400001","max":"1600000000000"}}
+{"id":"minmax/195","in":{"expr":"rate(foo[10m]) + bar","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999400001","max":"1600000000000"}}
+{"id":"minmax/196","in":{"expr":"rate(foo[10m]) + bar","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000060000"}}
+{"id":"minmax/197","in":{"expr":"rate(foo[10m]) + bar","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999400001","max":"1600000010000"}}
+{"id":"minmax/198","in":{"expr":"rate(foo[10m]) + bar offset 1h","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-3899999","max":"0"}}
+{"id":"minmax/199","in":{"expr":"rate(foo[10m]) + bar offset 1h","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599996100001","max":"1600000000000"}}
+{"id":"minmax/200","in":{"expr":"rate(foo[10m]) + bar offset 1h","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599996400000","max":"1600000000000"}}
+{"id":"minmax/201","in":{"expr":"rate(foo[10m]) + bar offset 1h","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599996400001","max":"1600000000000"}}
+{"id":"minmax/202","in":{"expr":"rate(foo[10m]) + bar offset 1h","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599996100001","max":"1600000060000"}}
+{"id":"minmax/203","in":{"expr":"rate(foo[10m]) + bar offset 1h","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599996340001","max":"1600000010000"}}
+{"id":"minmax/204","in":{"expr":"bar offset 1h + rate(foo[10m])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-3899999","max":"0"}}
+{"id":"minmax/205","in":{"expr":"bar offset 1h + rate(foo[10m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599996100001","max":"1600000000000"}}
+{"id":"minmax/206","in":{"expr":"bar offset 1h + rate(foo[10m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599996400000","max":"1600000000000"}}
+{"id":"minmax/207","in":{"expr":"bar offset 1h + rate(foo[10m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599996400001","max":"1600000000000"}}
+{"id":"minmax/208","in":{"expr":"bar offset 1h + rate(foo[10m])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599996100001","max":"1600000060000"}}
+{"id":"minmax/209","in":{"expr":"bar offset 1h + rate(foo[10m])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599996340001","max":"1600000010000"}}
+{"id":"minmax/210","in":{"expr":"rate(foo[10m] smoothed) + rate(bar[1m] anchored offset 30m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-2159999","max":"300000"}}
+{"id":"minmax/211","in":{"expr":"rate(foo[10m] smoothed) + rate(bar[1m] anchored offset 30m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599997840001","max":"1600000300000"}}
+{"id":"minmax/212","in":{"expr":"rate(foo[10m] smoothed) + rate(bar[1m] anchored offset 30m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599998140000","max":"1600000000001"}}
+{"id":"minmax/213","in":{"expr":"rate(foo[10m] smoothed) + rate(bar[1m] anchored offset 30m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599998140001","max":"1600000000000"}}
+{"id":"minmax/214","in":{"expr":"rate(foo[10m] smoothed) + rate(bar[1m] anchored offset 30m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599997840001","max":"1600000360000"}}
+{"id":"minmax/215","in":{"expr":"rate(foo[10m] smoothed) + rate(bar[1m] anchored offset 30m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599998080001","max":"1600000070000"}}
+{"id":"minmax/216","in":{"expr":"foo @ 100 + bar @ 200","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"200000"}}
+{"id":"minmax/217","in":{"expr":"foo @ 100 + bar @ 200","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-199999","max":"200000"}}
+{"id":"minmax/218","in":{"expr":"foo @ 100 + bar @ 200","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"100000","max":"200000"}}
+{"id":"minmax/219","in":{"expr":"foo @ 100 + bar @ 200","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"100001","max":"200000"}}
+{"id":"minmax/220","in":{"expr":"foo @ 100 + bar @ 200","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-199999","max":"200000"}}
+{"id":"minmax/221","in":{"expr":"foo @ 100 + bar @ 200","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"40001","max":"200000"}}
+{"id":"minmax/222","in":{"expr":"max_over_time(foo[5m:1m])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-599999","max":"0"}}
+{"id":"minmax/223","in":{"expr":"max_over_time(foo[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000000000"}}
+{"id":"minmax/224","in":{"expr":"max_over_time(foo[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999700000","max":"1600000000000"}}
+{"id":"minmax/225","in":{"expr":"max_over_time(foo[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999700001","max":"1600000000000"}}
+{"id":"minmax/226","in":{"expr":"max_over_time(foo[5m:1m])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999400001","max":"1600000060000"}}
+{"id":"minmax/227","in":{"expr":"max_over_time(foo[5m:1m])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1600000010000"}}
+{"id":"minmax/228","in":{"expr":"max_over_time(foo[5m:1m] offset 10m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-1199999","max":"-600000"}}
+{"id":"minmax/229","in":{"expr":"max_over_time(foo[5m:1m] offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599998800001","max":"1599999400000"}}
+{"id":"minmax/230","in":{"expr":"max_over_time(foo[5m:1m] offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999100000","max":"1599999400000"}}
+{"id":"minmax/231","in":{"expr":"max_over_time(foo[5m:1m] offset 10m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999100001","max":"1599999400000"}}
+{"id":"minmax/232","in":{"expr":"max_over_time(foo[5m:1m] offset 10m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599998800001","max":"1599999460000"}}
+{"id":"minmax/233","in":{"expr":"max_over_time(foo[5m:1m] offset 10m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999040001","max":"1599999410000"}}
+{"id":"minmax/234","in":{"expr":"max_over_time(rate(foo[1m])[5m:1m])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-359999","max":"0"}}
+{"id":"minmax/235","in":{"expr":"max_over_time(rate(foo[1m])[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999640001","max":"1600000000000"}}
+{"id":"minmax/236","in":{"expr":"max_over_time(rate(foo[1m])[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999640001","max":"1600000000000"}}
+{"id":"minmax/237","in":{"expr":"max_over_time(rate(foo[1m])[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999640001","max":"1600000000000"}}
+{"id":"minmax/238","in":{"expr":"max_over_time(rate(foo[1m])[5m:1m])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999640001","max":"1600000060000"}}
+{"id":"minmax/239","in":{"expr":"max_over_time(rate(foo[1m])[5m:1m])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999640001","max":"1600000010000"}}
+{"id":"minmax/240","in":{"expr":"max_over_time(max_over_time(foo[5m:1m])[1h:10m])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-4199999","max":"0"}}
+{"id":"minmax/241","in":{"expr":"max_over_time(max_over_time(foo[5m:1m])[1h:10m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599995800001","max":"1600000000000"}}
+{"id":"minmax/242","in":{"expr":"max_over_time(max_over_time(foo[5m:1m])[1h:10m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599996100000","max":"1600000000000"}}
+{"id":"minmax/243","in":{"expr":"max_over_time(max_over_time(foo[5m:1m])[1h:10m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599996100001","max":"1600000000000"}}
+{"id":"minmax/244","in":{"expr":"max_over_time(max_over_time(foo[5m:1m])[1h:10m])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599995800001","max":"1600000060000"}}
+{"id":"minmax/245","in":{"expr":"max_over_time(max_over_time(foo[5m:1m])[1h:10m])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599996040001","max":"1600000010000"}}
+{"id":"minmax/246","in":{"expr":"max_over_time(foo[5m:1m] @ 100)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/247","in":{"expr":"max_over_time(foo[5m:1m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/248","in":{"expr":"max_over_time(foo[5m:1m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-200000","max":"100000"}}
+{"id":"minmax/249","in":{"expr":"max_over_time(foo[5m:1m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/250","in":{"expr":"max_over_time(foo[5m:1m] @ 100)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/251","in":{"expr":"max_over_time(foo[5m:1m] @ 100)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-259999","max":"100000"}}
+{"id":"minmax/252","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] offset 3m)[1h:10m] @ 100)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-4279999","max":"-80000"}}
+{"id":"minmax/253","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] offset 3m)[1h:10m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-4279999","max":"-80000"}}
+{"id":"minmax/254","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] offset 3m)[1h:10m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-3980000","max":"-80000"}}
+{"id":"minmax/255","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] offset 3m)[1h:10m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-3979999","max":"-80000"}}
+{"id":"minmax/256","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] offset 3m)[1h:10m] @ 100)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-4279999","max":"-80000"}}
+{"id":"minmax/257","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] offset 3m)[1h:10m] @ 100)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-4039999","max":"-80000"}}
+{"id":"minmax/258","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] offset 3m)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/259","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] offset 3m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/260","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] offset 3m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-200000","max":"100000"}}
+{"id":"minmax/261","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] offset 3m)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/262","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] offset 3m)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/263","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] offset 3m)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-259999","max":"100000"}}
+{"id":"minmax/264","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] @ 200)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/265","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] @ 200)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/266","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] @ 200)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"-200000","max":"100000"}}
+{"id":"minmax/267","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] @ 200)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"-199999","max":"100000"}}
+{"id":"minmax/268","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] @ 200)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-499999","max":"100000"}}
+{"id":"minmax/269","in":{"expr":"max_over_time(max_over_time(foo[5m:1m] @ 100)[1h:10m] @ 200)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-259999","max":"100000"}}
+{"id":"minmax/270","in":{"expr":"max_over_time(foo @ 50[5m:1m] @ 100)","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-249999","max":"50000"}}
+{"id":"minmax/271","in":{"expr":"max_over_time(foo @ 50[5m:1m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"-249999","max":"50000"}}
+{"id":"minmax/272","in":{"expr":"max_over_time(foo @ 50[5m:1m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"50000","max":"50000"}}
+{"id":"minmax/273","in":{"expr":"max_over_time(foo @ 50[5m:1m] @ 100)","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"50001","max":"50000"}}
+{"id":"minmax/274","in":{"expr":"max_over_time(foo @ 50[5m:1m] @ 100)","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"-249999","max":"50000"}}
+{"id":"minmax/275","in":{"expr":"max_over_time(foo @ 50[5m:1m] @ 100)","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"-9999","max":"50000"}}
+{"id":"minmax/276","in":{"expr":"max_over_time(rate(foo[1m] smoothed)[5m:1m])","start":"0","end":"0","interval":"0","lookback":"300000000000"},"out":{"min":"-659999","max":"300000"}}
+{"id":"minmax/277","in":{"expr":"max_over_time(rate(foo[1m] smoothed)[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"300000000000"},"out":{"min":"1599999340001","max":"1600000300000"}}
+{"id":"minmax/278","in":{"expr":"max_over_time(rate(foo[1m] smoothed)[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"1000000"},"out":{"min":"1599999640000","max":"1600000000001"}}
+{"id":"minmax/279","in":{"expr":"max_over_time(rate(foo[1m] smoothed)[5m:1m])","start":"1600000000000","end":"1600000000000","interval":"0","lookback":"0"},"out":{"min":"1599999640001","max":"1600000000000"}}
+{"id":"minmax/280","in":{"expr":"max_over_time(rate(foo[1m] smoothed)[5m:1m])","start":"1600000000000","end":"1600000060000","interval":"15000000000","lookback":"300000000000"},"out":{"min":"1599999340001","max":"1600000360000"}}
+{"id":"minmax/281","in":{"expr":"max_over_time(rate(foo[1m] smoothed)[5m:1m])","start":"1600000000000","end":"1600000010000","interval":"3600000000000","lookback":"60000000000"},"out":{"min":"1599999580001","max":"1600000070000"}}
