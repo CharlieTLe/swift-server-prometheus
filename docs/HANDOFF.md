@@ -939,6 +939,42 @@ will not announce itself — `sum_over_time` will just be a few ULPs out.
 
 
 
+### 5c. The next slice, scoped: `matrixSelector` / `matrixIterSlice`
+
+Read once so the next session does not spend context re-deriving it. Everything it needs on the
+Swift side already exists: `BufferedSeriesIterator` + `newBuffer` (PromStorage/Buffer.swift),
+`StartTimestamps` (PromQL/Value.swift), `checkAndExpandSeriesSet` and `evalSeries` (#35).
+
+**Functions:** `matrixSelector` (engine.go:2806) and `matrixIterSlice` (:2889), plus the
+`MatrixSelector` and `SubqueryExpr` arms of `eval` and the `matrixArg` half of the `Call` arm.
+Landing them makes all 82 ported `FunctionCalls` bodies reachable, which is the single biggest
+unlock left in Phase 5.
+
+**The traps, in the order they bite:**
+
+1. The buffer's range is **not** the selector's range. `anchored` adds one `lookbackDelta` and
+   moves `mint` back by it; `smoothed` adds **two** and moves `mint` back *and* `maxt` forward.
+   `matrixMint`/`matrixMaxt` keep the originals, so the widened window feeds the buffer while the
+   original bounds decide what the caller sees — the storage-side counterpart of quirk 68's
+   `getTimeRangesForSelector`, and it must agree with it or a selector silently loses samples.
+2. `matrixIterSlice` **reuses the caller's slices across steps**, and the retention logic is the
+   subtle part: when the previous range overlaps, it drops the points at or before `mint` with a
+   linear scan, decrements `currentSamples` by exactly that many, and then only appends points
+   *after the last retained timestamp*. When it does not overlap it truncates to empty and
+   decrements by the whole length. Getting the accounting wrong here is invisible on a single
+   step — the same trap as quirk 75 — so the corpus needs a **range query**, or at least two
+   evaluations sharing a buffer.
+3. `startTimestamps` is truncated at the same drop point, or cleared with the floats. It is
+   `nil` unless `useStartTimestamps` is on, so both settings need cases.
+4. Histograms repeat the whole float branch with `HPoint.size` accounting rather than 1 —
+   upstream's own `TODO(beorn7): Use generics?`.
+
+**What the corpus has to contain,** on top of the shapes #35 already loads: a range query (so the
+slice reuse actually runs), a step smaller than the range (overlapping windows), a step larger
+than the range (no overlap), samples exactly on `mint` and `maxt`, `anchored` and `smoothed`
+ranges, and `useStartTimestamps` both ways. Sample-limit boundaries per shape, as in #34.
+
+
 ## 6. Open decisions and risks
 
 **`Labels` may need to become byte-backed (ADR-9).** Currently `String`-backed. The deciding moment is
