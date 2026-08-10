@@ -1,0 +1,322 @@
+//===----------------------------------------------------------------------===//
+// Differential tests for promql/functions.go's element-wise arithmetic slice,
+// driven through `functionCalls` exactly as the oracle drives Go's
+// `promql.FunctionCalls`.
+//
+// The table is deliberately partial until Phase 5 closes, so the fixture replay
+// skips the functions this slice does not implement — and the skipped set is
+// asserted by name, so a body that quietly goes missing fails rather than being
+// counted as "not ported yet".
+//===----------------------------------------------------------------------===//
+
+import GoOracleSupport
+import PromLabels
+import PromQLParser
+import Testing
+
+@testable import PromQL
+
+@Suite("promql/functions: the element-wise arithmetic slice")
+struct FunctionsElementwiseTests {
+
+    @Test("every implemented function matches Go on every committed case")
+    func elementwiseMatchesGo() throws {
+        try Fixtures.check(
+            "promql/functions-elementwise.jsonl",
+            FixtureCase<FnIn, FnOut>.self
+        ) { input in
+            runFnCase(input)
+        }
+    }
+
+    @Test("the FunctionCalls table is a subset of Go's, and the gap is the deferred set")
+    func tableIsAKnownSubset() throws {
+        // `promql/functionnames` already pins `parser.Functions`; this pins
+        // `promql.FunctionCalls`, which is a different list — the parser knows about
+        // functions the evaluator has no entry for. Asserting the *difference* by
+        // name is what makes a partial table safe: a body that goes missing shows up
+        // here instead of looking like one that has not landed yet.
+        let goNames = try Fixtures.load(
+            "promql/functioncallnames.jsonl",
+            FixtureCase<String, [String]>.self
+        )[0].out
+
+        let ours = Set(functionCalls.keys)
+        let theirs = Set(goNames)
+
+        #expect(ours.isSubset(of: theirs), "invented: \(ours.subtracting(theirs).sorted())")
+        #expect(goNames.count == functionCallsCountAtPin)
+
+        // The deferred set, by name and with its owning slice. Each of these parses
+        // and type-checks today and simply has no implementation yet.
+        let deferred: Set<String> = [
+            // Date functions: need GoTime weekday/yearDay/daysInMonth and the
+            // int64(Double) saturation.
+            "day_of_month", "day_of_week", "day_of_year", "days_in_month",
+            "hour", "minute", "month", "year",
+            // Histograms: need EvalNodeHelper's bucket caches and resetHistograms.
+            "histogram_avg", "histogram_count", "histogram_fraction",
+            "histogram_quantile", "histogram_quantiles", "histogram_stddev",
+            "histogram_stdvar", "histogram_sum",
+            // Range-vector functions: need interpolate/correctForCounterResets.
+            "avg_over_time", "changes", "count_over_time", "delta", "deriv",
+            "double_exponential_smoothing", "first_over_time", "idelta", "increase",
+            "irate", "last_over_time", "mad_over_time", "max_over_time",
+            "min_over_time", "predict_linear", "present_over_time",
+            "quantile_over_time", "rate", "resets", "stddev_over_time",
+            "stdvar_over_time", "sum_over_time",
+            "ts_of_first_over_time", "ts_of_last_over_time",
+            "ts_of_max_over_time", "ts_of_min_over_time",
+            // Sorts: need Go's pdqsort, because the two sorts are observably
+            // different and neither comparator is a strict weak ordering.
+            "sort", "sort_by_label", "sort_by_label_desc", "sort_desc",
+            // The rest of the evaluator's own surface.
+            "absent", "absent_over_time", "info", "label_join", "label_replace",
+            "start", "end", "step", "range",
+        ]
+        #expect(theirs.subtracting(ours) == deferred,
+                "unexpected gap: \(theirs.subtracting(ours).symmetricDifference(deferred).sorted())")
+    }
+}
+
+// MARK: - Properties the fixtures state but do not explain
+
+@Suite("promql/functions invariants")
+struct FunctionsElementwiseInvariantTests {
+
+    private func vec(_ samples: [Sample]) -> [Vector] { [Vector(samples)] }
+    private func scalar(_ f: Double) -> Vector { Vector([Sample(f: f)]) }
+
+    @Test("delayed name removal decides whether the body strips labels at all")
+    func delayedNameRemoval() {
+        // The axis the whole corpus is doubled over, and the one setting that is
+        // *not* the Prometheus server's default is what the exit gate runs with
+        // (promqltest sets it true at test.go:111). Both are live, so both are here.
+        let metric = Labels(strings: [
+            "__name__", "foo", "__type__", "counter", "__unit__", "seconds", "job", "j",
+        ])
+        let input = vec([Sample(t: 1000, f: -2.5, metric: metric)])
+
+        let eager = EvalNodeHelper(enableDelayedNameRemoval: false)
+        let (a, _) = funcAbs(input, Matrix(), [], eager)
+        #expect(a[0].metric.description == #"{job="j"}"#, "all three metadata labels go")
+
+        let delayed = EvalNodeHelper(enableDelayedNameRemoval: true)
+        let (b, _) = funcAbs(input, Matrix(), [], delayed)
+        #expect(b[0].metric.description == metric.description, "none of them go")
+
+        // DropName is set either way: it is the *intent*, and it is what the last
+        // step of the query reads when removal is delayed.
+        #expect(a[0].dropName)
+        #expect(b[0].dropName)
+    }
+
+    @Test("histogram samples are skipped, except by timestamp")
+    func histogramSkip() {
+        // Every body in this slice tests `el.H == nil` and drops the sample —
+        // `sqrt(some_histogram)` yields nothing for that series, with no annotation.
+        // `funcTimestamp` reads only `el.T`, so it emits a float sample instead, and
+        // that asymmetry is easy to normalise away by copying simpleFloatFunc.
+        let h = Sample(t: 1000, metric: Labels(strings: ["__name__", "h"]))
+        var withHist = h
+        withHist.h = genTestHistogram(3).toFloat()
+        let f = Sample(t: 2000, f: 4, metric: Labels(strings: ["__name__", "f"]))
+        let input = vec([withHist, f])
+
+        let (a, aAnnos) = funcSqrt(input, Matrix(), [], EvalNodeHelper())
+        #expect(a.count == 1, "the histogram sample produced nothing")
+        #expect(a[0].f == 2)
+        #expect(aAnnos.isEmpty, "and it is not a warning")
+
+        let (b, _) = funcTimestamp(input, Matrix(), [], EvalNodeHelper())
+        #expect(b.count == 2, "timestamp does not skip")
+        #expect(b[0].f == 1, "1000ms -> 1s")
+        #expect(b[0].h == nil, "and the histogram does not survive into the result")
+    }
+
+    @Test("clamp with an inverted range returns nothing, without an annotation")
+    func clampInvertedRange() {
+        let input = Vector([Sample(f: 0.5, metric: Labels(strings: ["__name__", "x"]))])
+        let enh = EvalNodeHelper()
+        let (out, annos) = clamp(input, 1, 0, enh)
+        #expect(out.isEmpty)
+        #expect(annos.isEmpty, "an inverted range is not an error")
+
+        // `max < min` uses `<`, so an equal range is legal and clamps to the point.
+        let enh2 = EvalNodeHelper()
+        let (out2, _) = clamp(input, 1, 1, enh2)
+        #expect(out2.count == 1)
+        #expect(out2[0].f == 1)
+    }
+
+    @Test("clamp goes through Go's Max and Min, so NaN does not behave like Swift's")
+    func clampNaNOrdering() {
+        // `math.Max(min, math.Min(max, f))` with Go's arm64 assembly semantics:
+        // FMAXD/FMIND propagate NaN where libm's fmax/fmin suppress it, and the
+        // ±Inf check runs before the NaN check. PORTING.md quirk 28.
+        let nan = Sample(f: Double(bitPattern: 0x7FF8_0000_DEAD_BEEF))
+        let enh = EvalNodeHelper()
+        let (out, _) = clamp(Vector([nan]), 0, 1, enh)
+        #expect(out.count == 1)
+        #expect(out[0].f.isNaN, "a NaN sample clamps to NaN, not to a bound")
+
+        // Swift's own spelling suppresses it, which is the divergence this guards.
+        #expect(!Swift.max(0, Swift.min(1, Double.nan)).isNaN)
+    }
+
+    @Test("round's toNearest comes from the ARGUMENT COUNT, not from the values")
+    func roundArgumentCount() {
+        // `len(args) >= 2` is what decides whether `toNearest` is read, so the same
+        // `vectorVals` with one and two args give different answers. A port that
+        // looked at `vectorVals.count` instead would be right in the engine and
+        // wrong here — and the engine is not the only caller.
+        let input = vec([Sample(f: 2.34, metric: .empty)])
+        let both = [input[0], scalar(0.1)]
+
+        let one = EvalNodeHelper()
+        let (a, _) = funcRound(both, Matrix(), [NumberLiteral(val: 0)], one)
+        #expect(a[0].f == 2, "toNearest defaulted to 1")
+
+        let two = EvalNodeHelper()
+        let (b, _) = funcRound(
+            both, Matrix(), [NumberLiteral(val: 0), NumberLiteral(val: 0)], two)
+        #expect(b[0].f != 2, "toNearest was read")
+    }
+
+    @Test("round breaks ties upward, including for negatives")
+    func roundTies() {
+        func round1(_ f: Double) -> Double {
+            let enh = EvalNodeHelper()
+            let (out, _) = funcRound(vec([Sample(f: f, metric: .empty)]), Matrix(), [], enh)
+            return out[0].f
+        }
+        // `Floor(f + 0.5)`, so a tie goes up — which for -2.5 means -2, not -3, and
+        // is the opposite of `.rounded(.toNearestOrEven)` and of `.rounded()`.
+        #expect(round1(2.5) == 3)
+        #expect(round1(-2.5) == -2)
+        #expect(round1(0.5) == 1)
+        #expect(round1(-0.5).isZero, "and it lands on a zero")
+        #expect(Double(-2.5).rounded() == -3, "Swift's default disagrees")
+    }
+
+    @Test("scalar returns Go's NaN for none and for many, but the sample's for one")
+    func scalarNaNProvenance() {
+        // Not a detail: `promqltest` renders results as text, and the three paths
+        // produce different payloads. None and many go through `math.NaN()`
+        // (0x7FF8000000000001); a single NaN sample is returned *as the value*, so
+        // its own payload survives.
+        let odd = Double(bitPattern: 0x7FF8_0000_DEAD_BEEF)
+        let m = Labels(strings: ["__name__", "x"])
+
+        let none = EvalNodeHelper()
+        let (a, _) = funcScalar([Vector()], Matrix(), [], none)
+        #expect(a[0].f.bitPattern == 0x7FF8_0000_0000_0001, "Go's NaN()")
+
+        let many = EvalNodeHelper()
+        let (b, _) = funcScalar(
+            vec([Sample(f: 1, metric: m), Sample(f: 2, metric: m)]), Matrix(), [], many)
+        #expect(b[0].f.bitPattern == 0x7FF8_0000_0000_0001)
+
+        let one = EvalNodeHelper()
+        let (c, _) = funcScalar(vec([Sample(f: odd, metric: m)]), Matrix(), [], one)
+        #expect(c[0].f.bitPattern == 0x7FF8_0000_DEAD_BEEF, "the sample's own payload")
+    }
+
+    @Test("scalar ignores histogram samples when counting")
+    func scalarIgnoresHistograms() {
+        // One float among any number of histograms is still one float.
+        var h = Sample(t: 1000, metric: Labels(strings: ["__name__", "h"]))
+        h.h = genTestHistogram(3).toFloat()
+        let f = Sample(t: 2000, f: 42, metric: Labels(strings: ["__name__", "f"]))
+
+        let enh = EvalNodeHelper()
+        let (out, _) = funcScalar(vec([h, f, h]), Matrix(), [], enh)
+        #expect(out[0].f == 42)
+
+        // And a vector of only histograms is "none", so Go's NaN.
+        let enh2 = EvalNodeHelper()
+        let (out2, _) = funcScalar(vec([h, h]), Matrix(), [], enh2)
+        #expect(out2[0].f.bitPattern == 0x7FF8_0000_0000_0001)
+    }
+
+    @Test("vector alone leaves DropName false")
+    func vectorKeepsDropNameFalse() {
+        // Every other function here sets DropName; `vector(s)` does not, because
+        // there is no name to drop — its metric is the empty label set.
+        let enh = EvalNodeHelper()
+        let (out, _) = funcVector([scalar(42)], Matrix(), [], enh)
+        #expect(out[0].f == 42)
+        #expect(out[0].metric.isEmpty)
+        #expect(!out[0].dropName)
+    }
+
+    @Test("sgn's default arm returns the argument, so ±0 and NaN survive")
+    func sgnPreservesZeroAndNaN() {
+        // `default: return v` rather than `return 0`. That makes sgn(-0) negative
+        // zero and sgn(NaN) a NaN carrying the argument's payload — both of which a
+        // `v == 0 ? 0 : ...` spelling would lose.
+        func sgn1(_ f: Double) -> Double {
+            let enh = EvalNodeHelper()
+            let (out, _) = funcSgn(vec([Sample(f: f, metric: .empty)]), Matrix(), [], enh)
+            return out[0].f
+        }
+        #expect(sgn1(-0.0).bitPattern == 0x8000_0000_0000_0000)
+        #expect(sgn1(0.0).bitPattern == 0)
+        #expect(sgn1(Double(bitPattern: 0x7FF8_0000_DEAD_BEEF)).bitPattern == 0x7FF8_0000_DEAD_BEEF)
+        #expect(sgn1(-5) == -1)
+        #expect(sgn1(5) == 1)
+        #expect(sgn1(.infinity) == 1)
+        #expect(sgn1(-.infinity) == -1)
+    }
+
+    @Test("pi and time ignore enh.out; everything else appends to it")
+    func outIsAppendedToExceptByPiAndTime() {
+        // Unreachable from a real query — engine.go:1523 resets `Out` to empty before
+        // every call — but it is exported behaviour and it is the only thing that
+        // distinguishes the two shapes. Pinned so a port that "tidies" the fresh
+        // vectors into appends fails.
+        let seed = Vector([Sample(t: 111, f: -99, metric: .empty)])
+
+        let a = EvalNodeHelper(ts: 7000, out: seed)
+        let (pi, _) = funcPi([], Matrix(), [], a)
+        #expect(pi.count == 1, "fresh vector")
+        #expect(pi[0].f == Double.pi)
+
+        let b = EvalNodeHelper(ts: 7000, out: seed)
+        let (t, _) = funcTime([], Matrix(), [], b)
+        #expect(t.count == 1, "fresh vector")
+        #expect(t[0].f == 7)
+
+        let c = EvalNodeHelper(ts: 7000, out: seed)
+        let (abs, _) = funcAbs(vec([Sample(f: -1, metric: .empty)]), Matrix(), [], c)
+        #expect(abs.count == 2, "appended to the seed")
+        #expect(abs[0].f == -99)
+        #expect(abs[1].f == 1)
+    }
+
+    @Test("time and timestamp divide by 1000, so sub-second values are fractional")
+    func timeIsSeconds() {
+        let enh = EvalNodeHelper(ts: 1500)
+        let (out, _) = funcTime([], Matrix(), [], enh)
+        #expect(out[0].f == 1.5)
+
+        let enh2 = EvalNodeHelper()
+        let (out2, _) = funcTimestamp(
+            vec([Sample(t: -1500, f: 0, metric: .empty)]), Matrix(), [], enh2)
+        #expect(out2[0].f == -1.5)
+    }
+
+    @Test("rad and deg keep Go's left association")
+    func radDegAssociation() {
+        // `v * math.Pi / 180`, not `v * (math.Pi / 180)`. Folding the divisor would
+        // let the compiler round it once and change every result.
+        let enh = EvalNodeHelper()
+        let (out, _) = funcRad(vec([Sample(f: 180, metric: .empty)]), Matrix(), [], enh)
+        #expect(out[0].f == 180 * Double.pi / 180)
+
+        // The two spellings genuinely differ for some inputs, which is why the
+        // association is not a style choice.
+        let v = 3.0
+        #expect((v * Double.pi / 180) != (v * (Double.pi / 180)))
+    }
+}

@@ -152,6 +152,17 @@ var suites = map[string]func(*emitter){
 	"gocompat/acosh": genGoAcosh,
 	"gocompat/atanh": genGoAtanh,
 	"gocompat/log1p": genGoLog1p,
+	// Phase 5: prometheus/schema, which `functions.go` and `engine.go` reach for
+	// `IsMetadataLabel` and `Metadata.SetToLabels`.
+	// See oracle/suites_schema.go.
+	"schema/metadatalabel": genSchemaMetadataLabel,
+	"schema/metadata":      genSchemaMetadata,
+	// Phase 5: `promql.FunctionCalls`' element-wise arithmetic bodies, called
+	// directly — no running engine needed, because FunctionCall and every type in
+	// its signature are exported. See
+	// oracle/suites_promql_functions_elementwise.go.
+	"promql/functioncallnames":     genPromQLFunctionCallNames,
+	"promql/functions-elementwise": genPromQLFunctionsElementwise,
 }
 
 func main() {

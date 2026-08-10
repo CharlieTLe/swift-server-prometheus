@@ -659,6 +659,45 @@ changing behaviour.
     never read the hex out of the comment.**
 
 
+44. **An unexported field decides the result of every function in `promql/functions.go`, and both of
+    its settings are live.** `EvalNodeHelper.enableDelayedNameRemoval` is unexported. When it is
+    **false**, each function body strips the three schema metadata labels itself with
+    `Metric.DropReserved(schema.IsMetadataLabel)`; when **true**, the labels are left alone and the
+    `DropName` flag alone records the intent, for the last step of the query to act on.
+
+    Both are reachable, and they are not the same default:
+
+    | caller | setting |
+    |---|---|
+    | `cmd/prometheus` | **false** — a feature flag (`--enable-feature=promql-delayed-name-removal`) turns it on |
+    | `promql/promqltest` | **true**, unconditionally (test.go:111) |
+
+    So the exit gate — all 2,201 `eval` assertions — runs the setting an *external* caller cannot
+    construct, because the field is unexported. Pinning only the zero value would leave the port's
+    exit-gate behaviour untested, so `oracle/suites_promql_functions_elementwise.go` writes the field
+    with `reflect` + `unsafe`, contained to one function, and the corpus is doubled over the axis.
+
+    The consequence for the port: **`DropName` is set either way** — it is the intent, not the action.
+    A port that sets it only when it also strips the labels will pass every eager case and fail the
+    whole exit gate.
+
+45. **Two behaviours in `functions.go` are pinned only by inputs chosen to distinguish them**, and
+    both were found by a negative control passing when it should not have. Recorded because the shape
+    recurs everywhere the port has a *plumbing* layer over an already-pinned one.
+
+    - Every one of the 16 transcendental wrappers (`funcSin`, `funcExp`, …) can be rewired to Swift's
+      **libm** without the first corpus noticing. Its values were 0, ±1, ±0.5, ±2, 21.5, NaN and ±Inf,
+      and libm agrees with Go on all of them; the per-value arithmetic is pinned by `gocompat/*`, so
+      nothing was missing there. `Fixtures/promql/functions-elementwise.jsonl` now carries a harvested
+      witness per wrapper — a value where libm and Go differ. `0x3ffa6d48991d5506` covers nine.
+    - `clamp`'s `math.Max(minVal, math.Min(maxVal, f))` can have its operands swapped without the
+      first corpus noticing, because the order only decides whose **NaN payload** survives
+      (quirk 28) and the corpus used `math.NaN()` for both the samples and the bounds. Bounds carrying
+      distinct payloads fix it.
+
+    The general rule: a corpus for a plumbing layer needs values that make the layer *below*
+    distinguishable, which is not the same as values that are interesting to the layer below.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

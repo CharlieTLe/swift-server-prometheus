@@ -35,6 +35,7 @@ let package = Package(
         .library(name: "PromQLParser", targets: ["PromQLParser"]),
         .library(name: "PromQL", targets: ["PromQL"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
+        .library(name: "PromSchema", targets: ["PromSchema"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
         // The fuzz differ: generates candidate inputs and diffs Swift against the Go oracle.
         .executable(name: "promdiff", targets: ["promdiff"]),
@@ -64,6 +65,12 @@ let package = Package(
 
         // ── Tier 2 ───────────────────────────────────────────────────────────
         .target(name: "PromEncoding", dependencies: ["PromHash", "GoCompat"]),
+
+        // `prometheus/schema`, which sits directly above `model/labels` and below
+        // both `promql` and (Phase 8) `model/textparse`. Its own target because
+        // upstream keeps it its own package and because every target here maps
+        // one-to-one onto a Go package.
+        .target(name: "PromSchema", dependencies: ["PromLabels", "PromModel"]),
 
         // Phase 5. The tier order below is Go's own, and the split of
         // `PromPosRange` out of `PromQLParser` is forced rather than stylistic:
@@ -101,7 +108,7 @@ let package = Package(
             name: "PromQL",
             dependencies: [
                 "PromQLParser", "PromStorage", "PromChunkEnc", "PromHistogram",
-                "PromLabels", "PromAnnotations", "PromModel", "GoCompat",
+                "PromLabels", "PromSchema", "PromAnnotations", "PromModel", "GoCompat",
             ]
         ),
 
@@ -145,6 +152,10 @@ let package = Package(
             dependencies: ["PromHistogram", "PromLabels", "PromModel", "GoOracleSupport"]
         ),
         .testTarget(name: "PromLabelsTests", dependencies: ["PromLabels", "GoOracleSupport"]),
+        .testTarget(
+            name: "PromSchemaTests",
+            dependencies: ["PromSchema", "PromLabels", "PromModel", "GoOracleSupport"]
+        ),
         .testTarget(name: "PromEncodingTests", dependencies: ["PromEncoding", "GoOracleSupport"]),
         .testTarget(
             name: "PromAnnotationsTests",
