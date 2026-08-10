@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 import GoOracleSupport
+import PromHistogram
 import PromLabels
 import PromQLParser
 import Testing
@@ -49,6 +50,16 @@ struct FunctionsElementwiseTests {
         }
     }
 
+    @Test("the float-only range aggregations match Go on every committed case")
+    func overTimeMatchesGo() throws {
+        try Fixtures.check(
+            "promql/functions-overtime.jsonl",
+            FixtureCase<FnIn, FnOut>.self
+        ) { input in
+            runFnCase(input)
+        }
+    }
+
     @Test("the FunctionCalls table is a subset of Go's, and the gap is the deferred set")
     func tableIsAKnownSubset() throws {
         // `promql/functionnames` already pins `parser.Functions`; this pins
@@ -70,24 +81,25 @@ struct FunctionsElementwiseTests {
         // The deferred set, by name and with its owning slice. Each of these parses
         // and type-checks today and simply has no implementation yet.
         let deferred: Set<String> = [
-            // Range-vector functions: need interpolate/correctForCounterResets.
-            "avg_over_time", "changes", "count_over_time", "delta", "deriv",
-            "double_exponential_smoothing", "first_over_time", "idelta", "increase",
-            "irate", "last_over_time", "mad_over_time", "max_over_time",
-            "min_over_time", "predict_linear", "present_over_time",
-            "quantile_over_time", "rate", "resets", "stddev_over_time",
-            "stdvar_over_time", "sum_over_time",
-            "ts_of_first_over_time", "ts_of_last_over_time",
-            "ts_of_max_over_time", "ts_of_min_over_time",
+            // Still deferred: histogram Kahan arithmetic (sum/avg), vectorByValueHeap
+            // (mad/quantile), the start-timestamp machinery (resets/changes), and the
+            // rate family's interpolate/correctForCounterResets.
             // Sorts: need Go's pdqsort, because the two sorts are observably
             // different and neither comparator is a strict weak ordering.
             "sort", "sort_by_label", "sort_by_label_desc", "sort_desc",
-            // The rest of the evaluator's own surface.
-            "absent", "absent_over_time", "info", "label_join", "label_replace",
-            "start", "end", "step", "range",
         ]
-        #expect(theirs.subtracting(ours) == deferred,
-                "unexpected gap: \(theirs.subtracting(ours).symmetricDifference(deferred).sorted())")
+
+        // Seven of Go's keys map to **nil**, so they can never have an entry here:
+        // `start`/`end`/`step`/`range` are folded into a NumberLiteral by
+        // `foldQueryContextFunctions`, and `info`/`label_replace`/`label_join` are
+        // reached by the evaluator directly rather than through the table. Counting
+        // them as "not ported" would make this table look permanently incomplete, so
+        // they are their own category.
+        let nilInGo: Set<String> = [
+            "start", "end", "step", "range", "info", "label_replace", "label_join",
+        ]
+        #expect(theirs.subtracting(ours) == deferred.union(nilInGo),
+                "unexpected gap: \(theirs.subtracting(ours).symmetricDifference(deferred.union(nilInGo)).sorted())")
     }
 }
 
@@ -553,6 +565,131 @@ struct FunctionsElementwiseInvariantTests {
             [Vector([Sample(f: 0)]), Vector([Sample(f: 1)]), Vector([native])],
             Matrix(), args, c)
         #expect(ok.count == 1)
+    }
+
+    @Test("the range functions read matrixVal[0] only")
+    func onlyTheFirstSeries() {
+        // `rangeEval` hands one series at a time, so a multi-series matrix is
+        // unreachable from a query — but a port that looped would produce one sample
+        // per series and be wrong nowhere else, so it is pinned.
+        let a = Series(
+            metric: Labels(strings: ["__name__", "a"]),
+            floats: [FPoint(t: 1000, f: 1), FPoint(t: 2000, f: 2)], histograms: [])
+        let b = Series(
+            metric: Labels(strings: ["__name__", "b"]),
+            floats: [FPoint(t: 1000, f: 100)], histograms: [])
+        let enh = EvalNodeHelper()
+        let (out, _) = funcCountOverTime([], Matrix([a, b]), [], enh)
+        #expect(out.count == 1, "one sample, not two")
+        #expect(out[0].f == 2, "and it is the FIRST series' count")
+        #expect(out[0].metric.isEmpty, "aggrOverTime drops the metric for the caller to fill")
+    }
+
+    @Test("the three range guards are three different behaviours")
+    func rangeGuards() {
+        let m = Labels(strings: ["__name__", "x"])
+        var h = FloatHistogram()
+        h.schema = 0
+        h.count = 1
+        let args: [any Expr] = [NumberLiteral(val: 0)]
+
+        // No series: nothing.
+        let a = EvalNodeHelper()
+        #expect(funcMaxOverTime([], Matrix(), args, a).0.isEmpty)
+
+        // Histogram-only: nothing, and NO annotation.
+        let histOnly = Series(metric: m, floats: [], histograms: [HPoint(t: 1000, h: h)])
+        let b = EvalNodeHelper()
+        let (out2, annos2) = funcMaxOverTime([], Matrix([histOnly]), args, b)
+        #expect(out2.isEmpty)
+        #expect(annos2.isEmpty, "silence, not a warning")
+
+        // Mixed: the float answer, WITH an annotation.
+        let mixed = Series(
+            metric: m, floats: [FPoint(t: 1000, f: 5)], histograms: [HPoint(t: 2000, h: h)])
+        let c = EvalNodeHelper()
+        let (out3, annos3) = funcMaxOverTime([], Matrix([mixed]), args, c)
+        #expect(out3.count == 1)
+        #expect(out3[0].f == 5)
+        #expect(!annos3.isEmpty, "HistogramIgnoredInMixedRangeInfo")
+    }
+
+    @Test("max_over_time skips leading NaNs but never adopts a later one")
+    func maxOverTimeNaN() {
+        // `(cur > maxVal) || IsNaN(maxVal)` — a NaN running value is always replaced,
+        // a NaN candidate never wins. So the result is NaN only if every sample is.
+        func maxOf(_ values: [Double]) -> Double {
+            let s = Series(
+                metric: .empty,
+                floats: values.enumerated().map { FPoint(t: Int64($0.offset) * 1000, f: $0.element) },
+                histograms: [])
+            let enh = EvalNodeHelper()
+            return funcMaxOverTime([], Matrix([s]), [NumberLiteral(val: 0)], enh).0[0].f
+        }
+        #expect(maxOf([.nan, 2, 1]) == 2, "leading NaN skipped")
+        #expect(maxOf([2, 1, .nan]) == 2, "trailing NaN ignored")
+        #expect(maxOf([2, .nan, 5]) == 5)
+        #expect(maxOf([.nan, .nan]).isNaN, "all NaN, so NaN")
+    }
+
+    @Test("ts_of_max_over_time reports the LAST maximum, max_over_time keeps the first")
+    func plateauTieBreak() {
+        // `>=` versus `>`. The only observable difference on a plateau, and it is why
+        // the two cannot share a comparator.
+        let s = Series(
+            metric: .empty,
+            floats: [
+                FPoint(t: 1000, f: 1), FPoint(t: 2000, f: 7),
+                FPoint(t: 3000, f: 7), FPoint(t: 4000, f: 2),
+            ], histograms: [])
+        let args: [any Expr] = [NumberLiteral(val: 0)]
+        let a = EvalNodeHelper()
+        #expect(funcMaxOverTime([], Matrix([s]), args, a).0[0].f == 7)
+        let b = EvalNodeHelper()
+        #expect(funcTsOfMaxOverTime([], Matrix([s]), args, b).0[0].f == 3, "the LAST 7")
+    }
+
+    @Test("the two ts_of defaults are asymmetric, so an empty series answers differently")
+    func tsOfDefaults() {
+        // `ts_of_first` defaults both lists to MaxInt64 and takes the min;
+        // `ts_of_last` defaults to 0 and takes the max. An empty series therefore
+        // reports MaxInt64/1000 from one and 0 from the other.
+        let empty = Series(metric: .empty, floats: [], histograms: [])
+        let a = EvalNodeHelper()
+        #expect(funcTsOfFirstOverTime([], Matrix([empty]), [], a).0[0].f
+            == Double(Int64.max) / 1000)
+        let b = EvalNodeHelper()
+        #expect(funcTsOfLastOverTime([], Matrix([empty]), [], b).0[0].f == 0)
+    }
+
+    @Test("first_over_time and last_over_time both prefer the histogram at an equal timestamp")
+    func equalTimestampPrefersHistogram() {
+        // `h.H == nil || (len(Floats) > 0 && f.T < h.T)` — strict `<`, so an equal
+        // timestamp falls through to the histogram branch. Same at the other end.
+        var h = FloatHistogram()
+        h.schema = 0
+        h.count = 3
+        let s = Series(
+            metric: .empty, floats: [FPoint(t: 1000, f: 5)], histograms: [HPoint(t: 1000, h: h)])
+        let a = EvalNodeHelper()
+        let (first, _) = funcFirstOverTime([], Matrix([s]), [], a)
+        #expect(first[0].h != nil, "the histogram won")
+        let b = EvalNodeHelper()
+        let (last, _) = funcLastOverTime([], Matrix([s]), [], b)
+        #expect(last[0].h != nil)
+    }
+
+    @Test("stdvar_over_time is the POPULATION variance")
+    func populationVariance() {
+        // Divisor `count`, not `count - 1`. For [1, 2, 3] the population variance is
+        // 2/3 and the sample variance is 1, so the two are easy to tell apart.
+        let s = Series(
+            metric: .empty,
+            floats: [FPoint(t: 1000, f: 1), FPoint(t: 2000, f: 2), FPoint(t: 3000, f: 3)],
+            histograms: [])
+        let enh = EvalNodeHelper()
+        let got = funcStdvarOverTime([], Matrix([s]), [NumberLiteral(val: 0)], enh).0[0].f
+        #expect(got == 2.0 / 3.0)
     }
 
     @Test("rad and deg keep Go's left association")

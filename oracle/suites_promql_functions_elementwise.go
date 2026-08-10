@@ -101,6 +101,16 @@ type fnIn struct {
 	// len(parser.Expressions) handed to the call. Only funcRound reads it, and it
 	// reads the LENGTH rather than the values, which is why nils suffice.
 	NArgs int `json:"nargs"`
+	// The `matrixVals` argument: one entry per series, each a list of samples in
+	// timestamp order. The builder splits each list into Floats and Histograms by
+	// whether the sample carries one, and takes the series' metric from its first
+	// sample.
+	//
+	// Note the range functions only ever read `matrixVals[0]` — `rangeEval` hands
+	// them one series at a time — so a multi-series matrix is something only the
+	// oracle can construct. It is in the corpus precisely because a port that looped
+	// would be wrong nowhere else.
+	MatrixIn [][]fnSampleIn `json:"matrix,omitempty"`
 	// A PromQL call expression whose parsed `Call.args` become the `args` the
 	// function receives, when the function reads more than the argument COUNT.
 	//
@@ -114,9 +124,10 @@ type fnIn struct {
 	// enh.Out seeded non-empty, to pin which bodies append to it and which ignore
 	// it. Empty in every case that models a real query.
 	Seed []fnSampleIn `json:"seed"`
-	// Sort the output samples and annotations before recording them. Set for the
-	// histogram family, whose classic-histogram results come out of a Go MAP and so
-	// have no order to be exact against. PORTING.md exception 13.
+	// Sort the output SAMPLES before recording them. Set for the histogram family,
+	// whose classic-histogram results come out of a Go MAP and so have no order to be
+	// exact against. PORTING.md exception 13. Annotations are sorted unconditionally —
+	// see runFnCase.
 	Sorted bool `json:"sorted,omitempty"`
 }
 
@@ -124,11 +135,15 @@ type fnSampleOut struct {
 	Metric string `json:"metric"`
 	T      string `json:"t"`
 	F      string `json:"f"`
-	// The FloatHistogram's String(), or "" when the sample carries none. Always ""
-	// in this slice — no body here emits a histogram — so a port that passes one
-	// through fails here.
-	Hist     string `json:"hist"`
-	DropName bool   `json:"dropName"`
+	// The FloatHistogram's String(), or "" when the sample carries none.
+	Hist string `json:"hist"`
+	// The CounterResetHint, and the bucket layout, which String() does NOT print —
+	// so a body that fails to force the hint to Gauge, or skips `Compact`, would be
+	// invisible without these. Two negative controls found exactly that. -1 and ""
+	// when the sample carries no histogram.
+	HistHint    int    `json:"histHint"`
+	HistBuckets string `json:"histBuckets"`
+	DropName    bool   `json:"dropName"`
 }
 
 type fnOut struct {
@@ -139,6 +154,16 @@ type fnOut struct {
 }
 
 // --------------------------------------------------------------------- helpers
+
+// fnRenderBuckets renders the parts of a FloatHistogram that String() omits: the
+// schema, the zero bucket, and both span/bucket lists. Without it a missing
+// `Compact` or an unforced CounterResetHint passes unnoticed.
+func fnRenderBuckets(h *histogram.FloatHistogram) string {
+	out := fmt.Sprintf("s=%d zt=%v zc=%v cv=%v", h.Schema, h.ZeroThreshold, h.ZeroCount, h.CustomValues)
+	out += fmt.Sprintf(" ps=%v pb=%v", h.PositiveSpans, h.PositiveBuckets)
+	out += fmt.Sprintf(" ns=%v nb=%v", h.NegativeSpans, h.NegativeBuckets)
+	return out
+}
 
 // fnNamedHistogram builds one of the named shapes an fnSampleIn can ask for. The
 // Swift wire transcribes the same four; a divergence shows up on the first case.
@@ -154,6 +179,22 @@ func fnNamedHistogram(name string) *histogram.FloatHistogram {
 		return histNaNSum()
 	case "negonly":
 		return histNegativeOnly()
+	case "gauge":
+		return histGauge()
+	case "gauge2":
+		return histGauge2()
+	case "crhint":
+		return histCounterReset()
+	case "ncrhint":
+		return histNotCounterReset()
+	case "custom2":
+		return histCustomBuckets2()
+	case "tiny":
+		return histTinyBuckets()
+	case "huge":
+		return histHugeBuckets()
+	case "overflow":
+		return histOverflowing()
 	default:
 		var n int64
 		if _, err := fmt.Sscanf(name, "std/%d", &n); err != nil {
@@ -187,16 +228,46 @@ func fnRenderVector(v promql.Vector) []fnSampleOut {
 	out := make([]fnSampleOut, 0, len(v))
 	for _, s := range v {
 		hist := ""
+		hint := -1
+		buckets := ""
 		if s.H != nil {
 			hist = s.H.String()
+			hint = int(s.H.CounterResetHint)
+			buckets = fnRenderBuckets(s.H)
 		}
 		out = append(out, fnSampleOut{
-			Metric:   s.Metric.String(),
-			T:        i64(s.T),
-			F:        fbits(s.F),
-			Hist:     hist,
-			DropName: s.DropName,
+			Metric:      s.Metric.String(),
+			T:           i64(s.T),
+			F:           fbits(s.F),
+			Hist:        hist,
+			HistHint:    hint,
+			HistBuckets: buckets,
+			DropName:    s.DropName,
 		})
+	}
+	return out
+}
+
+func fnBuildMatrix(in [][]fnSampleIn) promql.Matrix {
+	out := make(promql.Matrix, 0, len(in))
+	for _, series := range in {
+		s := promql.Series{}
+		if len(series) > 0 {
+			s.Metric = labels.FromStrings(series[0].Metric...)
+		}
+		for _, smp := range series {
+			t := parseI64(smp.T)
+			switch {
+			case smp.HistRaw != "":
+				s.Histograms = append(s.Histograms, promql.HPoint{T: t, H: fnNamedHistogram(smp.HistRaw)})
+			case smp.Hist != nil:
+				s.Histograms = append(s.Histograms, promql.HPoint{
+					T: t, H: genTestHistogram(*smp.Hist).ToFloat(nil)})
+			default:
+				s.Floats = append(s.Floats, promql.FPoint{T: t, F: unfbits(smp.F)})
+			}
+		}
+		out = append(out, s)
 	}
 	return out
 }
@@ -218,7 +289,12 @@ func runFnCase(in fnIn) fnOut {
 		// Experimental functions ON: `histogram_quantiles` is gated behind that flag,
 		// and the fixture needs its AST. Nothing else in these corpora is affected —
 		// the flag only widens which names resolve.
-		p := parser.NewParser(parser.Options{EnableExperimentalFunctions: true})
+		p := parser.NewParser(parser.Options{
+			EnableExperimentalFunctions: true,
+			// `resets`/`changes` read `args[0].(*MatrixSelector).VectorSelector.Anchored`,
+			// and `anchored` only parses with the extended range selectors enabled.
+			EnableExtendedRangeSelectors: true,
+		})
 		parsed, err := p.ParseExpr(in.Expr)
 		if err != nil {
 			panic(fmt.Sprintf("fixture expr %q: %v", in.Expr, err))
@@ -229,7 +305,7 @@ func runFnCase(in fnIn) fnOut {
 		}
 		args = call.Args
 	}
-	got, annos := fn(vectorVals, nil, args, enh)
+	got, annos := fn(vectorVals, fnBuildMatrix(in.MatrixIn), args, enh)
 
 	// The `expr` is passed as the query so AsStrings renders each annotation's
 	// (line:col). Without it Go emits the bare message, and every position range in
@@ -237,6 +313,13 @@ func runFnCase(in fnIn) fnOut {
 	// invisible. Four negative controls found that gap.
 	warnings, infos := annos.AsStrings(in.Expr, 0, 0)
 	strs := append(append([]string{}, warnings...), infos...)
+	// Annotations are ALWAYS sorted, whatever `Sorted` says. `Annotations` is a Go
+	// map, so AsStrings' order is randomised per run and there is nothing to be
+	// byte-exact against (PORTING.md exception 7). A case with two annotations made
+	// this fixture differ run to run until it was sorted here — which is precisely
+	// the "a fixture whose own output is nondeterministic is worse than no fixture"
+	// trap in docs/HANDOFF.md §4, caught by verify-fixtures.sh.
+	sortStrings(strs)
 	samples := fnRenderVector(got)
 	if in.Sorted {
 		sort.Slice(samples, func(i, j int) bool {
@@ -245,7 +328,6 @@ func runFnCase(in fnIn) fnOut {
 			}
 			return samples[i].F < samples[j].F
 		})
-		sortStrings(strs)
 	}
 	return fnOut{Samples: samples, Annos: strs}
 }

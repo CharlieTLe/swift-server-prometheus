@@ -105,6 +105,88 @@ func histNaNSum() *histogram.FloatHistogram {
 	}
 }
 
+// histGauge and histGauge2 carry CounterResetHint = GaugeType, which is the ONLY
+// way irate's not-a-counter warning and idelta's not-a-gauge warning can be told
+// apart — every other shape here is a counter, so the two tests looked identical
+// until these existed. Two of them, so a case can mix a gauge with a counter and
+// reach the `either` half of each condition.
+func histGauge() *histogram.FloatHistogram {
+	h := genTestHistogram(1).ToFloat(nil)
+	h.CounterResetHint = histogram.GaugeType
+	return h
+}
+
+func histGauge2() *histogram.FloatHistogram {
+	h := genTestHistogram(3).ToFloat(nil)
+	h.CounterResetHint = histogram.GaugeType
+	return h
+}
+
+// histCounterReset and histNotCounterReset carry the two hints whose CO-OCCURRENCE is
+// what `sum_over_time`'s collision warning tests. Every other shape here is
+// UnknownCounterReset or Gauge, so the `counterResetSeen && notCounterResetSeen`
+// condition was unreachable and three controls passed that should not have.
+func histCounterReset() *histogram.FloatHistogram {
+	h := genTestHistogram(1).ToFloat(nil)
+	h.CounterResetHint = histogram.CounterReset
+	return h
+}
+
+func histNotCounterReset() *histogram.FloatHistogram {
+	h := genTestHistogram(2).ToFloat(nil)
+	h.CounterResetHint = histogram.NotCounterReset
+	return h
+}
+
+// histCustomBuckets2 has DIFFERENT custom bounds from histCustomBuckets, so adding the
+// two forces a bounds reconciliation — the only way the MismatchedCustomBuckets info
+// fires.
+func histCustomBuckets2() *histogram.FloatHistogram {
+	return &histogram.FloatHistogram{
+		Schema:          -53,
+		Count:           8,
+		Sum:             19,
+		CustomValues:    []float64{1, 5, 20},
+		PositiveSpans:   []histogram.Span{{Offset: 0, Length: 3}},
+		PositiveBuckets: []float64{3, 4, 1},
+	}
+}
+
+// histTinyBuckets is small enough beside a large one that the Kahan compensation in
+// `sum_over_time`'s histogram path carries a non-zero term — without it the final
+// `Add(comp)` is a no-op and skipping it is invisible.
+func histTinyBuckets() *histogram.FloatHistogram {
+	return &histogram.FloatHistogram{
+		Schema:          1,
+		Count:           1e-16,
+		Sum:             1e-16,
+		PositiveSpans:   []histogram.Span{{Offset: 0, Length: 2}},
+		PositiveBuckets: []float64{5e-17, 5e-17},
+	}
+}
+
+func histHugeBuckets() *histogram.FloatHistogram {
+	return &histogram.FloatHistogram{
+		Schema:          1,
+		Count:           1e16,
+		Sum:             1e16,
+		PositiveSpans:   []histogram.Span{{Offset: 0, Length: 2}},
+		PositiveBuckets: []float64{5e15, 5e15},
+	}
+}
+
+// histOverflowing is large enough that two of them saturate a float64 count, which is
+// what makes avg_over_time's histogram path switch to an incremental mean.
+func histOverflowing() *histogram.FloatHistogram {
+	return &histogram.FloatHistogram{
+		Schema:          1,
+		Count:           1e308,
+		Sum:             1e308,
+		PositiveSpans:   []histogram.Span{{Offset: 0, Length: 2}},
+		PositiveBuckets: []float64{5e307, 5e307},
+	}
+}
+
 // histNegativeOnly has all its observations below zero, which is the other branch
 // of the NaN-skew check.
 func histNegativeOnly() *histogram.FloatHistogram {

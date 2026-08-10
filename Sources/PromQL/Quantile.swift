@@ -623,8 +623,10 @@ func ensureMonotonicAndIgnoreSmallDeltas(
 /// Go: `quantile` — the φ-quantile of a set of sample values, used by the
 /// `quantile` aggregator and `quantile_over_time`.
 ///
-/// Unexported in Go, so the oracle cannot reach it; pinned by invariant tests
-/// instead.
+/// Unexported in Go, so the oracle cannot call it directly — but it is reachable
+/// *through* `quantile_over_time` and `mad_over_time`, and
+/// `Fixtures/promql/functions-overtime.jsonl` is what pins it. Before those existed
+/// this function's two fused sites were both wrong and nothing said so.
 ///
 /// **Go's comparator is not a strict weak ordering.** `vectorByValueHeap.Less` is
 /// `if IsNaN(vi) { return true }; return vi < vj` (functions.go:2690), so NaN
@@ -653,11 +655,22 @@ public func quantile(_ q: Double, _ values: [Double]) -> Double {
     // Between two samples the result is a weighted average of the pair.
     let rank = q * (n - 1)
 
-    let lowerIndex = max(0, rank.rounded(.down))
-    let upperIndex = min(n - 1, lowerIndex + 1)
+    // `math.Max`/`math.Min`, which are arm64 assembly — see PORTING.md quirk 28.
+    // Both operands are finite here (a NaN `q` returned above), so the NaN
+    // semantics do not arise; spelled as Go spells it regardless.
+    let lowerIndex = GoMath.max(0, rank.rounded(.down))
+    let upperIndex = GoMath.min(n - 1, lowerIndex + 1)
 
-    let weight = rank - rank.rounded(.down)
+    // Go writes `weight := rank - math.Floor(rank)` and the compiler emits a single
+    // `FNMSUBD` (quantile.go:743) that recomputes `q*(n-1)` **unrounded** — the same
+    // pattern as `xatan`'s `z + Q0` and `sinh`'s `sq + Q2`, PORTING.md quirk 40. The
+    // rounded `rank` above is still what `Floor` reads.
+    let weight = (-rank.rounded(.down)).addingProduct(q, n - 1)
     let lower = values[Int(lowerIndex)]
     let upper = values[Int(upperIndex)]
-    return lower * (1 - weight) + upper * weight
+    // And the second product is fused into the add (`FMADDD` at quantile.go:744)
+    // while the first is a plain multiply. This was untested until
+    // `quantile_over_time` reached it, and the port had both roundings wrong — 12 of
+    // 1,480 cases.
+    return (lower * (1 - weight)).addingProduct(upper, weight)
 }

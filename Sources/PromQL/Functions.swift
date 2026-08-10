@@ -18,8 +18,10 @@
 //
 // Deliberately not here, each with the reason:
 //
-//   * the `*_over_time` family and the rate functions — they take a `Matrix` and
-//     need `interpolate`/`correctForCounterResets`.
+//   * `sum_over_time`/`avg_over_time` (histogram Kahan arithmetic),
+//     `resets`/`changes` (the start-timestamp machinery) and the rate family (`interpolate`,
+//     `correctForCounterResets`). The float-only range aggregations that do not need
+//     any of those are in `Functions+OverTime.swift`.
 //   * `funcSort` and friends — they need Go's pdqsort ported, because the two
 //     sorts are observably different and both comparators are invalid orderings.
 //
@@ -129,6 +131,12 @@ public final class EvalNodeHelper {
     /// intent. Both settings are pinned; the oracle reaches the field by
     /// reflection, which is why the corpus has a `delayed` axis.
     public var enableDelayedNameRemoval: Bool
+
+    /// Go: `StartTimestamps` — OTel start timestamps aligned with the matrix samples.
+    ///
+    /// Nil until Phases 6-7 bring the ST-aware selectors. `resets` reads it; see
+    /// ``isStartTimestampReset(_:_:_:_:)``.
+    public var startTimestamps: StartTimestamps?
 
     /// Go: `signatureToMetricWithBuckets` — classic histogram bucket groups for this
     /// step, keyed by the label set with `le` removed.
@@ -567,7 +575,14 @@ func funcTimestamp(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelpe
 
 /// Go: `promql.FunctionCalls` — the name-to-implementation table.
 ///
-/// **Partial.** Only the element-wise arithmetic slice is populated; the entries
+/// **Partial**, and the gap has two different causes that the test keeps apart:
+/// bodies not yet ported, and the **seven names Go maps to `nil`** — `start`, `end`,
+/// `step`, `range` (folded into a `NumberLiteral` by `foldQueryContextFunctions`),
+/// `info`, `label_replace` and `label_join` (reached by the evaluator directly, not
+/// through this table). Those seven can never have an entry, so counting them as
+/// "not ported" would make the table look permanently incomplete.
+///
+/// Only the element-wise arithmetic slice is populated; the entries
 /// listed in the file header arrive with their slices. A lookup that misses is a
 /// function that is parsed and type-checked but not yet evaluable, which is why
 /// the evaluator must not assume this table is total until Phase 5 closes.
@@ -575,6 +590,9 @@ func funcTimestamp(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelpe
 /// visible.
 public let functionCalls: [String: FunctionCall] = [
     "abs": funcAbs,
+    "absent": funcAbsent,
+    "absent_over_time": funcAbsentOverTime,
+    "avg_over_time": funcAvgOverTime,
     "acos": funcAcos,
     "acosh": funcAcosh,
     "asin": funcAsin,
@@ -585,14 +603,20 @@ public let functionCalls: [String: FunctionCall] = [
     "clamp": funcClamp,
     "clamp_max": funcClampMax,
     "clamp_min": funcClampMin,
+    "changes": funcChanges,
     "cos": funcCos,
+    "count_over_time": funcCountOverTime,
     "cosh": funcCosh,
     "day_of_month": funcDayOfMonth,
     "day_of_week": funcDayOfWeek,
     "day_of_year": funcDayOfYear,
     "days_in_month": funcDaysInMonth,
     "deg": funcDeg,
+    "delta": funcDelta,
+    "deriv": funcDeriv,
+    "double_exponential_smoothing": funcDoubleExponentialSmoothing,
     "exp": funcExp,
+    "first_over_time": funcFirstOverTime,
     "floor": funcFloor,
     "histogram_avg": funcHistogramAvg,
     "histogram_count": funcHistogramCount,
@@ -603,25 +627,44 @@ public let functionCalls: [String: FunctionCall] = [
     "histogram_stdvar": funcHistogramStdVar,
     "histogram_sum": funcHistogramSum,
     "hour": funcHour,
+    "idelta": funcIdelta,
+    "increase": funcIncrease,
+    "irate": funcIrate,
+    "last_over_time": funcLastOverTime,
     "ln": funcLn,
     "log10": funcLog10,
     "log2": funcLog2,
     "max_of": funcMaxOf,
+    "mad_over_time": funcMadOverTime,
+    "max_over_time": funcMaxOverTime,
     "min_of": funcMinOf,
+    "min_over_time": funcMinOverTime,
     "minute": funcMinute,
     "month": funcMonth,
     "pi": funcPi,
+    "predict_linear": funcPredictLinear,
+    "present_over_time": funcPresentOverTime,
+    "quantile_over_time": funcQuantileOverTime,
     "rad": funcRad,
+    "rate": funcRate,
+    "resets": funcResets,
     "round": funcRound,
     "scalar": funcScalar,
     "sgn": funcSgn,
     "sin": funcSin,
     "sinh": funcSinh,
     "sqrt": funcSqrt,
+    "sum_over_time": funcSumOverTime,
+    "stddev_over_time": funcStddevOverTime,
+    "stdvar_over_time": funcStdvarOverTime,
     "tan": funcTan,
     "tanh": funcTanh,
     "time": funcTime,
     "timestamp": funcTimestamp,
+    "ts_of_first_over_time": funcTsOfFirstOverTime,
+    "ts_of_last_over_time": funcTsOfLastOverTime,
+    "ts_of_max_over_time": funcTsOfMaxOverTime,
+    "ts_of_min_over_time": funcTsOfMinOverTime,
     "vector": funcVector,
     "year": funcYear,
 ]

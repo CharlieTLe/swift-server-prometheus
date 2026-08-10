@@ -1,8 +1,8 @@
 # Handoff
 
-Written at the end of the session that landed `promql/functions.go`'s **histogram family** — the five
-direct readers plus `histogram_fraction`/`quantile`/`quantiles`, and the bucket caches and
-classic/native split they sit on.
+Written at the end of the session that landed `promql/functions.go`'s **float-only range
+aggregations** — `aggrOverTime` and the thirteen entries around it, and with them the matrix input the
+rest of the range family will reuse.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -16,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **50 of `FunctionCalls`' 89 bodies** are landed. Next: the rest of `functions.go`'s bodies (`*_over_time` and the rate family, then the sorts), then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **78 of the 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). Next: the four sorts (Go's pdqsort), `extendedRate` for anchored/smoothed ranges, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **321,471 committed differential cases, 440 tests**, on both Swift 6.4
+Green as of this commit: **325,708 committed differential cases, 448 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -40,9 +40,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,993       550
-  PromQL            3,469         –
-Tests              11,124
-oracle (Go)        14,249
+  PromQL            4,901         –
+Tests              11,321
+oracle (Go)        15,215
 ```
 
 ### Verify everything in one go
@@ -232,6 +232,80 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **Count what *can* be ported, not what exists.** Seven of `FunctionCalls`' 89 keys map to **nil** in
+  Go: `start`/`end`/`step`/`range` are folded into a `NumberLiteral` before lookup, and
+  `info`/`label_replace`/`label_join` are reached by the evaluator directly. None can ever have a body.
+  The test now keeps three categories — ported, deferred, nil-in-Go — because without that split the
+  port reads as 77/89 when the reachable total is 82. Quirk 62.
+- **A corpus built from one family of generated values pins one axis — and this is now the third
+  instance.** Every histogram shape in the `functions-*` corpora came from `genTestHistogram` (hint
+  `UnknownCounterReset`) or was a hand-built gauge, so `sum_over_time`'s
+  `counterResetSeen && notCounterResetSeen` could never both be true: the collision warning, its `&&`,
+  and its absence were all invisible. The bounds-reconciliation info needed two custom-bucket shapes
+  with *different* bounds, and there was one custom shape used twice. Four new shapes turned five silent
+  controls into failures. Quirk 59. Alongside quirks 51 (magnitude for Kahan) and 54 (inexactness for
+  fusion, cancellation for grouping), the rule is: **ask which *field* of the input each branch reads,
+  and make sure two cases differ in it.**
+- **Go's `append(enh.Out, …)` without a write-back is load-bearing in exactly one place.**
+  `aggrOverTime`/`aggrHistOverTime` return the appended slice and leave the field's length alone, so
+  `funcSumOverTime`'s incompatible-schema path — which returns `enh.Out` — *discards* the sample the
+  aggregation produced. A port that mutates in place returns a partial sum beside the warning where Go
+  returns the warning alone. Quirk 58. Slice-value semantics are not always allocation detail.
+- **A corpus case that is safe under one input is not safe under another, and "safe" can mean "does
+  not hang the generator".** `resets`/`changes`' merge loop does not terminate when a float and a
+  histogram share a timestamp — neither of Go's two cases matches, so no index advances. Equal-timestamp
+  cases are therefore excluded outright. But the *anchor-tie* matrices, where the shared timestamp sits
+  **before** the range start, are fine under `[5m] anchored` (the loop starts past the tie) and hang
+  under `[10m] anchored` or `[5m] anchored offset 1m` (the range start moves earlier,
+  `pickFirstSampleIndices` finds no anchor and returns `(0, 0)`). Both variants were in the corpus
+  before the generator hung. Quirk 57. **When a corpus dimension changes which code path runs, the
+  safety of a case is a property of the pair, not of the case.**
+- **A lesson learned in one corpus does not transfer to the next one automatically.**
+  `promql/histogram-stats` carries `CounterResetHint` as its own field with a comment explaining that
+  `FloatHistogram.String()` does not print it. The `promql/functions-*` corpora rendered histograms with
+  `String()` alone — and so could not see `instantValue` failing to force its result's hint to
+  `GaugeType`, or skipping `Compact` altogether. Three controls passed that should not have. Both
+  corpora now emit the hint and a full span/bucket rendering. Quirk 56. **When adding a corpus that
+  renders a type an older corpus already renders, go and read what the older one had to add.**
+- **`verify-fixtures.sh` earns its keep on nondeterminism, not just on drift.** A case with two
+  annotations recorded them in Go's map order, so `promql/functions-overtime.jsonl` differed between
+  regenerations — the exact "a fixture whose own output is nondeterministic is worse than no fixture"
+  trap in §4. Annotations are now sorted unconditionally in every `functions-*` corpus, and the
+  per-case `sorted` flag governs only the samples. Exception 7 applies to *any* corpus that renders
+  more than one annotation.
+- **When two expressions share a shape but only one is pinned, look at the caller.**
+  `linearRegression`'s `covXY := sumXY - sumX*sumY/n` and `varX := sumX2 - sumX*sumX/n` are the same
+  grouping, and hoisting `1/n` out of `covXY` broke the corpus while the identical change to `varX` did
+  not. The difference is `interceptTime`: `deriv` passes the first sample's timestamp so `x` starts at
+  0, while `predict_linear` passes `enh.Ts` — and a tight cluster of samples far from the evaluation
+  time makes `x` nearly constant and huge, which is the only way `sumX2 - sumX*sumX/n` becomes a tiny
+  difference of enormous numbers. Five samples 1 ms apart at `t = 1.7e12` closed it. Quirk 53.
+- **A fusion on tidy inputs is not a fusion you can test.** `calcTrendValue`'s
+  `tf*(s1-s0) + (1-tf)*b` is one `FMADDD`, and with `tf = 0.5` and small integer data both products are
+  *exact*, so unfusing it changes nothing. `tf = 1/7` and data of `0.1`, `1/3`, `1e8 + 0.7` made it
+  break. Worth pairing with the Kahan lesson above: **the corpus has to be hostile in the specific way
+  the arithmetic is fragile** — magnitude for compensation, inexactness for fusion, cancellation for
+  grouping. Quirk 54.
+- **"Unreachable by the oracle" is a statement about today's callers, not about the function.**
+  `promql.quantile` is unexported, so it was ported with a comment saying the oracle could not reach it
+  and pinned by hand-written invariants instead. Porting `quantile_over_time` and `mad_over_time` made
+  it reachable, and **12 of 1,480 cases failed at once**: both of its fused sites were wrong — `weight`
+  recomputes `q*(n-1)` unrounded, and the final weighted average fuses its *second* product only. Quirk
+  52. So when a file says a function cannot be differentially tested, treat that as a note to revisit
+  when its first caller lands, not as a settled fact.
+- **A Kahan accumulator needs enough samples at enough magnitude before its compensation is
+  pinnable.** `varianceOverTime`'s three load-bearing details — `delta` against the *compensated* mean,
+  the second term re-reading `mean + cMean` *after* the update, and dropping the `aux` compensation —
+  all survived a corpus of three- and four-sample series. The terms were too small to see. A 50-sample
+  run at `1e16`, a 101-sample run at `1e10` and an alternating `1e17`/`1` series made all three break.
+  Generalises to every Kahan site the evaluator still has to bring: a short series pins the *algebra*
+  and not the *compensation*, and the two fail independently. Quirk 51.
+- **The range functions read `matrixVal[0]` and nothing else.** `rangeEval` hands them one series at a
+  time, so a port that loops over the matrix is wrong nowhere a query can reach — but the oracle can
+  build a multi-series matrix, and does. The same file has three guards that look alike and are not:
+  an empty matrix, a float-less series (silence, *no* annotation) and a mixed one (the float answer
+  *with* an annotation). Quirk 50, which also records the two `ts_of_*` defaults being asymmetric and
+  both `first_over_time`/`last_over_time` preferring the histogram at an equal timestamp.
 - **Read the label-dropping predicate at each call site, not from its neighbour.** `simpleFloatFunc`
   drops all three schema metadata labels; `simpleHistogramFunc`, eight lines away in the same file,
   drops **only `__name__`** through an inline closure. The port used the neighbour's predicate and
@@ -524,6 +598,14 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/engine.go`'s `EvalNodeHelper`, `EvalSeriesHelper` | **three fields only** — `ts`, `out`, `enableDelayedNameRemoval`. The caches arrive with their callers; the file lists which and whose |
 | `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` |
 | `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
+| `PromQL` | `promql/functions.go`'s float-only range aggregations | `aggrOverTime`, `compareOverTime`, `varianceOverTime`, `quantile_over_time`, `mad_over_time` and the 13 entries around them. Quirks 50-52 |
+| `PromQL` | `promql/functions.go`'s `absent` | plus `createLabelsForAbsentFunction`. 78 of the 82 possible entries. Quirk 62 |
+| `PromQL` | `promql/functions.go`'s `rate`/`increase`/`delta` | `extrapolatedRate` and `histogramRate`. `extendedRate` (anchored/smoothed) deferred. 77 of 89. Quirk 61 |
+| `PromQL` | `promql/functions.go`'s `avg_over_time` | both paths, including the mid-range switch from a direct to an incremental mean. Quirk 60 |
+| `PromQL` | `promql/functions.go`'s `sum_over_time` | `aggrHistOverTime` and the histogram Kahan path. 73 of 89 in total. Quirks 58-59 |
+| `PromQL` | `promql/functions.go`'s `resets`/`changes` | `pickFirstSampleIndices` and `durationMilliseconds`; first reader of `StartTimestamps`. 72 of 89 in total. Quirk 57 |
+| `PromQL` | `promql/functions.go`'s `irate`/`idelta` | `instantValue` and `isStartTimestampReset`. 70 of 89 in total. Quirks 55-56 |
+| `PromQL` | `promql/functions.go`'s regression and smoothing | `linearRegression`, `calcTrendValue`, `deriv`, `predict_linear`, `double_exponential_smoothing`. 68 of 89 in total. Quirks 53-54 |
 | `PromQL` | `promql/functions.go`'s histogram family | `simpleHistogramFunc` + the 5 readers, `histogram_fraction`/`quantile`/`quantiles`, `resetHistograms`, `metricWithBuckets`. 50 of `FunctionCalls`' 89 entries in total. Quirks 48-49, exception 13 |
 | `GoCompat.GoTime` | the calendar half of `time.Time` | `utcDate`/`utcClock` rebuilt on Go's **absolute** second count, plus `utcWeekday`, `utcYearDay`, `dateToAbsDays`, `daysInMonth`. Quirks 46-47 |
 | `GoCompat.GoConv.int64` | Go's `int64(float64)` | the saturating `FCVTZS`. `PromQLParser`'s `clampToInt64` now delegates to it |
@@ -855,7 +937,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 49 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 62 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

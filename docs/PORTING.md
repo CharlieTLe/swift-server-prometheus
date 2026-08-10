@@ -801,6 +801,295 @@ changing behaviour.
     the bare message and every one of these becomes invisible. Four negative controls
     found that gap.
 
+50. **The range functions read `matrixVal[0]` and nothing else, and three guards that
+    look alike are three different behaviours.** `rangeEval` calls a range function
+    once per input series, so the matrix it receives has exactly one entry — a port
+    that loops over it produces one sample per series and is wrong nowhere a query can
+    reach. The oracle *can* construct a multi-series matrix, so the corpus pins it.
+
+    The guards, in the order they appear in `compareOverTime`/`varianceOverTime`:
+
+    | condition | behaviour |
+    |---|---|
+    | `len(matrixVal) == 0` | return `enh.Out` — no series, no output |
+    | `len(samples.Floats) == 0` | return `enh.Out` **with no annotation** — a histogram-only range yields silence from `max_over_time` |
+    | `len(samples.Histograms) > 0` | *add* `HistogramIgnoredInMixedRangeInfo` and carry on with the floats |
+
+    And two asymmetries in the same family that read like slips:
+
+    - `ts_of_first_over_time` defaults both timestamp lists to `math.MaxInt64` and
+      takes the **min**; `ts_of_last_over_time` defaults them to **0** and takes the
+      **max**. So a series with neither floats nor histograms reports
+      `MaxInt64 / 1000` from one and `0` from the other.
+    - `first_over_time` and `last_over_time` both pick the **histogram** when a float
+      and a histogram share a timestamp, because the comparison is strict (`f.T < h.T`
+      and `h.T < f.T` respectively) and the histogram branch is the fall-through.
+
+    `ts_of_max_over_time` uses `>=` where `max_over_time` uses `>`, so on a plateau the
+    former reports the **last** maximum and the latter the first. They cannot share a
+    comparator.
+
+51. **`varianceOverTime`'s Welford is not the textbook one, and its Kahan
+    compensation is only pinnable by long runs at a large offset.** The shape is
+
+    ```go
+    delta := f.F - (mean + cMean)
+    mean, cMean = kahansum.Inc(delta/count, mean, cMean)
+    aux, cAux = kahansum.Inc(delta*(f.F-(mean+cMean)), aux, cAux)
+    ```
+
+    Three things are load-bearing: `delta` is against the **compensated** mean; the
+    second term re-reads `mean + cMean` **after** the update, so it uses the new mean;
+    and the divisor is `count`, so `stdvar_over_time` is the **population** variance.
+
+    All three, plus dropping the `aux` compensation entirely, survived a corpus of
+    three- and four-sample series — the compensation terms were simply too small to
+    see. What made them observable was a 50-sample run at `1e16`, a 101-sample run at
+    `1e10`, and an alternating `1e17`/`1` series. **A Kahan accumulator needs enough
+    samples at enough magnitude for the compensation to be non-negligible; a short
+    series pins the algebra and not the compensation.**
+
+    Still unwitnessed and recorded as such: rewriting `delta/count` as
+    `delta*(1/count)`. The two differ only when both roundings compound, and nothing in
+    822 cases distinguishes them.
+
+52. **`promql.quantile` has two fused sites, and both were wrong until
+    `quantile_over_time` reached it.** The function is unexported, so the oracle cannot
+    call it — it was ported with a comment saying so and pinned by hand-written
+    invariants instead. Adding `quantile_over_time` and `mad_over_time` made it
+    reachable, and 12 of 1,480 cases failed immediately. Both sites are the patterns
+    this document already records elsewhere:
+
+    - `weight := rank - math.Floor(rank)` compiles to one `FNMSUBD`
+      (quantile.go:743) that recomputes `q*(n-1)` **unrounded**, while the rounded
+      `rank` is still what `Floor` reads. Quirk 40's family.
+    - `values[lower].F*(1-weight) + values[upper].F*weight` fuses the **second**
+      product into the add and leaves the first a plain `FMULD` (quantile.go:744).
+
+    The lesson is the one HANDOFF §3 already states in the other direction: a corpus
+    written for one layer finds bugs in the layer beneath it. Here the layer beneath
+    had a comment explicitly saying it could not be differentially tested — and that
+    was true only until a *caller* was ported. **"Unreachable by the oracle" is a
+    statement about today's callers.**
+
+53. **Two of `linearRegression`'s three unfusable groupings need *catastrophic
+    cancellation* to be visible, and only one caller can produce it.**
+    `covXY := sumXY - sumX*sumY/n` and `varX := sumX2 - sumX*sumX/n` have the same
+    shape, and hoisting `1/n` out of either both fuses and reassociates. Yet with an
+    ordinary corpus the `covXY` change breaks and the `varX` one does not.
+
+    The reason is `interceptTime`. `deriv` passes `samples.Floats[0].T`, so `x` starts
+    at 0 and `sumX2` is comfortably larger than `sumX*sumX/n`. `predict_linear` passes
+    **`enh.Ts`**, so a tight cluster of samples far from the evaluation time gives `x`
+    values that are nearly equal and huge — and then `sumX2 - sumX*sumX/n` is a tiny
+    difference of enormous numbers, which is exactly where the grouping matters.
+
+    Five samples 1 ms apart at `t = 1.7e12` with `enh.Ts = 0` is what closed it. The
+    general point: **when two expressions share a shape but only one is pinned, the
+    difference is usually in the caller, not in the expression.**
+
+54. **`calcTrendValue`'s fusion is invisible on tidy inputs.** `tf*(s1-s0) + (1-tf)*b`
+    is one `FMADDD` (functions.go:900). With `tf` of 0.5 and small integer data both
+    products are exact and the fusion cannot be observed at all. Values with no exact
+    binary representation — `tf = 1/7`, data of `0.1`, `1/3`, `1e8 + 0.7` — are what
+    make it break. Same for the operand order: fusing `(1-tf)*b` instead of
+    `tf*(s1-s0)` is a different answer, and also only on such inputs.
+
+    Two perturbations in the same file are **provably** unobservable and are recorded
+    so nobody reads their silence as a gap: `double_exponential_smoothing`'s initial
+    `s0` (only read when `i-1 == 0`, where `calcTrendValue` short-circuits to `b`), and
+    `linearRegression`'s `i > 0` guard on the `constY` test (at `i == 0` the sample
+    *is* `initY`, so the comparison is false either way).
+
+55. **`irate` and `idelta`'s two-sample selection is a hand-written merge, not a
+    sort, and its equal-timestamp case is deliberate.** `instantValue` takes the last
+    two floats in order, then merges the last two histograms in with a four-way
+    switch: a histogram older than `ss[0]` is **discarded**, one newer than `ss[1]`
+    shifts `ss[1]` down, and everything else — *including an equal timestamp* —
+    overwrites `ss[0]`. Upstream's comment calls that "a correct order, even in the
+    (irregular) case of equal timestamps".
+
+    `isRate` then flips almost every decision, and the two hint tests are **not**
+    mirror images:
+
+    | | `irate` | `idelta` |
+    |---|---|---|
+    | float counter reset | result stays at `ss[1]` — the raw newer value | subtracted anyway |
+    | hint is `GaugeType` | warns (not a counter) | — |
+    | hint is *not* `GaugeType` | — | warns (not a gauge) |
+    | histogram counter reset | subtraction skipped | subtracted anyway |
+    | result | divided by the interval in seconds | left as a difference |
+
+    The float-reset case is the one to get right: the result is left at `ss[1]`, not
+    zeroed and not subtracted, which is why `resultSample` is seeded from `ss[1]`.
+
+    Every annotation here is reported against `args.PositionRange()` — the range of
+    the whole `Expressions` slice, not of `args[0]`.
+
+56. **A fixture that renders a histogram with `String()` alone cannot see the hint or
+    the bucket layout.** `FloatHistogram.String()` prints the count, the sum and the
+    bucket *bounds*, but not `CounterResetHint`, the schema, the zero bucket or the
+    spans. So `instantValue` failing to force the result's hint to `GaugeType`, and
+    skipping `Compact` entirely, were both invisible — three negative controls passed
+    that should not have.
+
+    `promql/functions-*` now emit `histHint` and a `histBuckets` rendering of the
+    schema, zero bucket, custom values and both span/bucket lists alongside
+    `String()`. The same gap is already recorded for `promql/histogram-stats`
+    (docs/HANDOFF.md §5), which carries `CounterResetHint` as its own field for
+    exactly this reason — **the lesson did not transfer automatically to the next
+    corpus, and that is worth noticing.**
+
+    Relatedly, `verify-fixtures.sh` caught this corpus being **nondeterministic**: a
+    case with two annotations recorded them in Go's map order, so the file differed
+    between regenerations. Annotations are now sorted unconditionally, and `Sorted`
+    governs only the sample order. Exception 7's reasoning applies to every corpus
+    that renders more than one annotation, not just to `promql/annotations-set`.
+
+57. **`resets`/`changes`' merge loop does not terminate when a float and a histogram
+    share a timestamp, and this was confirmed by hanging the fixture generator.** Each
+    iteration picks the next sample with two cases — float strictly earlier, or
+    histogram strictly earlier. An **equal** timestamp matches neither, so no index
+    advances, `curSample` keeps its previous contents, and the loop condition is still
+    true.
+
+    The port reproduces the selection faithfully and raises a `precondition` on the
+    unmatched case, so a corpus that reaches it fails loudly instead of hanging — the
+    same treatment exception 9 gives `sampleRing`'s three latent bugs.
+
+    Two consequences for the corpus, both discovered the hard way:
+
+    - equal-timestamp cases cannot be pinned at all, so they are excluded;
+    - a case that is *safe* under one selector is not safe under another. The
+      anchor-tie matrices (a float and a histogram sharing a timestamp **before** the
+      range start) are fine with `[5m] anchored`, where `pickFirstSampleIndices` starts
+      the loop past the tie — but `[10m] anchored` or `[5m] anchored offset 1m` moves
+      the range start earlier, finds no anchor, returns `(0, 0)`, and hangs. Those two
+      matrices therefore run against exactly one selector.
+
+    Also pinned here: the first-sample test is
+    `iFloat + iHistogram == 1 + firstFloat + firstHistogram`, which works because
+    exactly one index advances per iteration and their **sum** is a step counter.
+    Rewriting it as `== 1` breaks every anchored case.
+
+    And `changes` never reads `enh.StartTimestamps` while `resets` does — though with
+    start timestamps nil until Phases 6-7, that difference is currently unobservable
+    and is recorded rather than tested.
+
+58. **`aggrOverTime` and `aggrHistOverTime` return `append(enh.Out, …)` without
+    assigning back, and one caller depends on it.** Go's field keeps its original
+    length, so the appended sample lives only in the returned slice. Every caller that
+    returns that value straight through cannot tell the difference — but
+    `funcSumOverTime`'s incompatible-schema path returns **`enh.Out`**, and thereby
+    *discards* the sample the aggregation just produced. A port that mutates the helper
+    in place returns a partial sum alongside the warning; Go returns the warning alone.
+    Four fixture cases.
+
+    `sum_over_time` also panics on a series with **neither** floats nor histograms:
+    `len(Floats) == 0` routes it to the histogram path, which indexes `Histograms[0]`
+    unguarded. It took the fixture generator down. Unreachable from a query, guarded
+    with a clear precondition — exception 9's treatment again.
+
+59. **Four of `sum_over_time`'s histogram behaviours were unreachable because every
+    test shape shared a counter-reset hint.** `genTestHistogram` produces
+    `UnknownCounterReset`, and the corpus's hand-built shapes were gauges — so
+    `counterResetSeen && notCounterResetSeen` could never both be true, and the
+    collision warning, its `&&`, and its absence were all invisible. Likewise the
+    bounds-reconciliation info needed two custom-bucket histograms with **different**
+    bounds, and the corpus had one custom shape used twice.
+
+    Adding four shapes — a `CounterReset` hint, a `NotCounterReset` hint, a second set
+    of custom bounds, and a tiny/huge pair whose Kahan compensation is non-zero — turned
+    five silent controls into failures.
+
+    **The generalisation, which now has three instances in this document (quirks 51, 54,
+    59): a corpus built from one family of generated values pins one axis.** Ask which
+    *field* of the input each branch reads, and make sure two cases differ in it.
+
+    Still unwitnessed: `sum_over_time`'s `IsInf(sum)` guard before adding the
+    compensation. Kahan's `c` is already 0 or NaN by the time the sum saturates, so
+    removing the guard moves nothing. Kept because it is what Go does.
+
+60. **`avg_over_time` changes algorithm mid-range, and the trigger is tested on the
+    *candidate* sum.** Upstream's comment (functions.go:1155-1177) records the history:
+    a direct mean plus Kahan is more accurate than an incremental one, except that it
+    overflows on inputs the incremental form survives. So both the float and the
+    histogram path accumulate a direct sum until it *would* overflow, then switch
+    permanently.
+
+    Three details decide whether a port matches:
+
+    - the float path computes `newSum, newC := Inc(...)` and assigns them only if
+      `newSum` is finite, so the sample that would have overflowed is **reprocessed** by
+      the incremental branch in the same iteration. A `continue` there loses it.
+    - the histogram path works on a `sumCopy` per iteration and commits
+      `sum, kahanC = sumCopy, cCopy` only once the addition is good *and* non-overflowing
+      — so the copy discipline is a decision point, not allocation hygiene.
+    - the closing fold is `sum/count + kahanC/count`: **two divisions and one add**, not
+      `(sum + kahanC) / count`. Witnessed only once the corpus carried a series whose
+      compensation was non-zero *and* which did not overflow.
+
+    Unwitnessed in both paths, and recorded as such: the `kahanC /= (count - 1)` on
+    switching. Once a sum saturates, `mean` is around 1e307 and any surviving
+    compensation is ~1e-300, so dividing it and zeroing it are both diluted below the
+    final rounding.
+
+61. **`rate` does not fit a line — it extrapolates a difference, and the corpus has to
+    move samples *within* the range.** `extrapolatedRate` takes `last - first`, adds
+    back the pre-reset value at every counter reset, then scales by
+
+        (sampledInterval + durationToStart + durationToEnd) / sampledInterval
+
+    and divides by the range for `rate`. "Close enough to the boundary" means within
+    **1.1×** the average gap between samples; beyond that it extrapolates only *half* a
+    gap, on the theory that the series genuinely starts or ends inside the range.
+
+    So changing sample *values* alone cannot pin most of it. The corpus places samples
+    explicitly in time: filling the range, clustered at each end, two samples only, and
+    with a rising counter whose extrapolated zero point lands inside `durationToStart` —
+    the only shape where the negative-value clamp changes the answer. The clamp's guard
+    is `resultFloat > 0 && samples.Floats[0].F >= 0`, so a first sample of exactly 0
+    still qualifies and a negative one does not.
+
+    `histogramRate` **nulls out its first sample** when there is a reset between the
+    first and second, replacing it with an empty histogram carrying the *second's*
+    schema and custom values — so the first sample's bucket layout is deliberately not
+    checked. The custom-buckets test that follows compares against a
+    `usingCustomBuckets` that may have been reassigned from the second sample.
+
+    `extendedRate`/`extendedHistogramRate` — the `anchored`/`smoothed` branch — are
+    **not ported**; the dispatch raises a precondition, and the corpus does not generate
+    those modifiers.
+
+    And `extrapolatedRate` indexes `vals[0]` with no emptiness check, so an empty matrix
+    panics. That is the **fourth** latent crash of this kind in `functions.go` (with
+    `sampleRing`'s three in exception 9, `sum_over_time`'s and `avg_over_time`'s in
+    quirk 58, and `instantValue`'s). All are unreachable from a query and all are
+    guarded with a clear precondition rather than reproduced.
+
+62. **Seven of `FunctionCalls`' keys map to `nil`, and conflating them with unported
+    bodies makes the table look permanently incomplete.** `start`, `end`, `step` and
+    `range` are folded into a `NumberLiteral` by `foldQueryContextFunctions` before the
+    evaluator ever looks them up; `info`, `label_replace` and `label_join` are reached
+    by the evaluator directly (`evalLabelJoin`/`evalLabelReplace`), not through the map.
+    None of the seven can ever have an implementation.
+
+    `Tests/PromQLTests/FunctionsTests.swift` therefore keeps three categories, not two:
+    ported, deferred, and **nil in Go**. Without that split the port reads as 77/89 when
+    the reachable total is 82.
+
+    Relatedly, `createLabelsForAbsentFunction`'s `MatrixSelector` branch is **not
+    reachable through the table at all**: `absent(x[5m])` fails type-checking, and
+    `absent_over_time`'s body ignores its arguments — the evaluator calls the helper for
+    it directly. Pinned Swift-side instead, and the corpus says so.
+
+    `absent`'s own label derivation is backwards compatibility and upstream's comment
+    admits it: only the **first** `=` matcher for a name contributes, and any second
+    matcher on that name deletes it again. So `absent(x{job="a",job="b"})` drops `job`
+    — and, as upstream notes, so does `absent(x{job="a",job="a"})`, which is "arguably
+    wrong". Order matters too: `{job!="a",job="b"}` sets `job` while
+    `{job="b",job!="a"}` does not.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
