@@ -29,6 +29,16 @@ struct FunctionsElementwiseTests {
         }
     }
 
+    @Test("the eight date functions match Go on every committed case")
+    func dateMatchesGo() throws {
+        try Fixtures.check(
+            "promql/functions-date.jsonl",
+            FixtureCase<FnIn, FnOut>.self
+        ) { input in
+            runFnCase(input)
+        }
+    }
+
     @Test("the FunctionCalls table is a subset of Go's, and the gap is the deferred set")
     func tableIsAKnownSubset() throws {
         // `promql/functionnames` already pins `parser.Functions`; this pins
@@ -50,10 +60,6 @@ struct FunctionsElementwiseTests {
         // The deferred set, by name and with its owning slice. Each of these parses
         // and type-checks today and simply has no implementation yet.
         let deferred: Set<String> = [
-            // Date functions: need GoTime weekday/yearDay/daysInMonth and the
-            // int64(Double) saturation.
-            "day_of_month", "day_of_week", "day_of_year", "days_in_month",
-            "hour", "minute", "month", "year",
             // Histograms: need EvalNodeHelper's bucket caches and resetHistograms.
             "histogram_avg", "histogram_count", "histogram_fraction",
             "histogram_quantile", "histogram_quantiles", "histogram_stddev",
@@ -304,6 +310,82 @@ struct FunctionsElementwiseInvariantTests {
         let (out2, _) = funcTimestamp(
             vec([Sample(t: -1500, f: 0, metric: .empty)]), Matrix(), [], enh2)
         #expect(out2[0].f == -1.5)
+    }
+
+    @Test("the date functions' no-argument form is a different shape entirely")
+    func dateNoArgumentForm() {
+        // `len(vectorVals) == 0` reads enh.Ts, emits ONE unlabelled sample, and
+        // leaves DropName **false** — where the argument form emits one per sample,
+        // keeps the metric and sets DropName. Easy to write as one loop with an
+        // `isEmpty` guard and get the flag wrong.
+        let noArgs = EvalNodeHelper(ts: 1_709_164_800_000)
+        let (a, _) = funcYear([], Matrix(), [], noArgs)
+        #expect(a.count == 1)
+        #expect(a[0].f == 2024)
+        #expect(a[0].metric.isEmpty)
+        #expect(!a[0].dropName, "the no-argument form does NOT set DropName")
+
+        let withArgs = EvalNodeHelper()
+        let m = Labels(strings: ["__name__", "x", "job", "j"])
+        let (b, _) = funcYear(
+            [Vector([Sample(f: 1_709_164_800, metric: m)])], Matrix(), [], withArgs)
+        #expect(b[0].f == 2024)
+        #expect(b[0].dropName, "the argument form does")
+
+        // And the timestamp is divided by 1000 FIRST, so this form cannot reach the
+        // Int64 seconds the argument form can.
+        let extreme = EvalNodeHelper(ts: .max)
+        let (c, _) = funcYear([], Matrix(), [], extreme)
+        #expect(c[0].f == 292_278_994, "Ts/1000, so no wrap")
+    }
+
+    @Test("year(vector(NaN)) is 1970 and BOTH infinities are 292277026596")
+    func dateSaturation() {
+        // `int64(el.F)` is unguarded on arbitrary sample data, so all of these are
+        // legal PromQL. Swift's `Int64(_:)` would trap on every one.
+        func year(_ f: Double) -> Double {
+            let enh = EvalNodeHelper()
+            let (out, _) = funcYear(
+                [Vector([Sample(f: f, metric: .empty)])], Matrix(), [], enh)
+            return out[0].f
+        }
+        #expect(year(.nan) == 1970, "NaN saturates to 0 seconds")
+        #expect(year(.infinity) == 292_277_026_596)
+        #expect(year(-.infinity) == 292_277_026_596,
+                "Int64.min lands in the band where Go's absolute count wraps")
+        #expect(year(-1e300) == 292_277_026_596)
+        // A finite sample inside the wrap band, so this is not an infinities-only
+        // quirk. The boundary is -9223372028741760000, and one ULP of a Double this
+        // large is 2048 — so ordinary sample data can land either side of it.
+        //
+        // Note the wrapped year is *not* a single value: it varies with the input,
+        // because the wrap is `uint64(sec + unixToAbsolute)` and the further below
+        // the boundary `sec` is, the further into year 292277026xxx it lands. Only
+        // `Int64.min` itself gives 292277026596, which is why the infinities agree
+        // with each other and this case does not agree with them.
+        #expect(year(-9.2233720287e18) == -292_277_022_399, "above the boundary")
+        #expect(year(-9.2233720288e18) == 292_277_026_852, "below it: the sign flips")
+        #expect(year(-9.223372029e18) == 292_277_026_845)
+    }
+
+    @Test("day_of_week has Sunday as 0, and day_of_year is 1-based")
+    func dateConventions() {
+        // Both are off-by-one traps: Go's Weekday starts at Sunday, and YearDay is
+        // 1-based where the internal `yday` it comes from is 0-based.
+        func on(_ fn: FunctionCall, _ sec: Double) -> Double {
+            let enh = EvalNodeHelper()
+            let (out, _) = fn([Vector([Sample(f: sec, metric: .empty)])], Matrix(), [], enh)
+            return out[0].f
+        }
+        #expect(on(funcDayOfWeek, 0) == 4, "1970-01-01 was a Thursday")
+        #expect(on(funcDayOfYear, 0) == 1, "and it was day 1")
+        #expect(on(funcDayOfMonth, 0) == 1)
+        #expect(on(funcMonth, 0) == 1)
+        #expect(on(funcDaysInMonth, 0) == 31)
+        // 2024-02-29, a leap day: weekday Thursday, yearDay 60, month length 29.
+        #expect(on(funcDayOfWeek, 1_709_164_800) == 4)
+        #expect(on(funcDayOfYear, 1_709_164_800) == 60)
+        #expect(on(funcDaysInMonth, 1_709_164_800) == 29)
     }
 
     @Test("rad and deg keep Go's left association")

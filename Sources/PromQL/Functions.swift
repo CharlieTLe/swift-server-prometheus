@@ -13,13 +13,11 @@
 //
 // Here: `simpleFloatFunc` and the 26 math wrappers, `clamp` and its three
 // entry points, `funcRound`, `funcScalar`, `funcVector`, `funcTime`,
-// `funcTimestamp`, `funcPi` and `funcSgn`.
+// `funcTimestamp`, `funcPi`, `funcSgn`, and `dateWrapper` plus the eight date
+// functions.
 //
 // Deliberately not here, each with the reason:
 //
-//   * `dateWrapper` and the eight date functions — they need `GoTime` to grow a
-//     weekday, a year-day and a days-in-month, and they carry the `int64(el.F)`
-//     saturation trap (docs/HANDOFF.md §5). Their own slice.
 //   * the `histogram_*` family and `funcHistogramQuantile`/`Fraction`/`Quantiles`
 //     — they need `EvalNodeHelper`'s bucket caches and `resetHistograms`.
 //   * the `*_over_time` family and the rate functions — they take a `Matrix` and
@@ -566,14 +564,21 @@ public let functionCalls: [String: FunctionCall] = [
     "clamp_min": funcClampMin,
     "cos": funcCos,
     "cosh": funcCosh,
+    "day_of_month": funcDayOfMonth,
+    "day_of_week": funcDayOfWeek,
+    "day_of_year": funcDayOfYear,
+    "days_in_month": funcDaysInMonth,
     "deg": funcDeg,
     "exp": funcExp,
     "floor": funcFloor,
+    "hour": funcHour,
     "ln": funcLn,
     "log10": funcLog10,
     "log2": funcLog2,
     "max_of": funcMaxOf,
     "min_of": funcMinOf,
+    "minute": funcMinute,
+    "month": funcMonth,
     "pi": funcPi,
     "rad": funcRad,
     "round": funcRound,
@@ -587,6 +592,7 @@ public let functionCalls: [String: FunctionCall] = [
     "time": funcTime,
     "timestamp": funcTimestamp,
     "vector": funcVector,
+    "year": funcYear,
 ]
 
 /// How many entries Go's `FunctionCalls` has at this pin.
@@ -596,3 +602,106 @@ public let functionCalls: [String: FunctionCall] = [
 /// a subset of it whose complement is exactly the deferred list. So a function that
 /// upstream adds, or one this port invents, fails rather than going unnoticed.
 public let functionCallsCountAtPin = 89
+
+// MARK: - The date functions
+
+/// Go: `dateWrapper` — the shared body of the eight date functions.
+///
+/// Three things here are load-bearing and none of them is obvious from the name:
+///
+///   * **With no arguments** — `days_in_month()` and friends, which PromQL allows —
+///     it reads `enh.Ts` and emits one sample with **no labels and `DropName`
+///     false**, like ``funcVector(_:_:_:_:)`` rather than like the argument form.
+///     Note the timestamp is divided by 1000 *first*, so this form never reaches the
+///     `Int64` extremes the argument form can.
+///   * **`int64(el.F)` is unguarded**, on arbitrary sample data. `year(vector(NaN))`
+///     is legal PromQL, and Swift's `Int64(_:)` would trap where Go's `FCVTZS`
+///     saturates — hence ``GoCompat/GoConv/int64(_:)``. Go's answers: NaN is 1970,
+///     `+Inf` is year 292277026596, and **`-Inf` is also 292277026596**, because
+///     `Int64.min` lands in the band where Go's absolute-second count wraps
+///     (PORTING.md quirk 46).
+///   * histogram samples are **skipped**, as in ``simpleFloatFunc(_:_:_:)``.
+func dateWrapper(
+    _ vectorVals: [Vector], _ enh: EvalNodeHelper, _ f: (GoTime) -> Double
+) -> Vector {
+    if vectorVals.isEmpty {
+        enh.out.append(
+            Sample(f: f(GoTime.unix(enh.ts / 1000, 0)), metric: .empty))
+        return enh.out
+    }
+
+    for el in vectorVals[0] where el.h == nil {
+        let t = GoTime.unix(GoConv.int64(el.f), 0)
+        var metric = el.metric
+        if !enh.enableDelayedNameRemoval {
+            metric = metric.dropReserved(isMetadataLabel)
+        }
+        enh.out.append(Sample(f: f(t), metric: metric, dropName: true))
+    }
+    return enh.out
+}
+
+/// Go: `funcDaysInMonth` — the number of days in the sample's month.
+///
+/// `32 - time.Date(t.Year(), t.Month(), 32, …).Day()`, leaning on `time.Date`'s
+/// normalisation of an out-of-range day. The whole expression is
+/// ``GoCompat/GoTime/daysInMonth(year:month:)``, whose doc comment records why a
+/// month-length table is *not* a legal shortcut at the years this can reach.
+func funcDaysInMonth(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    let out = dateWrapper(v, enh) { t in
+        let (year, month, _) = t.utcDate
+        return Double(GoTime.daysInMonth(year: year, month: month))
+    }
+    return (out, Annotations())
+}
+
+/// Go: `funcDayOfMonth` — `t.Day()`, 1-based.
+func funcDayOfMonth(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcDate.day) }, Annotations())
+}
+
+/// Go: `funcDayOfWeek` — `t.Weekday()`, with **Sunday as 0**.
+func funcDayOfWeek(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcWeekday) }, Annotations())
+}
+
+/// Go: `funcDayOfYear` — `t.YearDay()`, 1-based, so January 1 is 1.
+func funcDayOfYear(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcYearDay) }, Annotations())
+}
+
+/// Go: `funcHour` — `t.Hour()`, 0...23.
+func funcHour(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcClock.hour) }, Annotations())
+}
+
+/// Go: `funcMinute` — `t.Minute()`, 0...59.
+func funcMinute(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcClock.minute) }, Annotations())
+}
+
+/// Go: `funcMonth` — `t.Month()`, 1...12.
+func funcMonth(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcDate.month) }, Annotations())
+}
+
+/// Go: `funcYear` — `t.Year()`, in astronomical numbering, so year 0 exists.
+func funcYear(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    (dateWrapper(v, enh) { Double($0.utcDate.year) }, Annotations())
+}

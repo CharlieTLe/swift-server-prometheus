@@ -698,6 +698,55 @@ changing behaviour.
     The general rule: a corpus for a plumbing layer needs values that make the layer *below*
     distinguishable, which is not the same as values that are interesting to the layer below.
 
+46. **Go does not compute the calendar from the Unix second count, and the difference is reachable
+    from a PromQL query.** `Time.absSec()` (time.go:784) is
+    `absSeconds(sec + (unixToInternal + internalToAbsolute))` — an `int64` addition, **then a
+    reinterpretation as `uint64`**. Both halves matter, in opposite directions:
+
+    | second range | what happens |
+    |---|---|
+    | `sec > 8113015807` (from about year 2227) | the `int64` addition **overflows**, and the `uint64` reinterpretation puts it back exactly — the true sum is below 2**64, so nothing is lost |
+    | `sec < -9223372028741760000` | the sum is genuinely negative, and the reinterpretation lands near 2**64 — a nonsense date, deterministically. The band is **8,113,015,808 seconds wide**, about 257 years |
+
+    So `year(vector(-Inf))` in Go is **+292277026596** — the *same* as `year(vector(+Inf))`, because
+    `int64(-Inf)` saturates to `Int64.min`, which is inside the band. And it is not an
+    infinities-only curiosity: one ULP of a `Double` near -9.2e18 is 2048, so ordinary sample data
+    lands either side of the boundary, and the wrapped year *varies with the input* (only `Int64.min`
+    itself gives 292277026596).
+
+    An earlier version of `GoTime` computed the calendar straight from `unixSeconds` and carried a
+    comment saying the wrap "would hide a bug rather than match anything observable". It differed from
+    Go on exactly four of 400,201 probe seconds — all four at the extreme negative end — which is how
+    that comment got retired. The port now models `abs` with a wrapping `&+` and a
+    `UInt64(bitPattern:)`.
+
+    A pleasant side effect worth keeping: going through the **unsigned** absolute count removes every
+    floor-versus-truncate question. `abs / secondsPerDay` and `abs % secondsPerDay` need no sign
+    correction, where dividing a negative Unix second count does.
+
+47. **`days_in_month` cannot be a month-length table, because `time.Date` wraps too.** Upstream
+    computes it as `32 - time.Date(t.Year(), t.Month(), 32, …).Day()`, leaning on `time.Date`
+    normalising an out-of-range day: day 32 of a 31-day month is day 1 of the next.
+
+    The obvious port — a `[31, 28, 31, …]` table plus a leap-year test — agreed with Go on 4,659 of
+    4,664 corpus seconds and disagreed on the five extreme ones. At year 292277026854, January, Go
+    returns **7**, not 31: `Date`'s own `int64(dateToAbsDays(…)) * secondsPerDay` (time.go's `Date`)
+    overflows, and the `Day()` read on the far side lands somewhere else entirely.
+
+    So the port reproduces the round trip — `dateToAbsDays`, the wrapping multiply and offset `Date`
+    applies, then an ordinary calendar read — including both Neri–Schneider strength reductions,
+    because they are what the wrapping arithmetic has to agree with.
+
+    Two consequences worth stating:
+
+    - The leap-year helper the table version needed is now **dead code**, and deleting it was the
+      result of a negative control rather than a tidy-up: perturbing its 100- and 400-year exceptions
+      changed nothing, because nothing called it. Dead code that no control can break is worse than
+      no code.
+    - `dateToAbsDays`'s `(979*amonth - 2919) >> 5` has slack: changing the constant to 2918 is
+      invisible, because the shift absorbs it for every `amonth` in [3, 14]. Recorded so the next
+      reader does not mistake a surviving perturbation there for a corpus gap.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

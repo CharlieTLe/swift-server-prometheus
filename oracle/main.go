@@ -163,6 +163,11 @@ var suites = map[string]func(*emitter){
 	// oracle/suites_promql_functions_elementwise.go.
 	"promql/functioncallnames":     genPromQLFunctionCallNames,
 	"promql/functions-elementwise": genPromQLFunctionsElementwise,
+	// Phase 5: the calendar half of `time.Time`, which the eight date functions
+	// read, and the date functions themselves. See
+	// oracle/suites_gotime_calendar.go.
+	"gocompat/time-calendar": genGoTimeCalendar,
+	"promql/functions-date":  genPromQLFunctionsDate,
 }
 
 func main() {
