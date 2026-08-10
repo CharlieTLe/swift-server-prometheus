@@ -1501,6 +1501,61 @@ changing behaviour.
     one-step child evaluator instead. Companion to quirk 74's "the limit is enforced in two
     places": the peak also depends on *nesting depth*, not just on the result.
 
+82. **`matrixIterSlice`'s two retention branches decrement the sample count differently, and the
+    histogram one subtracts what it KEPT.** The point of the `floats`/`histograms` parameters is
+    that a later step reuses the previous step's points; the retention drops what is at or before
+    the new `mint` and appends only what is newer than the last retained timestamp. The float
+    branch decrements `ev.currentSamples` by `drop` — the number of points it removed. The
+    histogram branch, two dozen lines below and otherwise a transcription of it, truncates first
+    and *then* does `ev.currentSamples -= totalHPointSize(histograms)`, which is the size of the
+    points it **retained**.
+
+    It reads as a slip and it is reproduced rather than corrected: a histogram range query's
+    accounting drifts downward across steps, so the sample limit is more permissive than it
+    looks. Not yet witnessed — it needs the `matrixArg` half of the `Call` arm, which is what
+    drives the retention across steps; `matrixSelector` always passes nil in.
+
+    Two other things in that function are asymmetric and *are* pinned: a stale **float** is
+    skipped before the `t > mint` test while a stale **histogram** is appended and then removed,
+    and the sought-sample tail tests `t == maxt && !IsStaleNaN(f)` for a float but
+    `it.AtT() != maxt` first for a histogram.
+
+83. **Go's nil-versus-empty slice is load-bearing in `matrixSelector`, exactly once.** The
+    anchored/smoothed guard is `if ss.Histograms != nil`, not a length test — and
+    `matrixIterSlice` allocates the histogram slice **before** it knows whether the sample is a
+    stale marker, dropping it back to length 0 when it is. So a series whose only in-range
+    histogram is a stale marker comes back **non-nil and empty**, and `foo[5m] anchored` over it
+    fails with "anchored modifier is not supported with histograms" despite having none.
+
+    The port drops `sync.Pool` (exception 4), and dropping the nil distinction with it would have
+    silently corrected this. The two slices are therefore `[FPoint]?`/`[HPoint]?` in the Swift
+    signature. Pinned Swift-side, because the differential corpus is float-only on purpose — a
+    histogram through a real `tsdb.DB` re-derives `CounterResetHint`, which is Phases 6-7's
+    subject.
+
+84. **`extendFloats` panics on an empty slice, and it is reachable from a query — with two
+    different messages.** `floats[lastSampleIndex]` is unguarded, and `matrixSelector` calls
+    `extendFloats` for **every** series the querier returned, including one it admitted and then
+    trimmed to nothing. Quirk 34 is how: visibility is at chunk granularity, trimming is per
+    sample, so a chunk that *spans* the window with no sample *inside* it yields an empty series.
+
+    ```
+    mg 1 @0 2 @1000000     mg[2m] anchored @ 500   unexpected error: runtime error: index out of range [-1]
+                           mg[2m] smoothed @ 500   unexpected error: runtime error: index out of range [0] with length 0
+                           mg[2m] @ 500            (empty result, no error)
+    ```
+
+    The two modifiers differ because `smoothed` reassigns `lastSampleIndex` from
+    `sort.Search(-1, …)`, which is **0**, while `anchored` leaves it at `len - 1` = **-1** — and
+    Go's runtime omits the length suffix for a negative index. Both were confirmed by running Go,
+    not reasoned about.
+
+    A Swift index-out-of-range **traps**, and a trap is not catchable, so the port raises the
+    error deliberately: `GoRuntimeError.indexOutOfRange` reproduces both message shapes and
+    `QueryError.unexpected` supplies `recover`'s `unexpected error: ` prefix. Contrast exception
+    9, where three *unreachable* `sampleRing` panics are guarded instead — reachability is what
+    decides which treatment a panic gets.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
