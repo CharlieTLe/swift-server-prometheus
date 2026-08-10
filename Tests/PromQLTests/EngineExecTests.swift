@@ -152,17 +152,39 @@ struct EngineExecInvariantTests {
 
     @Test("an unported expression names itself rather than answering wrongly")
     func unportedArmsAreLoud() throws {
-        // A selector, an aggregation and a range are all out of scope for this slice. What
-        // matters is that each says so — a silent zero would be far worse than an error.
-        // A bare selector now WORKS — that is this slice. What still throws is everything
-        // the selector unlocks but that has not landed: aggregations, ranges, vector binops.
-        for query in ["sum(foo)", "rate(foo[5m])", "foo + bar", "1 + foo", "foo unless bar"] {
+        // A silent zero would be far worse than an error, so every arm this slice does not
+        // implement says which one it is. The list shrinks each slice: a bare selector, a range
+        // selector and a function over a range all WORK now. What is left is the aggregations,
+        // the vector binops, subqueries, and the three series-shaped functions.
+        for query in [
+            "sum(foo)", "foo + bar", "1 + foo", "foo unless bar",
+            "rate(foo[5m:1m])", "max_over_time(foo[5m])[1h:1m]",
+            "label_replace(foo, \"a\", \"b\", \"c\", \"d\")",
+        ] {
             let res = try run(query)
             guard let err = res.error as? EvaluatorNotPorted else {
                 Issue.record("\(query) did not report EvaluatorNotPorted: \(String(describing: res.error))")
                 continue
             }
             #expect(!err.nodeType.isEmpty)
+        }
+    }
+
+    @Test("a function over a range selector now evaluates")
+    func rangeFunctionsWork() throws {
+        // The complement of the list above, and the point of the `matrixArg` slice: with an
+        // empty queryable these produce nothing rather than refusing. "Nothing" is the right
+        // answer — no series, so no output — and what matters is that no `EvaluatorNotPorted`
+        // comes back.
+        for query in [
+            "rate(foo[5m])", "sum_over_time(foo[5m])", "absent_over_time(foo[5m])",
+            "quantile_over_time(0.5, foo[5m])", "last_over_time(foo[5m])",
+            "predict_linear(foo[5m], 3600)", "foo[5m]", "foo[5m] anchored",
+        ] {
+            let res = try run(query)
+            #expect(
+                !(res.error is EvaluatorNotPorted),
+                "\(query) still refuses: \(String(describing: res.error))")
         }
     }
 

@@ -69,7 +69,8 @@ struct EngineExecRangeTests {
                     noStepSubqueryIntervalFn: { _ in 60_000 },
                     enableAtModifier: true,
                     enableNegativeOffset: true,
-                    parserOptions: Options(enableExperimentalFunctions: true)))
+                    parserOptions: Options(
+                        enableExperimentalFunctions: true, enableExtendedRangeSelectors: true)))
 
             let start = Timestamp.time(Int64(input.start)!)
             let end = Timestamp.time(Int64(input.end)!)
@@ -136,7 +137,8 @@ struct EngineExecRangeInvariantTests {
                 lookbackDelta: GoDuration(nanoseconds: 300_000_000_000),
                 noStepSubqueryIntervalFn: { _ in 60_000 },
                 enableAtModifier: true, enableNegativeOffset: true,
-                parserOptions: Options(enableExperimentalFunctions: true)))
+                parserOptions: Options(
+                    enableExperimentalFunctions: true, enableExtendedRangeSelectors: true)))
     }
 
     private func run(

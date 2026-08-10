@@ -513,7 +513,12 @@ public struct StartTimestamps: Sendable, Hashable {
 /// This is what lets query results be fed back through a `Querier`, and it is the
 /// substrate an in-memory `Queryable` is built on.
 public final class StorageSeries: PromStorage.Series {
-    private let series: Series
+    let series: Series
+
+    /// The wrapped `promql.Series`. Go reads `storageSeries.series.DropName` directly from
+    /// inside the same package (engine.go:2270) to decide whether a subquery's result had
+    /// already dropped its metric name; this is that access.
+    var promSeries: Series { series }
 
     /// Go: `NewStorageSeries`.
     public init(_ series: Series) {

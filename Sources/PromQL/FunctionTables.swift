@@ -32,3 +32,11 @@ public let atModifierUnsafeFunctions: Set<String> = [
 public let anchoredSafeFunctions: Set<String> = [
     "resets", "changes", "rate", "increase", "delta",
 ]
+
+/// Go: `SmoothedSafeFunctions` — the three the `smoothed` modifier may be used with.
+///
+/// Deliberately narrower than ``anchoredSafeFunctions``: `resets` and `changes` count
+/// transitions, and an interpolated boundary sample would invent one.
+public let smoothedSafeFunctions: Set<String> = [
+    "rate", "increase", "delta",
+]

@@ -97,6 +97,8 @@ func runExecRangeCase(in execRangeIn) execRangeOut {
 		NoStepSubqueryIntervalFn: func(int64) int64 { return int64(time.Minute / time.Millisecond) },
 		Parser: parser.NewParser(parser.Options{
 			EnableExperimentalFunctions: true,
+			// `anchored`/`smoothed`, which the `Call` arm validates per function.
+			EnableExtendedRangeSelectors: true,
 		}),
 	})
 	start := time.UnixMilli(parseI64(in.Start)).UTC()
@@ -346,6 +348,302 @@ func genPromQLExecRange(e *emitter) {
 		emit(execRangeIn{
 			Query: c.query, Start: i64(c.start), End: i64(c.end), Step: i64(c.step),
 			Lookback: i64(5 * minute), Series: c.series,
+		})
+	}
+
+	// --- FUNCTIONS OVER A RANGE SELECTOR, which is the `matrixArg` half of the `Call` arm.
+	// This is the slice where a range query stops being optional: `matrixIterSlice`'s retention
+	// only runs across steps, `it.ReduceDelta(stepRange)` only bites from the second step on, and
+	// `refetch` only matters when there is more than one step to refetch for.
+	//
+	// The corpus varies the step against the range in BOTH directions on purpose. Step < range
+	// gives overlapping windows, so the retention keeps points; step > range gives disjoint
+	// windows, so it truncates — and `stepRange = min(selRange, interval)` picks a different
+	// buffer size in each case.
+	rangeFnSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "http_requests_total", "job", "b"},
+			[2]int64{0, 1}, [2]int64{30_000, 3}, [2]int64{60_000, 6}, [2]int64{90_000, 10},
+			[2]int64{120_000, 15}, [2]int64{150_000, 21}, [2]int64{180_000, 28}),
+		fs([]string{"__name__", "http_requests_total", "job", "a"},
+			[2]int64{0, 100}, [2]int64{60_000, 200}, [2]int64{120_000, 300},
+			[2]int64{180_000, 400}),
+	}
+	// A counter that RESETS, so `rate`/`increase`/`resets`/`changes` all have something to find.
+	resetSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "c_total"},
+			[2]int64{0, 10}, [2]int64{30_000, 20}, [2]int64{60_000, 5}, [2]int64{90_000, 15},
+			[2]int64{120_000, 2}, [2]int64{150_000, 8}),
+	}
+	// A name with NO counter suffix, which is what makes `rate` emit its possible-non-counter
+	// info — and the info reads the INPUT's name, so a port that read the output's (with
+	// `__name__` already dropped) would emit a nameless one.
+	gaugeSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "plain_gauge"},
+			[2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 3}, [2]int64{180_000, 4}),
+	}
+	// Samples that are NOT on the step grid. Every `anchored`/`smoothed` control needs this:
+	// with samples at multiples of the step, the boundary sample the extended modifiers reach
+	// back for sits exactly ON the boundary, so a buffer that was never widened still finds it
+	// and the widening looks free. Off-grid samples make the lookback do work.
+	offGrid := []memSeriesInJSON{
+		fs([]string{"__name__", "og_total"},
+			[2]int64{7_000, 1}, [2]int64{53_000, 4}, [2]int64{101_000, 12},
+			[2]int64{149_000, 25}, [2]int64{197_000, 41}),
+	}
+	// SPARSE and off-grid: the boundary sample `anchored` reaches for is more than one
+	// `selRange` before `maxt`, so a buffer that was not widened by the lookback delta cannot
+	// see it. `offGrid` alone is not enough — its samples are dense enough that the unwidened
+	// buffer still catches one.
+	sparseTotal := []memSeriesInJSON{
+		fs([]string{"__name__", "sp_total"}, [2]int64{7_000, 1}, [2]int64{197_000, 60}),
+	}
+	// A single sample, so `rate` can never produce output: two points are the minimum. That is
+	// what makes the possible-non-counter info's `len(ss.Floats) > 0` guard observable — the
+	// check runs even for a series that contributed nothing.
+	singleGauge := []memSeriesInJSON{
+		fs([]string{"__name__", "single_gauge"}, [2]int64{60_000, 5}),
+	}
+	// The three other suffixes the fallback accepts, which a `_total`-only test would warn for.
+	suffixed := []memSeriesInJSON{
+		fs([]string{"__name__", "a_sum"}, [2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 4}),
+		fs([]string{"__name__", "b_count"}, [2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 4}),
+		fs([]string{"__name__", "c_bucket"}, [2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 4}),
+	}
+	// Two series with a HOLE, so some steps yield no window at all and are skipped.
+	holedFn := []memSeriesInJSON{
+		fs([]string{"__name__", "h_total"}, [2]int64{0, 1}, [2]int64{600_000, 5}),
+	}
+
+	rangeFnCases := []struct {
+		query            string
+		series           []memSeriesInJSON
+		start, end, step int64
+	}{
+		// `rate` at three step/range relationships.
+		{`rate(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`rate(http_requests_total[1m])`, rangeFnSeries, 0, 180_000, minute},
+		{`rate(http_requests_total[5m])`, rangeFnSeries, 0, 180_000, minute},
+		// Step SMALLER than the range: overlapping windows, so the retention keeps points.
+		{`rate(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, 30 * int64(time.Second)},
+		{`rate(http_requests_total[2m])`, rangeFnSeries, 0, 120_000, 10 * int64(time.Second)},
+		// Step LARGER than the range: disjoint windows, so it truncates every time and
+		// `stepRange` is the interval rather than the range.
+		{`rate(http_requests_total[1m])`, rangeFnSeries, 0, 180_000, 2 * minute},
+		{`rate(http_requests_total[30s])`, rangeFnSeries, 0, 180_000, 3 * minute},
+		// The rest of the counter family over the resetting series.
+		{`increase(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		{`delta(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		{`idelta(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		{`irate(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		{`resets(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		{`changes(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		// The `*_over_time` family, which is where the aggregation bodies live.
+		{`sum_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`avg_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`min_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`max_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`count_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`stddev_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`stdvar_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`mad_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`ts_of_min_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`ts_of_max_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`ts_of_last_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		// `last_over_time`/`first_over_time` KEEP the metric name where every other range
+		// function drops it — the one place `dropName` is decided by the function.
+		{`last_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`first_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		// A scalar argument alongside the matrix one, read by STEP NUMBER from a matrix
+		// evaluated once up front.
+		{`quantile_over_time(0.5, http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`quantile_over_time(0.9, http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`predict_linear(http_requests_total[2m], 3600)`, rangeFnSeries, 0, 180_000, minute},
+		{`deriv(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], 0.5, 0.5)`, rangeFnSeries,
+			0, 180_000, minute},
+		// A step-invariant scalar argument, which `preprocessExpr` wraps — so the per-step
+		// lookup reads a matrix produced by a ONE-step child evaluator. If the port indexed it
+		// by step it would run off the end; Go does not, because the wrapper duplicates.
+		{`quantile_over_time(scalar(vector(0.5)), http_requests_total[2m])`, rangeFnSeries,
+			0, 180_000, minute},
+		// `absent_over_time`, whose tail rewrites the whole result. Three shapes: a series that
+		// covers every step (empty result), a hole (one synthetic series with the missing
+		// timestamps), and nothing at all.
+		{`absent_over_time(http_requests_total[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`absent_over_time(h_total[2m])`, holedFn, 0, 600_000, minute},
+		{`absent_over_time(nothing[2m])`, rangeFnSeries, 0, 180_000, minute},
+		{`absent_over_time({__name__="http_requests_total", job="a"}[2m])`, rangeFnSeries,
+			0, 180_000, minute},
+		// A hole in the middle: steps with no window are skipped entirely, so the output series
+		// is shorter than the step count.
+		{`rate(h_total[2m])`, holedFn, 0, 600_000, minute},
+		{`count_over_time(h_total[2m])`, holedFn, 0, 600_000, minute},
+		// The possible-non-counter info, which reads the INPUT's metric name.
+		{`rate(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+		{`increase(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+		// ...and its absence for a `_total` name.
+		{`rate(c_total[2m])`, resetSeries, 0, 150_000, minute},
+		// `@` on the range selector: `refetch` is false from step 1 on, so ONE window feeds
+		// every step and the values are identical while the timestamps advance.
+		{`rate(http_requests_total[2m] @ 120)`, rangeFnSeries, 0, 180_000, minute},
+		{`count_over_time(http_requests_total[2m] @ 120)`, rangeFnSeries, 0, 180_000, minute},
+		{`last_over_time(http_requests_total[2m] @ 60)`, rangeFnSeries, 0, 180_000, minute},
+		// `offset`, which moves the window without pinning it.
+		{`rate(http_requests_total[2m] offset 1m)`, rangeFnSeries, 60_000, 180_000, minute},
+		// The extended modifiers, restricted to the functions that accept them.
+		{`rate(http_requests_total[2m] anchored)`, rangeFnSeries, 60_000, 180_000, minute},
+		{`increase(http_requests_total[2m] anchored)`, rangeFnSeries, 60_000, 180_000, minute},
+		{`delta(http_requests_total[2m] smoothed)`, rangeFnSeries, 60_000, 180_000, minute},
+		{`rate(http_requests_total[2m] smoothed)`, rangeFnSeries, 60_000, 180_000, minute},
+		{`resets(http_requests_total[2m] anchored)`, rangeFnSeries, 60_000, 180_000, minute},
+		// ...and the errors for a function that does not. The message lists the permitted
+		// names SORTED, which is upstream's own defence against ranging a map.
+		{`sum_over_time(http_requests_total[2m] anchored)`, rangeFnSeries, 0, 180_000, minute},
+		{`resets(http_requests_total[2m] smoothed)`, rangeFnSeries, 0, 180_000, minute},
+		{`count_over_time(http_requests_total[2m] smoothed)`, rangeFnSeries, 0, 180_000, minute},
+		// A histogram reader over a float series: no histograms, so no output.
+		{`histogram_count(http_requests_total)`, rangeFnSeries, 0, 180_000, minute},
+		// --- OFF-GRID samples with the extended modifiers. `anchored` and `smoothed` widen the
+		// buffer by one and two lookback deltas respectively, and that widening is only
+		// observable when the sample they reach for is strictly inside the widened span rather
+		// than sitting on the original boundary.
+		{`rate(og_total[2m] anchored)`, offGrid, 60_000, 200_000, minute},
+		{`increase(og_total[2m] anchored)`, offGrid, 60_000, 200_000, minute},
+		{`delta(og_total[2m] anchored)`, offGrid, 60_000, 200_000, minute},
+		{`rate(og_total[2m] smoothed)`, offGrid, 60_000, 200_000, minute},
+		{`increase(og_total[2m] smoothed)`, offGrid, 60_000, 200_000, minute},
+		{`delta(og_total[2m] smoothed)`, offGrid, 60_000, 200_000, minute},
+		{`rate(og_total[1m] anchored)`, offGrid, 60_000, 200_000, 30 * int64(time.Second)},
+		{`rate(og_total[1m] smoothed)`, offGrid, 60_000, 200_000, 30 * int64(time.Second)},
+		{`resets(og_total[2m] anchored)`, offGrid, 60_000, 200_000, minute},
+		{`changes(og_total[2m] anchored)`, offGrid, 60_000, 200_000, minute},
+		{`rate(og_total[2m])`, offGrid, 60_000, 200_000, minute},
+
+		// --- A scalar argument that MOVES with the step. Every other scalar argument in this
+		// suite is a constant, so reading `evalVals[j][0].Floats[0]` instead of `[step]` gives
+		// the same answer and the per-step lookup goes untested. `time()` is
+		// at-modifier-unsafe, so `preprocessExpr` cannot fold it into a step-invariant.
+		{`quantile_over_time(scalar(vector(time() / 400)), http_requests_total[2m])`,
+			rangeFnSeries, 0, 180_000, minute},
+		{`predict_linear(http_requests_total[2m], time())`, rangeFnSeries, 0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], scalar(vector(time() / 400)), 0.5)`,
+			rangeFnSeries, 0, 180_000, minute},
+		{`clamp_max(rate(http_requests_total[2m]), time() / 100)`, rangeFnSeries,
+			0, 180_000, minute},
+
+		// --- An @-pinned range selector reaching a MULTI-STEP evaluator, which is the only way
+		// `refetch`'s `selVS.Timestamp == nil` clause can be witnessed. `rate(foo[2m] @ 120)` is
+		// wrapped whole in a StepInvariantExpr — a MatrixSelector is never wrapped on its own
+		// (engine.go's `case *parser.MatrixSelector` returns `shouldWrap = false`, "functions
+		// over range vectors evaluate those directly") — so the wrapper hands it a ONE-step
+		// child and `ts == ev.startTimestamp` is always true.
+		//
+		// `predict_linear` is in `AtModifierUnsafeFunctions`, so the Call is NOT wrapped, and it
+		// keeps the outer timestamps with a pinned window: refetch is false from step 1 on and
+		// the same matrix feeds every step.
+		{`predict_linear(http_requests_total[2m] @ 120, 3600)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`predict_linear(og_total[2m] @ 120, 3600)`, offGrid, 0, 180_000, minute},
+		{`predict_linear(http_requests_total[2m] @ 120, time())`, rangeFnSeries,
+			0, 180_000, minute},
+		// The same function without the `@`, so the pair differs only in whether the window
+		// moves.
+		{`predict_linear(http_requests_total[2m], 3600)`, rangeFnSeries, 0, 180_000, minute},
+
+		// --- `double_exponential_smoothing`'s two PANICS, which are ordinary query errors:
+		// Go `panic(fmt.Errorf(...))`s on a factor outside (0, 1) and `recover` passes a
+		// panicked error through unchanged. `%f`, so six decimal places. The port had a
+		// `preconditionFailure` here — safe while the oracle was the only caller, a crash the
+		// moment a query could reach the body — and this is the case that found it.
+		{`double_exponential_smoothing(http_requests_total[5m], 0, 0.5)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], 1, 0.5)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], 0.5, 0)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], 0.5, 1)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], -1, 0.5)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], NaN, 0.5)`, rangeFnSeries,
+			0, 180_000, minute},
+		{`double_exponential_smoothing(http_requests_total[5m], 1.5, 0.5)`, rangeFnSeries,
+			0, 180_000, minute},
+		// The factor reaches the body only when the window is non-empty, so a query over a
+		// series with nothing in range does NOT raise — the guard above the panic returns first.
+		{`double_exponential_smoothing(nothing[5m], 0, 0.5)`, rangeFnSeries, 0, 180_000, minute},
+
+		// --- The anchored buffer widening, which needs a boundary sample MORE than one
+		// `selRange` before `maxt`. With dense samples the unwidened buffer catches one anyway
+		// and the widening looks free.
+		{`rate(sp_total[30s] anchored)`, sparseTotal, 190_000, 220_000, 10 * int64(time.Second)},
+		{`increase(sp_total[30s] anchored)`, sparseTotal, 190_000, 220_000, 10 * int64(time.Second)},
+		{`rate(sp_total[1m] anchored)`, sparseTotal, 190_000, 260_000, 30 * int64(time.Second)},
+		{`rate(sp_total[30s] smoothed)`, sparseTotal, 190_000, 220_000, 10 * int64(time.Second)},
+		{`rate(sp_total[30s])`, sparseTotal, 190_000, 220_000, 10 * int64(time.Second)},
+
+		// --- The possible-non-counter info's own guards.
+		// A single sample means `rate` produces nothing, so the series is never appended — and
+		// the info check still runs. `len(ss.Floats) > 0` is what suppresses it.
+		{`rate(single_gauge[2m])`, singleGauge, 0, 180_000, minute},
+		{`increase(single_gauge[2m])`, singleGauge, 0, 180_000, minute},
+		// The three suffixes besides `_total` that the fallback accepts.
+		{`rate(a_sum[2m])`, suffixed, 0, 120_000, minute},
+		{`rate(b_count[2m])`, suffixed, 0, 120_000, minute},
+		{`rate(c_bucket[2m])`, suffixed, 0, 120_000, minute},
+		{`rate({__name__=~"a_sum|b_count|c_bucket"}[2m])`, suffixed, 0, 120_000, minute},
+		// ...and the functions that do NOT warn, however non-counter-ish the name.
+		{`delta(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+		{`idelta(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+		{`irate(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+		{`resets(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+		{`avg_over_time(plain_gauge[2m])`, gaugeSeries, 0, 180_000, minute},
+
+		// One-step range queries over the same shapes, so the step-dependent machinery is
+		// compared against the case where it cannot fire.
+		{`rate(http_requests_total[2m])`, rangeFnSeries, 120_000, 120_000, minute},
+		{`absent_over_time(h_total[2m])`, holedFn, 300_000, 300_000, minute},
+	}
+	for _, c := range rangeFnCases {
+		emit(execRangeIn{
+			Query: c.query, Start: i64(c.start), End: i64(c.end), Step: i64(c.step),
+			Lookback: i64(5 * minute), Series: c.series,
+		})
+	}
+	// The sample limit against a range function, which is checked ONCE PER SERIES after all its
+	// steps rather than per step. Two series times four steps is eight points, so the boundary
+	// is not where a per-step check would put it.
+	for _, maxSamples := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 20} {
+		emit(execRangeIn{
+			Query: `rate(http_requests_total[2m])`, Start: i64(0), End: i64(180_000),
+			Step: i64(minute), Lookback: i64(5 * minute), MaxSamples: maxSamples,
+			Series: rangeFnSeries,
+		})
+	}
+	// A range function NESTED inside another rangeEval, which is the only shape that can see the
+	// Call arm's final `ev.currentSamples -= len(floats) + totalHPointSize(histograms)`. Nothing
+	// reads `currentSamples` after a top-level Call, but an enclosing `rangeEval` reads it as its
+	// own `tempNumSamples` right after evaluating its arguments — the same mechanism as quirk 81.
+	for _, maxSamples := range []int{4, 6, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24} {
+		for _, q := range []string{
+			`clamp_max(rate(http_requests_total[2m]), 10)`,
+			`abs(rate(http_requests_total[2m]))`,
+			`clamp_max(rate(http_requests_total[2m]), time() / 100)`,
+		} {
+			emit(execRangeIn{
+				Query: q, Start: i64(0), End: i64(180_000), Step: i64(minute),
+				Lookback: i64(5 * minute), MaxSamples: maxSamples, Series: rangeFnSeries,
+			})
+		}
+	}
+
+	// And with a step smaller than the range, where the retention keeps points across steps and
+	// the running total therefore follows a different path to the same limit.
+	for _, maxSamples := range []int{3, 5, 8, 10, 14, 20, 26} {
+		emit(execRangeIn{
+			Query: `count_over_time(http_requests_total[2m])`, Start: i64(0), End: i64(120_000),
+			Step: i64(30 * int64(time.Second)), Lookback: i64(5 * minute),
+			MaxSamples: maxSamples, Series: rangeFnSeries,
 		})
 	}
 
