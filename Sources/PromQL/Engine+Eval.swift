@@ -1,23 +1,18 @@
 //===----------------------------------------------------------------------===//
-// Ported from promql/engine.go @ v3.13.2 — `query.Exec`, `Engine.exec`, `execEvalStmt`'s
-// instant path, `contextDone`, `setOffsetForAtModifier`, and the `evaluator` core:
-// `Eval`, `rangeEval`, and the `eval` arms that need no storage.
+// Ported from promql/engine.go @ v3.13.2 — `query.Exec`, `Engine.exec`, **both** halves of
+// `execEvalStmt`, `contextDone`, `setOffsetForAtModifier`, and the `evaluator` core:
+// `Eval`, `rangeEval`, `addToSeries`, and the `eval` arms that need no matrix selector.
 //
 // ## What this slice can evaluate, and what it refuses
 //
-// Ported arms: `NumberLiteral`, `StringLiteral`, `ParenExpr`, `UnaryExpr`,
+// Ported arms: `NumberLiteral`, `StringLiteral`, `ParenExpr`, `UnaryExpr`, `VectorSelector`,
 // `StepInvariantExpr`, `BinaryExpr` where both sides are **scalars**, and `Call` where no
-// argument is a matrix selector or subquery. That is every expression that never touches
-// the storage — `1 + 2`, `time()`, `vector(1)`, `-(3^2)`, `abs(-1) > bool 0`,
-// `day_of_week(vector(0))`, `"a string"`.
+// argument is a matrix selector or subquery — as **instant or range** queries.
 //
-// Everything else — selectors, aggregations, subqueries, matrix arguments, the four
-// vector/scalar binop shapes — throws `EvaluatorNotPorted`. That is a **loud** stub with a
-// named expression type, not a silent wrong answer, and the fixture corpus is restricted to
-// what is implemented rather than the port pretending otherwise.
-//
-// Range queries (`start != end`) are also not ported: `execEvalStmt`'s second half needs the
-// same arms plus the per-step series assembly, and lands with the selectors.
+// Everything else — aggregations, subqueries, matrix arguments, the four vector/scalar binop
+// shapes — throws `EvaluatorNotPorted`. That is a **loud** stub with a named expression type,
+// not a silent wrong answer, and the fixture corpus is restricted to what is implemented
+// rather than the port pretending otherwise.
 //
 // ## An instant query is a range evaluation with one step, and `interval` is 1
 //
@@ -31,6 +26,10 @@
 // says "shortcut so as not to change sort order" — and that is load-bearing for `sort`,
 // whose whole purpose is an order that a hash map would destroy.
 //
+// Note the guard `execEvalStmt` tests is `start == end && interval == 0` — **both**. So a
+// *range* query whose start equals its end is a range evaluation with one step, and its
+// result is a `Matrix` rather than a `Scalar`: the range path has no type tails at all.
+//
 // ## The sample limit is enforced in TWO places, and the peak is higher than it looks
 //
 // `rangeEval` resets `currentSamples` to `tempNumSamples` at the top of every step, adds the
@@ -43,30 +42,45 @@
 // query Go rejects, which is what the corpus caught here — the boundary is pinned per shape
 // rather than assumed.
 //
+// Two more accounting details belong to the range path and are invisible in an instant query:
+// `tempNumSamples` **grows** by every step's result, so the peak rises with the number of
+// steps; and the final `currentSamples = originalNumSamples + mat.totalSamples` *discards*
+// the last step's gathered inputs. The second is only observable to an **enclosing**
+// `rangeEval`, which reads `currentSamples` as its own `tempNumSamples` right after evaluating
+// its arguments — so `(time() + 1) + 1` under a tight limit is what pins it, and nothing
+// simpler can.
+//
 // ## How much of this file is actually PINNED, and how much is only transcribed
 //
-// Be clear about this, because the fixture's 339 green cases could be read as covering the
-// file and they do not. A single-step, single-series corpus can only witness single-step,
-// single-series behaviour. Of 16 negative controls, three break —`gatherVector`'s counting,
-// the string result bypassing the matrix tails, and `scalarBinop`'s comparisons returning 1/0
-// — and the rest survive because the shape that would separate them needs input this slice
-// cannot produce:
+// Be clear about this, because green fixtures could be read as covering the file and they do
+// not. Two corpora pin it: `promql/exec` (instant) and `promql/exec-range` (range). The range
+// slice ran 15 negative controls of which **12 break**, and the three survivors each have an
+// argument rather than a shrug:
 //
-//   * consuming the gathered point (`floats.removeFirst()`) only matters across **steps**;
-//   * the instant shortcut's ORDER, the scalar tail's `mat[0]`, the vector tail's forced
-//     timestamp and unary minus's `DropName`/metadata drop all need **more than one series**,
-//     or a series with a name — which means a selector;
-//   * `interval: 1` only matters where a range query divides by it;
-//   * `setOffsetForAtModifier` has nothing to rewrite without a selector;
-//   * the inverted-range shortcut cannot happen when `start == end`.
+//   * the multi-step assembly's duplicate check (`ss.ts == ts`) is **unreachable**: it needs
+//     one step's result vector to hold two samples with the same label hash. A selector cannot
+//     produce that — two series with one label set are one series to the storage — and no
+//     ported function drops a *differing* label. `label_replace` and the aggregations make it
+//     reachable; the check is transcribed now because a stub would be a silent wrong answer.
+//   * the step duplication reading `floats[0]` versus `floats.last!` is **provably identical**:
+//     every point the loop appends carries `floats[0].f`, so `last` always *is* `floats[0]`.
+//   * the assembly's output ORDER is **provably unobservable in this slice**: the range tail
+//     sorts, and no ported consumer reads the assembly's order — a nested `rangeEval` gathers
+//     by timestamp, and a multi-series matrix comes from `evalSeries` rather than from here.
+//     That is what licenses the insertion-order choice below rather than Go's map order.
 //
-// One survivor is *provably* absorbed rather than merely unwitnessed: `gatherVector`'s
+// One survivor from the instant slice is *provably* absorbed the same way: `gatherVector`'s
 // `> maxSamples` versus `>=`. Reaching the limit exactly at the gather always means the
 // result — which adds at least one more sample — trips `rangeEval`'s own `>` check
 // immediately after, so both spellings reject the same queries.
 //
-// So: the arms are transcribed faithfully and the ones a storage-free query can reach are
-// pinned. The rest become testable when the selectors land, and that is the honest state.
+// A fourth behaviour is pinned Swift-side rather than differentially: which of a series' two
+// point slices `addToSeries` grows. Putting a histogram in the float slice survives the whole
+// differential corpus, because that corpus is float-only *on purpose* — a histogram appended
+// to a real `tsdb.DB` returns through the chunk encoding, which re-derives
+// `CounterResetHint`, so pinning it would pin Phases 6-7's subject. `sort_by_label` is the
+// only ported function that passes a histogram sample *through* a `rangeEval` (`sort` and
+// `sort_desc` drop them in `filterFloats`), which is why the test uses it.
 //
 // ## `setOffsetForAtModifier` rewrites the AST before evaluation
 //
@@ -75,6 +89,12 @@
 // the statement's *start* time, which is why an instant query and a range query over the
 // same expression can produce different offsets. Observable through `Statement()` after
 // `Exec`, which is how the fixture pins it.
+//
+// It also explains why the step-duplication path is *visible*: for `http_requests @ 60` over
+// three steps the rewritten offset is measured from the START time, so an evaluator that ran
+// the selector per step would read a different sample each time. Upstream evaluates it once
+// and copies the point, and the corpus's three equal values with three timestamps is the
+// difference.
 //===----------------------------------------------------------------------===//
 
 public import GoCompat
@@ -259,18 +279,42 @@ final class Evaluator {
                 // A range selector's timestamps are its own, so the result is not duplicated.
                 return res
             }
-            guard let mat = res as? Matrix else {
+            guard var mat = res as? Matrix else {
                 // engine.go panics here with the *outer* expression's type, which is a
                 // reachable-looking message for an unreachable state.
                 throw EvaluatorNotPorted(
                     nodeType: "StepInvariantExpr",
                     detail: "unexpected result type \(res.type.documented)")
             }
-            if startTimestamp == endTimestamp {
-                return mat
+            // The value does not change with the step, but its TIMESTAMP does, so the single
+            // point is copied to every remaining step. Note the loop starts at
+            // `startTimestamp + interval`: step 0's point is already there.
+            for i in mat.series.indices {
+                if mat.series[i].floats.count + mat.series[i].histograms.count != 1 {
+                    // Go panics with "unexpected number of samples". A step-invariant
+                    // subexpression is evaluated at exactly one timestamp, so this is a
+                    // broken invariant rather than a user error.
+                    throw EvaluatorNotPorted(
+                        nodeType: "StepInvariantExpr", detail: "unexpected number of samples")
+                }
+                var t = startTimestamp + interval
+                while t <= endTimestamp {
+                    if !mat.series[i].floats.isEmpty {
+                        mat.series[i].floats.append(
+                            FPoint(t: t, f: mat.series[i].floats[0].f))
+                        currentSamples += 1
+                    } else {
+                        let point = HPoint(t: t, h: mat.series[i].histograms[0].h)
+                        mat.series[i].histograms.append(point)
+                        currentSamples += point.size
+                    }
+                    if currentSamples > maxSamples {
+                        throw QueryError.tooManySamples(evaluationEnv)
+                    }
+                    t += interval
+                }
             }
-            throw EvaluatorNotPorted(
-                nodeType: "StepInvariantExpr", detail: "step duplication needs range queries")
+            return mat
 
         case let e as VectorSelector:
             // `checkAndExpandSeriesSet` is where a storage error surfaces, wrapped so the
@@ -314,10 +358,23 @@ final class Evaluator {
                 throw EvaluatorNotPorted(
                     nodeType: "Call", detail: "no implementation for \((e.function?.name ?? ""))")
             }
-            // The sort-in-range-query warning needs `startTimestamp != endTimestamp`, so it
-            // arrives with range queries.
+            // The four sorts are meaningless over a range query — every step is sorted
+            // independently and the result matrix is sorted by label set at the end — so
+            // upstream warns rather than refusing. Note the warning is produced ONCE, before
+            // the step loop, but merged into the result of EVERY step: `warnings.Merge(annos)`
+            // returns the accumulator, so the closure hands back the running total.
+            var warnings = Annotations()
+            switch e.function?.name ?? "" {
+            case "sort", "sort_desc", "sort_by_label", "sort_by_label_desc":
+                if startTimestamp != endTimestamp {
+                    _ = warnings.add(newSortInRangeQueryWarning(e.positionRange))
+                }
+            default:
+                break
+            }
             return try rangeEval(ctx, &ws, e.args) { v, enh in
-                call(v, Matrix(), e.args, enh)
+                let (vec, annos) = call(v, Matrix(), e.args, enh)
+                return (vec, warnings.merge(annos))
             }
 
         default:
@@ -357,6 +414,20 @@ final class Evaluator {
         let enh = EvalNodeHelper()
         enh.enableDelayedNameRemoval = enableDelayedNameRemoval
         var tempNumSamples = currentSamples
+
+        // Go: `seriess map[uint64]seriesAndTimestamp` — the output series, keyed by label
+        // hash, with the last timestamp each was written at so a duplicate *within one step*
+        // can be told from the same series across steps.
+        //
+        // Go ranges the map to assemble the result, so upstream's matrix order here is
+        // randomised. `order` keeps insertion order instead: one of the orders Go can
+        // produce, and the only deterministic choice (PORTING.md exception 7). The top-level
+        // range path sorts the result, so this is not observable through a query — but an
+        // *inner* expression's order becomes the next layer's input order, which is why it
+        // is a recorded decision rather than an implementation detail.
+        var seriess: [UInt64: (series: Series, ts: Int64)] = [:]
+        var order: [UInt64] = []
+        seriess.reserveCapacity(biggestLen)
 
         var ts = startTimestamp
         while ts <= endTimestamp {
@@ -413,11 +484,40 @@ final class Evaluator {
                 return mat
             }
 
+            // The multi-step path: fold this step's samples into the per-series accumulators.
+            for sample in result.samples {
+                let h = sample.metric.goHash()
+                if var existing = seriess[h] {
+                    // Seen at this same timestamp already: two output series with one label
+                    // set, which is a genuine ambiguity rather than a mergeable pair.
+                    if existing.ts == ts {
+                        throw EvaluationError.duplicateLabelset
+                    }
+                    existing.ts = ts
+                    addToSeries(&existing.series, enh.ts, sample.f, sample.h)
+                    seriess[h] = existing
+                } else {
+                    var fresh = (
+                        series: Series(metric: sample.metric, dropName: sample.dropName), ts: ts
+                    )
+                    addToSeries(&fresh.series, enh.ts, sample.f, sample.h)
+                    seriess[h] = fresh
+                    order.append(h)
+                }
+            }
+
             ts += interval
         }
 
-        throw EvaluatorNotPorted(
-            nodeType: "rangeEval", detail: "the multi-step series assembly needs range queries")
+        // Assemble the output matrix. By the time we get here the sample limit has already
+        // been enforced per step, so no further check is needed — Go says as much.
+        var mat = Matrix()
+        mat.series.reserveCapacity(order.count)
+        for h in order {
+            mat.series.append(seriess[h]!.series)
+        }
+        currentSamples = originalNumSamples + mat.totalSamples
+        return mat
     }
 
     /// Go: `gatherVector` — the samples at `ts` from each input series.
@@ -460,6 +560,20 @@ final class Evaluator {
         }
         return out
     }
+}
+
+/// Go: `addToSeries` — append one output point to a series, float or histogram.
+///
+/// Go's `numSteps` argument only sizes the pooled slice, so it is dropped (PORTING.md
+/// exception 4). Which of the two slices grows is decided by `h == nil`, and nothing keeps
+/// them in step: a series whose function returns a float at one timestamp and a histogram at
+/// the next ends up with points in both, which is exactly what upstream produces.
+func addToSeries(_ ss: inout Series, _ ts: Int64, _ f: Double, _ h: FloatHistogram?) {
+    guard let h else {
+        ss.floats.append(FPoint(t: ts, f: f))
+        return
+    }
+    ss.histograms.append(HPoint(t: ts, h: h))
 }
 
 /// Go: `scalarBinop` — the arithmetic and comparison operators over two scalars.
@@ -623,8 +737,7 @@ extension Engine {
 
         guard Timestamp.fromTime(s.start) == Timestamp.fromTime(s.end) && s.interval.nanoseconds == 0
         else {
-            throw EvaluatorNotPorted(
-                nodeType: "EvalStmt", detail: "range queries need the per-step series assembly")
+            return try execRangeEvalStmt(ctx, s)
         }
 
         let start = Timestamp.fromTime(s.start)
@@ -677,6 +790,50 @@ extension Engine {
             throw EvaluatorNotPorted(
                 nodeType: "EvalStmt", detail: "unexpected expression type \(s.expr.type.documented)")
         }
+    }
+
+    /// Go: `execEvalStmt`'s second half — the range evaluation.
+    ///
+    /// Split out because Go's is one function with an early `return` for the instant case;
+    /// keeping them separate in Swift avoids a 150-line body. The querier, `populateSeries`
+    /// and `setOffsetForAtModifier` all ran in the caller, in that order, which is upstream's.
+    ///
+    /// Three things differ from the instant path and all three are observable:
+    ///
+    ///   * the result is **always a `Matrix`**, whatever the expression's type. A range query
+    ///     over `1` returns a one-series matrix with a point per step, not a `Scalar` — so
+    ///     the three type tails of the instant path have no counterpart here.
+    ///   * `interval` is the query's own step rather than 1, so it is what `rangeEval` and
+    ///     `StepInvariantExpr` advance by.
+    ///   * `contextDone` is checked once **after** evaluation and before the sort, so a
+    ///     cancellation that arrives during the final assembly is still reported.
+    func execRangeEvalStmt(_ ctx: GoContext, _ s: EvalStmt) throws -> (any Value, Annotations) {
+        let ev = Evaluator(
+            startTimestamp: Timestamp.fromTime(s.start),
+            endTimestamp: Timestamp.fromTime(s.end),
+            interval: durationMilliseconds(s.interval),
+            maxSamples: maxSamplesPerQuery, lookbackDelta: s.lookbackDelta,
+            noStepSubqueryIntervalFn: noStepSubqueryIntervalFn,
+            enableDelayedNameRemoval: enableDelayedNameRemoval,
+            enableTypeAndUnitLabels: enableTypeAndUnitLabels,
+            useStartTimestamps: useStartTimestamps)
+
+        let (val, warnings) = try ev.eval(ctx, s.expr)
+
+        guard var mat = val as? Matrix else {
+            // Go panics. `NewRangeQuery` rejects anything but scalar and instant vector, and
+            // both of those evaluate to a Matrix, so this is unreachable through the front
+            // door — but `Exec` can be handed a statement built by hand.
+            throw EvaluatorNotPorted(
+                nodeType: "EvalStmt", detail: "invalid expression type \(val.type.documented)")
+        }
+
+        if let err = contextDone(ctx, "expression evaluation") {
+            throw ErrWithWarnings(err, warnings)
+        }
+
+        mat.sort()
+        return (mat, warnings)
     }
 }
 

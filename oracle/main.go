@@ -203,6 +203,12 @@ var suites = map[string]func(*emitter){
 	// expressions that never touch the storage. See
 	// oracle/suites_promql_engine_exec.go.
 	"promql/exec": genPromQLExec,
+	// Phase 5: the RANGE evaluation — execEvalStmt's second half, rangeEval's
+	// multi-step assembly, addToSeries and StepInvariantExpr's step duplication. A
+	// separate suite because a range query's input shape is start/end/step, and one
+	// fixture file holds one in/out shape. See
+	// oracle/suites_promql_engine_rangequery.go.
+	"promql/exec-range": genPromQLExecRange,
 }
 
 func main() {
