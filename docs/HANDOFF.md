@@ -1,8 +1,8 @@
 # Handoff
 
-Written at the end of the session that landed `prometheus/schema` and `promql/functions.go`'s
-element-wise arithmetic slice — the first of `FunctionCalls`' bodies to be ported, and the step that
-proves the oracle can drive them without a running engine.
+Written at the end of the session that landed `promql/functions.go`'s eight **date** functions, and
+with them the `GoTime` calendar work they needed — including reproducing the band where Go's own
+calendar wraps, which `year(vector(-Inf))` reaches.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -16,15 +16,15 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema` and **34 of `FunctionCalls`' 89 bodies** are landed. Next: the rest of `functions.go`'s bodies (dates, histograms, `*_over_time`, the sorts), then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **42 of `FunctionCalls`' 89 bodies** are landed. Next: the rest of `functions.go`'s bodies (histograms, `*_over_time`, the sorts), then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **315,942 committed differential cases, 420 tests**, on both Swift 6.4
+Green as of this commit: **320,758 committed differential cases, 433 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
 Sources/            src     generated
-  GoCompat          4,043       193
+  GoCompat          4,285       193
   PromHash            216         –
   PromMath             91         –
   PromModel           357         –
@@ -40,9 +40,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,993       550
-  PromQL            2,794         –
-Tests              10,575
-oracle (Go)        13,573
+  PromQL            2,903         –
+Tests              10,859
+oracle (Go)        13,838
 ```
 
 ### Verify everything in one go
@@ -232,6 +232,32 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **"Reproducing a wrap would hide a bug rather than match anything observable" was a claim about
+  reachability, and it was wrong.** `GoTime` computed the calendar straight from `unixSeconds` and said
+  so in a comment. But Go computes it from `absSeconds(sec + unixToAbsolute)` — an `int64` add then a
+  `uint64` reinterpretation — and for `sec < -9223372028741760000` that lands near 2**64 and gives a
+  nonsense date. The path in: `dateWrapper` does `int64(el.F)` on **arbitrary sample data** with no
+  guard, `int64(-Inf)` saturates to `Int64.min`, and so `year(vector(-Inf))` is legal PromQL whose Go
+  answer is **+292277026596** — the same as `year(vector(+Inf))`. One ULP of a `Double` near -9.2e18 is
+  2048, so ordinary data lands either side of the boundary too. Four of 400,201 probe seconds
+  disagreed, and all four were explicit extremes rather than random draws. Quirk 46. The
+  transferable part: **a comment that says "unobservable" is asserting something about every caller,
+  including the ones that do not exist yet** — and `int64(someFloat)` on user data is exactly the kind
+  of caller that turns an internal wrap into a contract.
+- **A helper with no caller is worse than no helper, and a negative control is how you find out.**
+  Porting `days_in_month` as a month-length table plus a leap-year test agreed with Go on 4,659 of
+  4,664 corpus seconds; the five failures were at extreme years, where Go's own `time.Date` wraps and
+  returns **7** for a January. Fixing it meant reproducing `dateToAbsDays` and `Date`'s wrapping
+  round trip — which left the leap-year helper unreferenced. Perturbing its 100- and 400-year
+  exceptions then changed nothing, which read like a corpus gap and was actually dead code. Deleting
+  it was the fix. Quirk 47, which also records that `dateToAbsDays`'s `(979*amonth - 2919) >> 5` has
+  genuine slack — 2918 is invisible — so *that* surviving perturbation is not a gap either.
+- **A `--filter` that matches nothing reports success, and a negative-control harness cannot tell the
+  difference.** `swift test --filter "promql/functions"` matched no tests — Swift Testing filters on
+  the *type* name, and the `/` in the suite's display string is not it — so twelve controls came back
+  "still green" when they had never run. The tell was the pattern: every control touching one file
+  survived while its neighbours broke. **Assert that the harness ran something**: count
+  `"Test run with"` in the output, not just the exit code.
 - **A behaviour is pinned only if some input can tell the two spellings apart, and "the corpus has
   interesting values" is not the same thing.** The element-wise `functions.go` slice passed its first
   corpus with *every* one of the 16 transcendental wrappers rewired to Swift's **libm** — because the
@@ -474,7 +500,10 @@ The **protocol substrate is done and merged**. What exists now:
 | `GoCompat.GoMath` | `math.Log1p`, `Sinh`, `Cosh`, `Tanh`, `Asinh`, `Acosh`, `Atanh` | portable Go on arm64. 36 fused sites, 19 witnessed. PORTING.md quirks 41-43 |
 | `PromSchema` | `schema/labels.go` | new target. `isMetadataLabel` + `Metadata`; `IgnoreOverriddenMetadataLabelScratchBuilder` deferred to Phase 8 |
 | `PromQL` | `promql/engine.go`'s `EvalNodeHelper`, `EvalSeriesHelper` | **three fields only** — `ts`, `out`, `enableDelayedNameRemoval`. The caches arrive with their callers; the file lists which and whose |
-| `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` — 34 of `FunctionCalls`' 89 entries |
+| `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` |
+| `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | 42 of `FunctionCalls`' 89 entries between them |
+| `GoCompat.GoTime` | the calendar half of `time.Time` | `utcDate`/`utcClock` rebuilt on Go's **absolute** second count, plus `utcWeekday`, `utcYearDay`, `dateToAbsDays`, `daysInMonth`. Quirks 46-47 |
+| `GoCompat.GoConv.int64` | Go's `int64(float64)` | the saturating `FCVTZS`. `PromQLParser`'s `clampToInt64` now delegates to it |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -511,15 +540,12 @@ unexported, so `scalarBinop`, `vectorElemBinop`, `aggregation` and the rest can 
 differentially testable *now* and `engine.go` is not, which inverts the obvious order.
 
 1. **`promql/functions.go`'s bodies**, driven through `FunctionCalls` from the oracle. The
-   element-wise arithmetic slice is **done** — `EvalNodeHelper` (three fields), `EvalSeriesHelper`,
-   `simpleFloatFunc` + the 26 math wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`,
-   `timestamp`, `pi`, `sgn`. `Tests/PromQLTests/FunctionsTests.swift` asserts the table is a subset of
+   element-wise arithmetic slice and the eight date functions are **done** — `EvalNodeHelper` (three
+   fields), `EvalSeriesHelper`, `simpleFloatFunc` + the 26 math wrappers, `clamp`×3, `round`,
+   `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn`, `dateWrapper` + `days_in_month`/`day_of_*`/
+   `hour`/`minute`/`month`/`year`. `Tests/PromQLTests/FunctionsTests.swift` asserts the table is a subset of
    Go's whose complement is **exactly** the named deferred set, so the next slice is a matter of
    deleting names from that list. What is left, and what each needs:
-   - **the 8 date functions** — `dateWrapper` plus `days_in_month`/`day_of_*`/`hour`/`minute`/
-     `month`/`year`. Blocked on `GoTime` growing a weekday, a year-day and a days-in-month, and they
-     carry the `int64(el.F)` saturation trap (below): `year(vector(NaN))` is legal PromQL and a Swift
-     crash. `PromQLParser` already has a `clampToInt64`; hoist it into `GoCompat` rather than copying.
    - `simpleHistogramFunc` + the `histogram_*` family, and
      `funcHistogramQuantile`/`Fraction`/`Quantiles` on top of the already-ported `quantile.go` —
      these need `EvalNodeHelper`'s bucket caches and `resetHistograms`, plus `getMetricName`,
@@ -620,11 +646,14 @@ with a plain `*` first**. Three call sites make that easy to get wrong because t
   fusion; hoisting it would both fuse and reassociate.
 - `aggregation:3897` — `v/n + c/n`, **two divisions then one add**. Not `(v + c) / n`.
 
-**`Int64(Double)` traps in Swift where Go saturates.** Three sites, and one is user-reachable:
+**`Int64(Double)` traps in Swift where Go saturates.** Three sites, one of which is user-reachable and
+now handled; `GoCompat.GoConv.int64` is the shared implementation:
 
-- `functions.go:2487`, `dateWrapper` — `int64(el.F)` on **arbitrary sample data**, unguarded. So
-  `year(vector(NaN))` is legal PromQL and a Swift crash. Go's `FCVTZS` gives NaN → 0, ±Inf → `Int64`
-  extremes; probed answers are 1970 for NaN and 292277026596 for +Inf.
+- `functions.go:2487`, `dateWrapper` — **done**, via `GoCompat.GoConv.int64`. `int64(el.F)` is on
+  **arbitrary sample data** and unguarded, so `year(vector(NaN))` is legal PromQL and would be a Swift
+  crash. Go's `FCVTZS` gives NaN → 0 and ±Inf → the `Int64` extremes; the answers are 1970 for NaN and
+  292277026596 for **both** infinities — the negative one because `Int64.min` lands in the band where
+  Go's calendar wraps (quirk 46).
 - `engine.go:3986`, `aggregationK` — `int64(fParam)`, guarded *upstream* by `rangeEvalAgg:1637-1645`
   using the hand-written float constants at `engine.go:67/69` (`maxInt64 = 9223372036854774784`, the
   largest `Int64` exactly representable as a `Double`). Port the guard and the constants together, or
@@ -807,7 +836,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 45 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 47 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
