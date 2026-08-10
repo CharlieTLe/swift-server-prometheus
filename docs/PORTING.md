@@ -1337,6 +1337,43 @@ changing behaviour.
     only their outputs cross the wire. A sweep filtered to the *fixture* suites reports those
     four green. Same trap as HANDOFF §4's filter mistake, in a new disguise.
 
+74. **The sample limit is enforced in two places, so a query's peak is higher than its
+    result.** `rangeEval` resets `currentSamples` at the top of every step, adds the result's
+    `TotalSamples()` and only then compares with `maxSamples` — so an over-limit step is
+    computed in full before being rejected. But `gatherVector` **also** counts, one per input
+    sample, and raises `ErrTooManySamples` itself. `1 + 2` therefore needs a limit of **5**,
+    not 3: one for each literal's own evaluation, two more as the operands are gathered, one
+    for the result. A port that counted only results accepts queries Go rejects.
+
+    `gatherVector` also *consumes* the point it took, so the next step does not rescan it, and
+    deliberately does not count histogram size — Go's comment says it copies only the pointer.
+    Swift's value semantics make that a real copy; the **accounting** stays Go's, because the
+    count is the contract and not the allocation.
+
+    `rangeEval`'s instant shortcut builds the output matrix from the result vector *in the
+    vector's order*, returning before the hash-map assembly. Upstream's comment — "shortcut so
+    as not to change sort order" — is load-bearing for `sort`, whose entire purpose a map would
+    destroy. And `execEvalStmt` builds the instant evaluator with `interval: 1`, never 0,
+    because `numSteps` divides by it.
+
+    `EvalStmt.String()` is `"EVAL " + Expr.String()` (printer.go:52), and `Pretty` returns the
+    same string — it does not pretty-print the expression. The port had this wrong, with a
+    comment asserting the opposite, until a fixture printed a statement: nothing else in the
+    corpora built an `EvalStmt`.
+
+75. **A partial slice needs its coverage stated, not implied.** The evaluator's storage-free
+    arms are pinned by 339 differential cases, and that is much narrower than it sounds: a
+    single-step, single-series corpus can only witness single-step, single-series behaviour. Of
+    16 negative controls three break; the survivors need input this slice cannot produce —
+    multiple steps (consuming a gathered point), multiple series (the instant shortcut's order,
+    the scalar tail's `mat[0]`, unary minus's `DropName`), or a selector at all
+    (`setOffsetForAtModifier`). One is provably absorbed: `gatherVector`'s `>` versus `>=`
+    cannot decide anything, because the result adds a sample and trips `rangeEval`'s own check
+    immediately after.
+
+    Recorded because the alternative is a file that reads as verified and is not. Those
+    controls become witnessable when the selectors land, and the file header names each one.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

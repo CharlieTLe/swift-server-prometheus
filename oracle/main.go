@@ -196,6 +196,10 @@ var suites = map[string]func(*emitter){
 	// oracle/suites_promql_engine_errors.go.
 	"promql/queryerrors": genPromQLQueryErrors,
 	"promql/matrixsort":  genPromQLMatrixSort,
+	// Phase 5: the EXECUTION path, as far as it is ported — instant queries over
+	// expressions that never touch the storage. See
+	// oracle/suites_promql_engine_exec.go.
+	"promql/exec": genPromQLExec,
 }
 
 func main() {
