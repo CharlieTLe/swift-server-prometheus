@@ -1261,6 +1261,49 @@ changing behaviour.
     The distinguishing question in both cases was not "is this reachable?" but "what shape
     would make the two answers differ?" — quirk 65's lesson arriving from the other side.
 
+70. **The engine's front door has two lookback defaults with two different
+    comparisons.** `NewEngine` replaces a lookback delta of exactly **zero** with
+    `defaultLookbackDelta` (five minutes), testing `== 0`. `newQuery` then replaces a
+    per-query delta that is `<= 0` with the engine's. So a **negative engine** lookback
+    survives while a negative **per-query** one is discarded, and a zero engine lookback can
+    never reach a query at all. Reading `newQuery` alone suggests otherwise; the fixture
+    found it.
+
+    `validateOpts` returns early only when `enableAtModifier` **and**
+    `enableNegativeOffset` are both on. With exactly one off it walks the AST and reports
+    whichever violation it meets first *in traversal order* — so
+    `foo @ 100 + bar offset -5m` and `foo offset -5m + bar @ 100` produce different errors
+    from the same engine. The flags are sticky and the two checks run after every node, so a
+    later node can raise the error for an earlier node's violation.
+
+    Its `MatrixSelector` arm is **redundant**: `Inspect` walks into the inner
+    `VectorSelector`, which catches the same `@` and the same negative offset. Preserved
+    because it is upstream's, and recorded because the negative control for it cannot fail.
+
+    Only `NewRangeQuery` type-checks, so `foo[5m]` is a legal instant query and an illegal
+    range one, with a message naming `DocumentedType` ("range vector", quoted with `%q`).
+
+    Divergences, all recorded rather than hidden: no `prometheus.Collector` metrics (Phase
+    8, with the HTTP layer), no `ActiveQueryTracker` — so `queueActive` never blocks and a
+    query that would have been rejected for concurrency is accepted — and no logger or
+    `stats` timers.
+
+71. **Some behaviours only show on an input that fails twice.** Two controls in this sweep
+    survived every well-formed query:
+
+    * validating before preprocessing versus after — identical unless a query fails *both*.
+      `rate(foo[1m-1m] @ 100)` with the `@` modifier disabled folds its range to zero, which
+      `PreprocessExpr` rejects, *and* uses a disabled feature. Go answers
+      "@ modifier is disabled", so validation runs first.
+    * passing the query's interval to `PreprocessExpr` versus zero — the step reaches the
+      AST only through `step()` in duration position, so `max_over_time(foo[step()])` is the
+      only shape that separates them. As an *instant* query it errors, because an instant
+      query's step is zero and a zero duration is invalid.
+
+    Alongside quirks 65, 67 and 69 the pattern is now clear: when a control survives, the
+    question is what makes the two answers differ — and the answer is sometimes "an input
+    that is already broken in another way".
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
