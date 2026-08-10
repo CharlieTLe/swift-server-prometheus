@@ -1067,6 +1067,29 @@ changing behaviour.
     quirk 58, and `instantValue`'s). All are unreachable from a query and all are
     guarded with a clear precondition rather than reproduced.
 
+62. **Seven of `FunctionCalls`' keys map to `nil`, and conflating them with unported
+    bodies makes the table look permanently incomplete.** `start`, `end`, `step` and
+    `range` are folded into a `NumberLiteral` by `foldQueryContextFunctions` before the
+    evaluator ever looks them up; `info`, `label_replace` and `label_join` are reached
+    by the evaluator directly (`evalLabelJoin`/`evalLabelReplace`), not through the map.
+    None of the seven can ever have an implementation.
+
+    `Tests/PromQLTests/FunctionsTests.swift` therefore keeps three categories, not two:
+    ported, deferred, and **nil in Go**. Without that split the port reads as 77/89 when
+    the reachable total is 82.
+
+    Relatedly, `createLabelsForAbsentFunction`'s `MatrixSelector` branch is **not
+    reachable through the table at all**: `absent(x[5m])` fails type-checking, and
+    `absent_over_time`'s body ignores its arguments — the evaluator calls the helper for
+    it directly. Pinned Swift-side instead, and the corpus says so.
+
+    `absent`'s own label derivation is backwards compatibility and upstream's comment
+    admits it: only the **first** `=` matcher for a name contributes, and any second
+    matcher on that name deletes it again. So `absent(x{job="a",job="b"})` drops `job`
+    — and, as upstream notes, so does `absent(x{job="a",job="a"})`, which is "arguably
+    wrong". Order matters too: `{job!="a",job="b"}` sets `job` while
+    `{job="b",job!="a"}` does not.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

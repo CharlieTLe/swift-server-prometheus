@@ -87,12 +87,19 @@ struct FunctionsElementwiseTests {
             // Sorts: need Go's pdqsort, because the two sorts are observably
             // different and neither comparator is a strict weak ordering.
             "sort", "sort_by_label", "sort_by_label_desc", "sort_desc",
-            // The rest of the evaluator's own surface.
-            "absent", "info", "label_join", "label_replace",
-            "start", "end", "step", "range",
         ]
-        #expect(theirs.subtracting(ours) == deferred,
-                "unexpected gap: \(theirs.subtracting(ours).symmetricDifference(deferred).sorted())")
+
+        // Seven of Go's keys map to **nil**, so they can never have an entry here:
+        // `start`/`end`/`step`/`range` are folded into a NumberLiteral by
+        // `foldQueryContextFunctions`, and `info`/`label_replace`/`label_join` are
+        // reached by the evaluator directly rather than through the table. Counting
+        // them as "not ported" would make this table look permanently incomplete, so
+        // they are their own category.
+        let nilInGo: Set<String> = [
+            "start", "end", "step", "range", "info", "label_replace", "label_join",
+        ]
+        #expect(theirs.subtracting(ours) == deferred.union(nilInGo),
+                "unexpected gap: \(theirs.subtracting(ours).symmetricDifference(deferred.union(nilInGo)).sorted())")
     }
 }
 

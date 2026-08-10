@@ -1004,6 +1004,57 @@ func genPromQLFunctionsOverTime(e *emitter) {
 		}
 	}
 
+	// --- absent. Its labels come from the SELECTOR's matchers, so each case is a
+	// different expression rather than a different input vector.
+	//
+	// The `has` map is backwards compatibility and upstream says so: only the FIRST `=`
+	// matcher for a name contributes, and a second matcher on that name — of any type —
+	// deletes it again. So `x{job="a",job="b"}` drops `job`, and upstream's own comment
+	// notes `x{job="a",job="a"}` does too, which is "arguably wrong".
+	absentExprs := []string{
+		`absent(x)`,
+		`absent(x{job="a"})`,
+		`absent(x{job="a",foo="bar"})`,
+		// A repeated name: dropped, both with different values and with the same one.
+		`absent(x{job="a",job="b",foo="bar"})`,
+		`absent(x{job="a",job="a",foo="bar"})`,
+		// Non-equality matchers delete rather than set.
+		`absent(x{job!="a",foo="bar"})`,
+		`absent(x{job=~"a.*",foo="bar"})`,
+		`absent(x{job!~"a.*",foo="bar"})`,
+		// An `=` after a non-`=` on the same name: `has` is still false, so it SETS.
+		`absent(x{job!="a",job="b"})`,
+		// An `=` before a non-`=`: the second deletes what the first set.
+		`absent(x{job="b",job!="a"})`,
+		// __name__ matchers are skipped outright.
+		`absent({__name__="x",job="a"})`,
+		// `absent(x{__name__="y"})` does not parse — the parser rejects a metric name
+		// set twice — so only the braces-only form reaches the __name__ skip.
+		// An empty value, which is still an `=` matcher.
+		`absent(x{job=""})`,
+		// The MatrixSelector branch of createLabelsForAbsentFunction is NOT reachable
+		// here: `absent(x[5m])` fails type-checking, and `absent_over_time`'s body
+		// ignores its args entirely — the evaluator calls the helper for it directly.
+		// Pinned Swift-side instead.
+		// Not a selector at all: no labels.
+		`absent(vector(1))`,
+	}
+	for _, e := range absentExprs {
+		// Empty input yields the synthetic sample; non-empty yields nothing.
+		for _, arg := range [][]fnSampleIn{
+			{},
+			{{Metric: []string{"__name__", "x", "job", "a"}, T: "1000", F: fbits(5)}},
+		} {
+			for _, delayed := range []bool{false, true} {
+				emit(fnIn{
+					Fn: "absent", Delayed: delayed, Ts: "1500",
+					Expr: e,
+					Args: [][]fnSampleIn{arg},
+				})
+			}
+		}
+	}
+
 	for _, fn := range names {
 		for _, m := range matrices {
 			for _, delayed := range []bool{false, true} {

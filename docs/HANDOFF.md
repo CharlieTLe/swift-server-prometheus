@@ -16,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **77 of `FunctionCalls`' 89 bodies** are landed. Every `*_over_time` aggregation and the whole rate family are done. Next: the four sorts (Go's pdqsort), `extendedRate` for anchored/smoothed ranges, then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **78 of the 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). Next: the four sorts (Go's pdqsort), `extendedRate` for anchored/smoothed ranges, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **325,656 committed differential cases, 448 tests**, on both Swift 6.4
+Green as of this commit: **325,708 committed differential cases, 448 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -232,6 +232,11 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **Count what *can* be ported, not what exists.** Seven of `FunctionCalls`' 89 keys map to **nil** in
+  Go: `start`/`end`/`step`/`range` are folded into a `NumberLiteral` before lookup, and
+  `info`/`label_replace`/`label_join` are reached by the evaluator directly. None can ever have a body.
+  The test now keeps three categories — ported, deferred, nil-in-Go — because without that split the
+  port reads as 77/89 when the reachable total is 82. Quirk 62.
 - **A corpus built from one family of generated values pins one axis — and this is now the third
   instance.** Every histogram shape in the `functions-*` corpora came from `genTestHistogram` (hint
   `UnknownCounterReset`) or was a hand-built gauge, so `sum_over_time`'s
@@ -594,6 +599,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` |
 | `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
 | `PromQL` | `promql/functions.go`'s float-only range aggregations | `aggrOverTime`, `compareOverTime`, `varianceOverTime`, `quantile_over_time`, `mad_over_time` and the 13 entries around them. Quirks 50-52 |
+| `PromQL` | `promql/functions.go`'s `absent` | plus `createLabelsForAbsentFunction`. 78 of the 82 possible entries. Quirk 62 |
 | `PromQL` | `promql/functions.go`'s `rate`/`increase`/`delta` | `extrapolatedRate` and `histogramRate`. `extendedRate` (anchored/smoothed) deferred. 77 of 89. Quirk 61 |
 | `PromQL` | `promql/functions.go`'s `avg_over_time` | both paths, including the mid-range switch from a direct to an incremental mean. Quirk 60 |
 | `PromQL` | `promql/functions.go`'s `sum_over_time` | `aggrHistOverTime` and the histogram Kahan path. 73 of 89 in total. Quirks 58-59 |
@@ -931,7 +937,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 61 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 62 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

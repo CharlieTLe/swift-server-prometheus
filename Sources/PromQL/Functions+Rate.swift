@@ -68,6 +68,7 @@ public import PromPosRange
 public import PromQLParser
 
 internal import GoCompat
+internal import PromModel
 
 /// Go: `histogramRate` — `last - first` over a range of histograms, with resets added
 /// back.
@@ -347,4 +348,65 @@ func funcIncrease(_: [Vector], _ m: Matrix, _ args: [any Expr], _ enh: EvalNodeH
     Vector, Annotations
 ) {
     extrapolatedRate(m, args, enh, true, false)
+}
+
+// MARK: - absent
+
+/// Go: `createLabelsForAbsentFunction` (functions.go:2746) — the labels `absent` gives
+/// its synthetic sample, derived from the selector's matchers.
+///
+/// The `has` map exists for backwards compatibility and upstream's own comment says so:
+/// only the **first** `=` matcher for a name contributes, and a *second* matcher on the
+/// same name — of any type — deletes it again. So
+/// `absent(x{job="a",job="b",foo="bar"})` drops `job` entirely, and upstream notes that
+/// `absent(x{job="a",job="a",foo="bar"})` therefore does too, which is "arguably wrong"
+/// but is the behaviour.
+///
+/// `__name__` matchers are skipped outright, and anything that is not a selector yields
+/// no labels at all.
+func createLabelsForAbsentFunction(_ expr: any Expr) -> Labels {
+    var b = LabelsBuilder(.empty)
+
+    // `labelMatchers` is `[Matcher?]` because the parser records a nil for a matcher
+    // it could not build after reporting the error; Go's slice cannot hold one, so the
+    // nils are dropped here rather than reproduced.
+    var matchers: [Matcher?]
+    if let vs = expr as? VectorSelector {
+        matchers = vs.labelMatchers
+    } else if let ms = expr as? MatrixSelector, let vs = ms.vectorSelector as? VectorSelector {
+        matchers = vs.labelMatchers
+    } else {
+        return .empty
+    }
+
+    var has: [String: Bool] = [:]
+    for case let ma? in matchers {
+        if ma.name == LabelName.metricName {
+            continue
+        }
+        if ma.type == .equal && has[ma.name] != true {
+            b.set(ma.name, ma.value)
+            has[ma.name] = true
+        } else {
+            // A repeat, or a non-`=` matcher: the label is removed rather than left.
+            b.del([ma.name])
+        }
+    }
+    return b.labels()
+}
+
+/// Go: `funcAbsent` — 1 with the selector's equality labels when the vector is empty,
+/// and nothing when it is not.
+///
+/// Note it indexes `vectorVals[0]` before any guard, so it must be called with an
+/// argument; `rangeEval` always does.
+func funcAbsent(_ v: [Vector], _: Matrix, _ args: [any Expr], _ enh: EvalNodeHelper) -> (
+    Vector, Annotations
+) {
+    if !v[0].isEmpty {
+        return (enh.out, Annotations())
+    }
+    var out = enh.out
+    out.append(Sample(f: 1, metric: createLabelsForAbsentFunction(args[0])))
+    return (out, Annotations())
 }

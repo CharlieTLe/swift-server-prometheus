@@ -575,7 +575,14 @@ func funcTimestamp(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelpe
 
 /// Go: `promql.FunctionCalls` — the name-to-implementation table.
 ///
-/// **Partial.** Only the element-wise arithmetic slice is populated; the entries
+/// **Partial**, and the gap has two different causes that the test keeps apart:
+/// bodies not yet ported, and the **seven names Go maps to `nil`** — `start`, `end`,
+/// `step`, `range` (folded into a `NumberLiteral` by `foldQueryContextFunctions`),
+/// `info`, `label_replace` and `label_join` (reached by the evaluator directly, not
+/// through this table). Those seven can never have an entry, so counting them as
+/// "not ported" would make the table look permanently incomplete.
+///
+/// Only the element-wise arithmetic slice is populated; the entries
 /// listed in the file header arrive with their slices. A lookup that misses is a
 /// function that is parsed and type-checked but not yet evaluable, which is why
 /// the evaluator must not assume this table is total until Phase 5 closes.
@@ -583,6 +590,7 @@ func funcTimestamp(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelpe
 /// visible.
 public let functionCalls: [String: FunctionCall] = [
     "abs": funcAbs,
+    "absent": funcAbsent,
     "absent_over_time": funcAbsentOverTime,
     "avg_over_time": funcAvgOverTime,
     "acos": funcAcos,
