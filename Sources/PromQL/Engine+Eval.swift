@@ -219,18 +219,8 @@ final class Evaluator {
                         mat.series[i].histograms[j].h = h
                     }
                 }
-                if !enableDelayedNameRemoval && mat.series.count > 1 {
-                    // `mergeSeriesWithSameLabelset` exists because dropping `__name__` can
-                    // make two series collide — `-foo` and `-bar` both become `{}`. Merging
-                    // them is its own slice; a range that does NOT collide needs nothing, so
-                    // only the colliding case is refused. Detected the way Go does it
-                    // elsewhere, by label-set hash.
-                    var seen = Set<UInt64>(minimumCapacity: mat.series.count)
-                    for series in mat.series where !seen.insert(series.metric.goHash()).inserted {
-                        throw EvaluatorNotPorted(
-                            nodeType: "UnaryExpr",
-                            detail: "mergeSeriesWithSameLabelset for colliding label sets")
-                    }
+                if !enableDelayedNameRemoval {
+                    mat = try mergeSeriesWithSameLabelset(mat)
                 }
             }
             return mat
@@ -302,16 +292,11 @@ final class Evaluator {
             return try evalSeries(ctx, e.series, e.offset, false)
 
         case let e as Call:
-            if e.function?.name == "timestamp", e.args.first is VectorSelector {
-                // Upstream's `rangeEvalTimestampFunctionOverVectorSelector`: a matrix
-                // evaluation always reports the STEP's timestamp, so `timestamp` over a
-                // selector needs its own path to report the SAMPLE's instead. The difference
-                // is visible whenever a series' last sample is older than the step — which
-                // the corpus caught immediately — so this refuses rather than answering with
-                // the step.
-                throw EvaluatorNotPorted(
-                    nodeType: "Call",
-                    detail: "timestamp over a vector selector needs its own eval path")
+            if e.function?.name == "timestamp", let vs = e.args.first as? VectorSelector {
+                guard let call = functionCalls["timestamp"] else {
+                    throw EvaluatorNotPorted(nodeType: "Call", detail: "no timestamp entry")
+                }
+                return try rangeEvalTimestampFunctionOverVectorSelector(ctx, vs, call, e, &ws)
             }
             for a in e.args where a is MatrixSelector || a is SubqueryExpr {
                 throw EvaluatorNotPorted(
@@ -899,6 +884,134 @@ extension Evaluator {
             }
         }
         return mat
+    }
+
+    /// Go: `mergeSeriesWithSameLabelset` — combine series whose label sets became equal.
+    ///
+    /// Reachable because dropping `__name__` can make two series collide: `-foo` and `-bar`
+    /// both render as `{}`. Two fast paths first — one series, or no duplicates at all, both
+    /// returning the input untouched — and only then the grouping.
+    ///
+    /// Colliding series are merged by concatenating their points and sorting by timestamp; two
+    /// points at the SAME timestamp are the error, because that is a genuine ambiguity rather
+    /// than a mergeable pair.
+    ///
+    /// The grouping is a Go **map**, so the order of the output matrix is randomised per run
+    /// once there is more than one group (PORTING.md exception 7).
+    ///
+    /// **Unreachable from the currently ported arms, and the corpus says so rather than
+    /// implying otherwise.** A selector cannot produce two series with the same label set —
+    /// that is one series to the storage — and two series differing in any label still differ
+    /// after `__name__` is dropped. Reaching this needs a function that drops a *differing*
+    /// label: `label_replace`, or an aggregation. Transcribed now because `UnaryExpr` calls it
+    /// and a stub there would be a silent wrong answer; pinned when those land.
+    func mergeSeriesWithSameLabelset(_ mat: Matrix) throws -> Matrix {
+        if mat.series.count <= 1 {
+            return mat
+        }
+        // The fast path Go takes pains over: no duplicates means no allocation.
+        if !mat.containsSameLabelset {
+            return mat
+        }
+
+        var seriesByHash: [UInt64: [Int]] = [:]
+        var order: [UInt64] = []
+        for i in mat.series.indices {
+            let hash = mat.series[i].metric.goHash()
+            if seriesByHash[hash] == nil {
+                order.append(hash)
+            }
+            seriesByHash[hash, default: []].append(i)
+        }
+
+        var merged = Matrix()
+        // Go ranges the map, so its order is arbitrary; insertion order here is one of the
+        // orders Go can produce and the only deterministic choice available.
+        for hash in order {
+            let indices = seriesByHash[hash]!
+            if indices.count == 1 {
+                merged.series.append(mat.series[indices[0]])
+                continue
+            }
+            var base = mat.series[indices[0]]
+            for idx in indices.dropFirst() {
+                base.floats.append(contentsOf: mat.series[idx].floats)
+                base.histograms.append(contentsOf: mat.series[idx].histograms)
+            }
+            // `sort.Slice` is pdqsort over a `<` on timestamps. Ties are the error below, so
+            // the instability cannot show.
+            GoSort.sort(
+                count: base.floats.count,
+                less: { base.floats[$0].t < base.floats[$1].t },
+                swap: { base.floats.swapAt($0, $1) })
+            GoSort.sort(
+                count: base.histograms.count,
+                less: { base.histograms[$0].t < base.histograms[$1].t },
+                swap: { base.histograms.swapAt($0, $1) })
+
+            for i in 1..<Swift.max(base.floats.count, 1) where base.floats[i].t == base.floats[i - 1].t {
+                throw EvaluationError.duplicateLabelset
+            }
+            for i in 1..<Swift.max(base.histograms.count, 1)
+            where base.histograms[i].t == base.histograms[i - 1].t {
+                throw EvaluationError.duplicateLabelset
+            }
+            merged.series.append(base)
+        }
+        return merged
+    }
+
+    /// Go: `rangeEvalTimestampFunctionOverVectorSelector` — `timestamp()` over a selector.
+    ///
+    /// It exists because a matrix evaluation reports the STEP's timestamp, and `timestamp()`
+    /// has to report the SAMPLE's. So the selector is read directly, per step, and the sample
+    /// values are discarded — only `T` is filled in.
+    ///
+    /// Two details that are easy to lose:
+    ///
+    ///   * the memoized iterator is built with `lookbackDelta - 1`, where `evalSeries` uses
+    ///     the full `lookbackDelta`. One fewer millisecond of lookback, on this path only.
+    ///   * with an `@` modifier the selector's `Offset` is **rewritten every step** to
+    ///     `enh.Ts - timestamp`, so each step still gets a point — upstream issue 8433. That is
+    ///     a mutation of the AST during evaluation, and it is deliberate.
+    func rangeEvalTimestampFunctionOverVectorSelector(
+        _ ctx: GoContext, _ vs: VectorSelector, _ call: FunctionCall, _ e: Call,
+        _ ws: inout Annotations
+    ) throws -> any Value {
+        do {
+            _ = ws.merge(try checkAndExpandSeriesSet(ctx, vs))
+        } catch {
+            var carried = ws
+            throw ErrWithWarnings(StorageExpansionError(underlying: error), carried.merge(ws))
+        }
+
+        // `lookbackDelta - 1`, not `lookbackDelta`.
+        let iterators = vs.series.map {
+            MemoizedSeriesIterator($0.iterator(nil), delta: durationMilliseconds(lookbackDelta) - 1)
+        }
+
+        return try rangeEval(ctx, &ws, []) { _, enh in
+            if let t = vs.timestamp {
+                // Issue 8433: without this an `@`-pinned selector yields one point in total
+                // rather than one per step.
+                vs.offset = GoDuration(nanoseconds: (enh.ts - t) * 1_000_000)
+            }
+            var vec = Vector()
+            vec.samples.reserveCapacity(vs.series.count)
+            for (i, s) in vs.series.enumerated() {
+                guard let got = try self.vectorSelectorSingle(iterators[i], vs.offset, enh.ts)
+                else {
+                    continue
+                }
+                // The value is ignored: only the timestamp matters to the caller.
+                vec.samples.append(Sample(t: got.origT, metric: s.labels()))
+                self.currentSamples += 1
+                if self.currentSamples > self.maxSamples {
+                    throw QueryError.tooManySamples(evaluationEnv)
+                }
+            }
+            return call([vec], Matrix(), e.args, enh)
+        }
     }
 
     /// Go: `vectorSelectorSingle` — the sample for one series at one step, or nil.

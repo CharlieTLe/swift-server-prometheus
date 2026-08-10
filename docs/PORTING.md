@@ -1397,6 +1397,34 @@ changing behaviour.
       series collide. Only the *colliding* case is refused: a range whose label sets stay
       distinct needs no merge, and refusing it would have been a stub where none was required.
 
+77. **`timestamp()` over a selector has its own evaluation path, with one fewer millisecond of
+    lookback.** A matrix evaluation reports the *step's* timestamp, so `timestamp()` has to read
+    the selector directly to report the *sample's*. Two details:
+
+    * its memoized iterator is built with `lookbackDelta - 1`, where `evalSeries` uses the full
+      `lookbackDelta` — one fewer millisecond, on this path only;
+    * with an `@` modifier the selector's `Offset` is **rewritten on every step** to
+      `enh.Ts - timestamp`, so each step still produces a point (upstream issue 8433). That is a
+      deliberate mutation of the AST during evaluation.
+
+    The sample values are discarded outright: only `T` is filled in, because that is all the
+    function reads.
+
+78. **`mergeSeriesWithSameLabelset` is unreachable from every currently ported arm, and saying so
+    is part of porting it.** `UnaryExpr` calls it because dropping `__name__` can make two series
+    collide — but a *selector* cannot supply the collision: two series with identical label sets
+    are one series to the storage, and two series differing in any label still differ after
+    `__name__` is dropped. Reaching it needs a function that drops a **differing** label —
+    `label_replace`, or an aggregation.
+
+    So it is transcribed (a stub in `UnaryExpr` would be a silent wrong answer) and explicitly
+    not pinned. The corpus keeps both near-miss shapes, because "these do not collide, and here
+    is why" is what the next reader needs. Its duplicate-timestamp error — the one genuine
+    ambiguity a merge cannot resolve — is unreachable for the same reason.
+
+    Alongside quirks 75 and 71 this is the third form of honest partial coverage: not "a control
+    that cannot fail", but a *whole function* whose callers cannot yet reach it.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
