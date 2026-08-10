@@ -391,6 +391,45 @@ final class Evaluator {
             }
             return try evalSeries(ctx, e.series, e.offset, false)
 
+        case let e as AggregateExpr:
+            // "Grouping labels must be sorted (expected both by generateGroupingKey() and
+            // aggregation())" — and the sort is **IN PLACE on the AST node**, which is
+            // observable: `Statement().String()` after `Exec` renders
+            // `sum by (inst, job) (m)` for a query written `sum by (job, inst) (m)`.
+            //
+            // The port sorted a *copy* first, on the reasoning that nothing downstream reads the
+            // unsorted order and mutating the node was gratuitous. Two of 677 fixture cases
+            // disagreed. Same shape as `setOffsetForAtModifier`'s rewrite (quirk 76): the AST is
+            // part of the observable surface once `Statement()` is exposed.
+            e.grouping.sort()
+            let sortedGrouping = e.grouping
+
+            if e.op == .countValues {
+                throw EvaluatorNotPorted(
+                    nodeType: "AggregateExpr", detail: "count_values needs aggregationCountValues")
+            }
+
+            var warnings = Annotations()
+            let originalNumSamples = currentSamples
+            // `e.Param` is `k` for topk/bottomk/limitk, `r` for limit_ratio, `q` for quantile —
+            // and it may be a SERIES, so it is evaluated once, up front, before the input.
+            let fp = try newFParams(ctx, e.param, &warnings)
+            guard let inner = e.expr else {
+                throw EvaluatorNotPorted(
+                    nodeType: "AggregateExpr", detail: "no inner expression")
+            }
+            let val = try evalNode(ctx, inner, &warnings)
+            guard let inputMatrix = val as? Matrix else {
+                throw EvaluatorNotPorted(
+                    nodeType: "AggregateExpr", detail: "input is not a matrix")
+            }
+
+            let (result, ws2) = try rangeEvalAgg(ctx, e, sortedGrouping, inputMatrix, fp)
+            _ = warnings.merge(ws2)
+            _ = ws.merge(warnings)
+            currentSamples = originalNumSamples + result.totalSamples
+            return result
+
         case let e as MatrixSelector:
             // A range selector carries its own timestamps, so it is only ever evaluated once —
             // `StepInvariantExpr` returns its result unduplicated for exactly that reason, and

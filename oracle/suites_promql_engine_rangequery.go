@@ -647,6 +647,122 @@ func genPromQLExecRange(e *emitter) {
 		})
 	}
 
+	// --- AGGREGATIONS over a range query. Everything in the aggregation that is per-STEP needs
+	// this: `seen` being cleared, the empty-row removal, `currentSamples` being reset,
+	// `nextValues` consuming its point, and `fParams.Next()` advancing.
+	//
+	// The shapes matter more than the count. A series with a HOLE is what makes `seen` observable —
+	// a group with no sample at one step must produce no point there rather than repeating the
+	// previous one — and a series that stops early is what makes the empty-row removal observable.
+	aggRange := []memSeriesInJSON{
+		fs([]string{"__name__", "ar", "job", "a"},
+			[2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 3}, [2]int64{180_000, 4}),
+		fs([]string{"__name__", "ar", "job", "b"},
+			[2]int64{0, 10}, [2]int64{180_000, 40}),
+		fs([]string{"__name__", "ar", "job", "c"}, [2]int64{0, 100}),
+	}
+	// A group whose ONLY series stops after the first step, so its output row is empty for every
+	// later step — and with a lookback shorter than the gap, empty at the end too.
+	aggEmptyRow := []memSeriesInJSON{
+		fs([]string{"__name__", "ae", "job", "a"},
+			[2]int64{0, 1}, [2]int64{60_000, 2}, [2]int64{120_000, 3}),
+		fs([]string{"__name__", "ae", "job", "z"}, [2]int64{0, 9}),
+	}
+
+	aggRangeCases := []struct {
+		query            string
+		series           []memSeriesInJSON
+		start, end, step int64
+		lookback         int64
+	}{
+		{`sum(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`sum by (job) (ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`avg(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`avg by (job) (ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`count(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`count by (job) (ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`min(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`max(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`group(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`stddev(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`stdvar(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`quantile(0.5, ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`sum without (job) (ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		// A SHORT lookback, so a step past a series' last sample sees nothing — which is what
+		// makes `seen` and the empty-row removal do work.
+		{`sum by (job) (ar)`, aggRange, 0, 180_000, minute, 90 * int64(time.Second)},
+		{`count by (job) (ar)`, aggRange, 0, 180_000, minute, 90 * int64(time.Second)},
+		{`avg by (job) (ar)`, aggRange, 0, 180_000, minute, 90 * int64(time.Second)},
+		{`min by (job) (ar)`, aggRange, 0, 180_000, minute, 90 * int64(time.Second)},
+		{`stddev by (job) (ar)`, aggRange, 0, 180_000, minute, 90 * int64(time.Second)},
+		{`quantile by (job) (0.5, ar)`, aggRange, 0, 180_000, minute, 90 * int64(time.Second)},
+		// A group that is empty for every step but the first: its row must be dropped entirely
+		// rather than emitted with one point... and it is NOT dropped, because one point is data.
+		// Both shapes are here because "which one is empty" is the whole question.
+		{`sum by (job) (ae)`, aggEmptyRow, 0, 180_000, minute, 30 * int64(time.Second)},
+		{`sum by (job) (ae)`, aggEmptyRow, 120_000, 180_000, minute, 30 * int64(time.Second)},
+		{`count by (job) (ae)`, aggEmptyRow, 120_000, 180_000, minute, 30 * int64(time.Second)},
+		// A parameter that MOVES with the step, which is the only way `fParams.Next()`'s advance
+		// is observable — a constant returns the same value forever without consuming.
+		{`quantile(scalar(vector(time() / 200)), ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`quantile by (job) (scalar(vector(time() / 200)), ar)`, aggRange, 0, 180_000, minute,
+			5 * minute},
+		// ...and a parameter series SHORTER than the step count, so it runs out: `Next()` then
+		// returns 0 rather than repeating the last value.
+		{`quantile(scalar(ar{job="c"}), ar)`, aggRange, 0, 180_000, minute, 30 * int64(time.Second)},
+		// A parameter series carrying a NaN *and* a value above 1, so both quantile warnings fire —
+		// which is what says they are not exclusive.
+		{`quantile(scalar(vector(time() / 60 - 1.5)), ar)`, aggRange, 0, 180_000, minute,
+			5 * minute},
+		// An aggregation over a range function and over another aggregation, across steps.
+		{`sum(rate(ar[2m]))`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`sum by (job) (rate(ar[2m]))`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`max(sum by (job) (ar))`, aggRange, 0, 180_000, minute, 5 * minute},
+		{`sum(ar) + sum(ar)`, aggRange, 0, 180_000, minute, 5 * minute},
+		// A parameter series carrying a NaN *and* a value above 1 in the SAME query, which is what
+		// makes the three quantile warnings non-exclusive — and the same shape is the only one
+		// where `newFParams`' `math.Max`/`math.Min` differ from Swift's, since they disagree only
+		// on NaN (quirk 28).
+		{`quantile(scalar(vector((time() - 60) / (time() - 60) * 2)), ar)`, aggRange,
+			0, 180_000, minute, 5 * minute},
+		{`quantile by (job) (scalar(vector((time() - 60) / (time() - 60) * 2)), ar)`, aggRange,
+			0, 180_000, minute, 5 * minute},
+		// A single-step range query over the same shapes, for the pair.
+		{`sum by (job) (ar)`, aggRange, 60_000, 60_000, minute, 5 * minute},
+	}
+	for _, c := range aggRangeCases {
+		emit(execRangeIn{
+			Query: c.query, Start: i64(c.start), End: i64(c.end), Step: i64(c.step),
+			Lookback: i64(c.lookback), Series: c.series,
+		})
+	}
+	// The sample limit against an aggregation across steps, which `rangeEvalAgg` checks after each
+	// step having reset to `tempNumSamples` — so the peak includes the input matrix the inner
+	// expression left behind.
+	for _, maxSamples := range []int{1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20} {
+		for _, q := range []string{`sum(ar)`, `sum by (job) (ar)`, `count(ar)`} {
+			emit(execRangeIn{
+				Query: q, Start: i64(0), End: i64(180_000), Step: i64(minute),
+				Lookback: i64(5 * minute), MaxSamples: maxSamples, Series: aggRange,
+			})
+		}
+	}
+
+	// A NESTED aggregation under a limit, which is the only shape that can see the
+	// `ev.currentSamples = originalNumSamples + result.TotalSamples()` at the end of the
+	// `AggregateExpr` arm — the same mechanism as quirk 81's `rangeEval` tail.
+	for _, maxSamples := range []int{4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28} {
+		for _, q := range []string{
+			`sum(sum by (job) (ar))`, `sum(ar) + sum(ar)`, `max(sum by (job) (ar))`,
+			`abs(sum by (job) (ar))`,
+		} {
+			emit(execRangeIn{
+				Query: q, Start: i64(0), End: i64(180_000), Step: i64(minute),
+				Lookback: i64(5 * minute), MaxSamples: maxSamples, Series: aggRange,
+			})
+		}
+	}
+
 	// The sample limit across steps. `rangeEval` resets `currentSamples` to `tempNumSamples`
 	// at the top of every step and `tempNumSamples` GROWS by each step's result — so a range
 	// query's peak rises with the number of steps even though each step's own work does not.
