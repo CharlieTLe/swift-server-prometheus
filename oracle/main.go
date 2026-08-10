@@ -168,6 +168,9 @@ var suites = map[string]func(*emitter){
 	// oracle/suites_gotime_calendar.go.
 	"gocompat/time-calendar": genGoTimeCalendar,
 	"promql/functions-date":  genPromQLFunctionsDate,
+	// Phase 5: the histogram family. See
+	// oracle/suites_promql_functions_histogram.go.
+	"promql/functions-histogram": genPromQLFunctionsHistogram,
 }
 
 func main() {

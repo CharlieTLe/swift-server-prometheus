@@ -39,6 +39,16 @@ struct FunctionsElementwiseTests {
         }
     }
 
+    @Test("the histogram family matches Go on every committed case")
+    func histogramMatchesGo() throws {
+        try Fixtures.check(
+            "promql/functions-histogram.jsonl",
+            FixtureCase<FnIn, FnOut>.self
+        ) { input in
+            runFnCase(input)
+        }
+    }
+
     @Test("the FunctionCalls table is a subset of Go's, and the gap is the deferred set")
     func tableIsAKnownSubset() throws {
         // `promql/functionnames` already pins `parser.Functions`; this pins
@@ -60,10 +70,6 @@ struct FunctionsElementwiseTests {
         // The deferred set, by name and with its owning slice. Each of these parses
         // and type-checks today and simply has no implementation yet.
         let deferred: Set<String> = [
-            // Histograms: need EvalNodeHelper's bucket caches and resetHistograms.
-            "histogram_avg", "histogram_count", "histogram_fraction",
-            "histogram_quantile", "histogram_quantiles", "histogram_stddev",
-            "histogram_stdvar", "histogram_sum",
             // Range-vector functions: need interpolate/correctForCounterResets.
             "avg_over_time", "changes", "count_over_time", "delta", "deriv",
             "double_exponential_smoothing", "first_over_time", "idelta", "increase",
@@ -386,6 +392,167 @@ struct FunctionsElementwiseInvariantTests {
         #expect(on(funcDayOfWeek, 1_709_164_800) == 4)
         #expect(on(funcDayOfYear, 1_709_164_800) == 60)
         #expect(on(funcDaysInMonth, 1_709_164_800) == 29)
+    }
+
+    @Test("simpleHistogramFunc drops ONLY __name__, unlike simpleFloatFunc")
+    func histogramLabelDropAsymmetry() {
+        // Upstream's own asymmetry, and the fixture is what found it: functions.go
+        // passes `schema.IsMetadataLabel` for the float wrappers and an inline
+        // `func(n string) bool { return n == labels.MetricName }` for the histogram
+        // ones (functions.go:1946). So `abs(x)` loses the type and unit and
+        // `histogram_count(x)` keeps them.
+        let m = Labels(strings: [
+            "__name__", "h", "__type__", "histogram", "__unit__", "s", "job", "j",
+        ])
+        var hs = Sample(t: 1000, metric: m)
+        hs.h = genTestHistogram(3).toFloat()
+
+        let a = EvalNodeHelper()
+        let (hist, _) = funcHistogramCount([Vector([hs])], Matrix(), [], a)
+        #expect(hist[0].metric.description == #"{__type__="histogram", __unit__="s", job="j"}"#)
+
+        let b = EvalNodeHelper()
+        let (float, _) = funcAbs(
+            [Vector([Sample(t: 1000, f: 1, metric: m)])], Matrix(), [], b)
+        #expect(float[0].metric.description == #"{job="j"}"#, "all three go here")
+    }
+
+    @Test("a native/classic conflict drops BOTH series and warns once")
+    func mixedHistogramConflict() {
+        // `resetHistograms`' second pass keys on the native sample's full label set
+        // and compares it against the classic signature that had `le` stripped. On a
+        // match it removes the classic entry AND nils the native sample's `h`, which
+        // is the marker every later loop skips on. So one warning, no output.
+        let name = "hb"
+        var native = Sample(t: 1000, metric: Labels(strings: ["__name__", name]))
+        native.h = genTestHistogram(2).toFloat()
+        let classic = [
+            Sample(t: 1000, f: 1, metric: Labels(strings: ["__name__", name, "le", "1"])),
+            Sample(t: 1000, f: 2, metric: Labels(strings: ["__name__", name, "le", "+Inf"])),
+        ]
+
+        let enh = EvalNodeHelper()
+        let annos = enh.resetHistograms(Vector([native] + classic), NumberLiteral(val: 0))
+        #expect(enh.signatureToMetricWithBuckets.isEmpty, "the classic entry went")
+        #expect(enh.nativeHistogramSamples.count == 1)
+        #expect(enh.nativeHistogramSamples[0].h == nil, "and the native was marked")
+        let (warnings, _) = annos.asStrings(query: "", maxWarnings: 0, maxInfos: 0)
+        #expect(warnings.count == 1)
+
+        // A native histogram under a DIFFERENT name does not conflict.
+        var other = native
+        other.metric = Labels(strings: ["__name__", "other"])
+        let enh2 = EvalNodeHelper()
+        let annos2 = enh2.resetHistograms(Vector([other] + classic), NumberLiteral(val: 0))
+        #expect(enh2.signatureToMetricWithBuckets.count == 1)
+        #expect(enh2.nativeHistogramSamples[0].h != nil)
+        #expect(annos2.isEmpty)
+    }
+
+    @Test("both the signature and the stored metric strip only le, at this stage")
+    func classicSignatureVersusStoredMetric() {
+        // `excludedLabels` is `[BucketLabel]` alone — quantile.go:51 — so the metric
+        // stored alongside the buckets keeps `__name__`, `__type__` and `__unit__`
+        // here. Those are dropped later, by the *function*, and only when removal is
+        // eager. Worth pinning because "excludedLabels" reads like it would include
+        // the name, and the grouping and the output would then differ.
+        let enh = EvalNodeHelper()
+        let samples = [
+            Sample(
+                t: 1000, f: 1,
+                metric: Labels(strings: [
+                    "__name__", "hb", "__type__", "histogram", "__unit__", "s",
+                    "job", "j", "le", "1",
+                ])),
+            Sample(
+                t: 1000, f: 2,
+                metric: Labels(strings: [
+                    "__name__", "hb", "__type__", "histogram", "__unit__", "s",
+                    "job", "j", "le", "+Inf",
+                ])),
+        ]
+        _ = enh.resetHistograms(Vector(samples), NumberLiteral(val: 0))
+        // One group: the two samples differ only in `le`, which the signature drops.
+        #expect(enh.signatureToMetricWithBuckets.count == 1)
+        let mb = enh.signatureToMetricWithBuckets[enh.signatureOrder[0]]!
+        #expect(mb.buckets.count == 2)
+        // The stored metric has lost `le` and nothing else.
+        #expect(
+            mb.metric.description
+                == #"{__name__="hb", __type__="histogram", __unit__="s", job="j"}"#)
+    }
+
+    @Test("native-histogram results come before classic ones")
+    func nativeBeforeClassic() {
+        // The one ordering that IS deterministic in Go: the natives are a slice and
+        // come first, the classics come out of a map and come second. The fixture
+        // sorts, so this is where the order is pinned. PORTING.md exception 13.
+        var native = Sample(t: 1000, metric: Labels(strings: ["__name__", "zzz_native"]))
+        native.h = genTestHistogram(3).toFloat()
+        let classic = [
+            Sample(t: 1000, f: 1, metric: Labels(strings: ["__name__", "aaa_bucket", "le", "1"])),
+            Sample(t: 1000, f: 2, metric: Labels(strings: ["__name__", "aaa_bucket", "le", "+Inf"])),
+        ]
+        // Delayed removal, so the names survive into the output and the order is
+        // readable. With eager removal both metrics would render `{}`.
+        let enh = EvalNodeHelper(enableDelayedNameRemoval: true)
+        let (out, _) = funcHistogramQuantile(
+            [Vector([Sample(f: 0.5)]), Vector([native] + classic)], Matrix(),
+            [NumberLiteral(val: 0.5), NumberLiteral(val: 0)], enh)
+        #expect(out.count == 2)
+        #expect(out[0].metric.description.contains("zzz_native"), "native first")
+        #expect(out[1].metric.description.contains("aaa_bucket"), "despite sorting later")
+    }
+
+    @Test("an invalid quantile warns but still produces output")
+    func invalidQuantileStillComputes() {
+        // `validateQuantile` returns an annotation, not an error, and the function
+        // runs on regardless. NaN counts as invalid.
+        var native = Sample(t: 1000, metric: Labels(strings: ["__name__", "h"]))
+        native.h = genTestHistogram(3).toFloat()
+        for q in [-0.1, 1.1, Double.nan] {
+            let enh = EvalNodeHelper()
+            let (out, annos) = funcHistogramQuantile(
+                [Vector([Sample(f: q)]), Vector([native])], Matrix(),
+                [NumberLiteral(val: q), NumberLiteral(val: 0)], enh)
+            #expect(out.count == 1, "q = \(q) still produced a sample")
+            #expect(!annos.isEmpty, "and a warning")
+        }
+        // In range: no warning.
+        let enh = EvalNodeHelper()
+        let (_, annos) = funcHistogramQuantile(
+            [Vector([Sample(f: 0.5)]), Vector([native])], Matrix(),
+            [NumberLiteral(val: 0.5), NumberLiteral(val: 0)], enh)
+        #expect(annos.isEmpty)
+    }
+
+    @Test("histogram_fraction's guard is on the bounds, not the input vector")
+    func fractionGuard() {
+        // `len(vectorVals) < 3 || len(vectorVals[0]) == 0 || len(vectorVals[1]) == 0`
+        // — an empty *bound* yields nothing, an empty input vector is simply an empty
+        // result. Easy to write as a guard on the vector and be wrong only for the
+        // degenerate call.
+        var native = Sample(t: 1000, metric: Labels(strings: ["__name__", "h"]))
+        native.h = genTestHistogram(3).toFloat()
+        let args: [any Expr] = [
+            NumberLiteral(val: 0), NumberLiteral(val: 1), NumberLiteral(val: 0),
+        ]
+
+        let a = EvalNodeHelper()
+        let (missingBound, _) = funcHistogramFraction(
+            [Vector(), Vector([Sample(f: 1)]), Vector([native])], Matrix(), args, a)
+        #expect(missingBound.isEmpty)
+
+        let b = EvalNodeHelper()
+        let (emptyInput, _) = funcHistogramFraction(
+            [Vector([Sample(f: 0)]), Vector([Sample(f: 1)]), Vector()], Matrix(), args, b)
+        #expect(emptyInput.isEmpty, "same result, different reason")
+
+        let c = EvalNodeHelper()
+        let (ok, _) = funcHistogramFraction(
+            [Vector([Sample(f: 0)]), Vector([Sample(f: 1)]), Vector([native])],
+            Matrix(), args, c)
+        #expect(ok.count == 1)
     }
 
     @Test("rad and deg keep Go's left association")

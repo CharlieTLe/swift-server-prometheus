@@ -170,6 +170,21 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     Not to be confused with the genuine behaviour in quirk 34, which this port *does* reproduce.
 
 
+13. **`funcHistogramQuantile` and its siblings range a Go map, so their
+    classic-histogram output order is upstream's coin flip.**
+    `for _, mb := range enh.signatureToMetricWithBuckets` iterates a
+    `map[string]*metricWithBuckets`, so the order of classic-histogram results is
+    randomised per run in Go — the same situation as `Annotations` (exception 7).
+
+    The port keeps **first-insertion order** so its own output is reproducible, and
+    `Fixtures/promql/functions-histogram.jsonl` sorts the samples (and the
+    annotations, for the same reason) before comparing.
+
+    What *is* deterministic and *is* pinned Swift-side: native-histogram results
+    always come before classic ones, because the natives are a slice, and the order
+    within the natives is the input vector's. The evaluator sorts the final result
+    anyway, so none of this is observable from a query.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -746,6 +761,45 @@ changing behaviour.
     - `dateToAbsDays`'s `(979*amonth - 2919) >> 5` has slack: changing the constant to 2918 is
       invisible, because the shift absorbs it for every `amonth` in [3, 14]. Recorded so the next
       reader does not mistake a surviving perturbation there for a corpus gap.
+
+48. **`simpleFloatFunc` and `simpleHistogramFunc` do not drop the same labels, and
+    it is upstream's asymmetry rather than a slip.** `simpleFloatFunc` passes
+    `schema.IsMetadataLabel`, so `abs(x)` loses `__name__`, `__type__` *and*
+    `__unit__`. `simpleHistogramFunc` (functions.go:1946) passes an inline
+    `func(n string) bool { return n == labels.MetricName }`, so
+    `histogram_count(x)` loses **only `__name__`** and keeps the type and unit.
+
+    The port originally used `IsMetadataLabel` in both by symmetry and failed 5 of
+    599 fixture cases. `histogram_quantile` and `histogram_fraction` then go back to
+    `IsMetadataLabel`, so all three spellings are live in one file. Read the
+    predicate at each call site; do not infer it from the neighbour.
+
+49. **Go reassigns the loop variable's `Metric` and then reads the name out of it,
+    so eager name removal makes the annotation nameless.** In
+    `funcHistogramQuantile`, `funcHistogramQuantiles` and `funcHistogramFraction`:
+
+    ```go
+    if !enh.enableDelayedNameRemoval {
+        sample.Metric = sample.Metric.DropReserved(schema.IsMetadataLabel)
+    }
+    hq, hqAnnos := HistogramQuantile(q, sample.H, getMetricName(sample.Metric), …)
+    ```
+
+    The `getMetricName` reads the **already-dropped** labels, so with the server's
+    default settings a native-histogram annotation carries no metric name, and with
+    `promqltest`'s it does. A port that keeps the original sample around and passes
+    *its* name gets the opposite answer in the common case — 30 fixture cases, all
+    of them annotation text.
+
+    The related trap in the same functions: `histogram_quantile` reports
+    `validateQuantile` and `HistogramQuantile` against **`args[0]`** but
+    `resetHistograms` and the forced-monotonicity info against **`args[1]`**, while
+    `histogram_quantiles` reports `resetHistograms` and `HistogramQuantile` against
+    `args[0]` and the monotonicity info against `args[1]` — *the string literal*.
+    Positions appear in the annotation text, so these are contract, and pinning them
+    needs the fixture to pass the query to `AsStrings`: with an empty query Go emits
+    the bare message and every one of these becomes invisible. Four negative controls
+    found that gap.
 
 ## Not ported
 

@@ -18,8 +18,6 @@
 //
 // Deliberately not here, each with the reason:
 //
-//   * the `histogram_*` family and `funcHistogramQuantile`/`Fraction`/`Quantiles`
-//     — they need `EvalNodeHelper`'s bucket caches and `resetHistograms`.
 //   * the `*_over_time` family and the rate functions — they take a `Matrix` and
 //     need `interpolate`/`correctForCounterResets`.
 //   * `funcSort` and friends — they need Go's pdqsort ported, because the two
@@ -100,13 +98,11 @@ public struct EvalSeriesHelper: Sendable {
 /// struct would need `inout` on `FunctionCall` and would copy the caches on every
 /// capture. Same reasoning as ADR-11's choice of classes for the AST.
 ///
-/// Only the three fields this slice reads are here. The rest arrive with their
-/// callers, and are listed so nobody goes looking:
+/// The bucket caches live in `Functions+Histogram.swift`, next to their only
+/// readers. What is still deferred, with its first caller, so nobody goes looking:
 ///
 /// | deferred | first caller |
 /// |---|---|
-/// | `signatureToMetricWithBuckets`, `nativeHistogramSamples`, `resetHistograms` | `funcHistogramQuantile`/`Fraction` |
-/// | `quantileStrs`, `signatureToLabelsWithQuantile`, `getOrCreateLblsWithQuantile` | `funcHistogramQuantiles` |
 /// | `lb`, `lblBuf`, `lblResultBuf`, `resetBuilder` | `engine.go`'s label building |
 /// | `rightSigs`, `sigsPresent`, `matchedSigs`, `matchedSigsPresent`, `resultMetric`, `numSigs`, and the four `reset*` helpers | binary vector matching |
 /// | `rightStrSigs` | info-series matching |
@@ -133,6 +129,33 @@ public final class EvalNodeHelper {
     /// intent. Both settings are pinned; the oracle reaches the field by
     /// reflection, which is why the corpus has a `delayed` axis.
     public var enableDelayedNameRemoval: Bool
+
+    /// Go: `signatureToMetricWithBuckets` — classic histogram bucket groups for this
+    /// step, keyed by the label set with `le` removed.
+    ///
+    /// Go's is a `map[string]*metricWithBuckets` and it **ranges** it to produce
+    /// output, so upstream's classic-histogram result order is randomised per run.
+    /// ``signatureOrder`` keeps first-insertion order so the port's is not.
+    /// PORTING.md exception 13.
+    var signatureToMetricWithBuckets: [[UInt8]: MetricWithBuckets] = [:]
+
+    /// First-insertion order of ``signatureToMetricWithBuckets``' keys. Not a Go
+    /// field; see that property's note.
+    var signatureOrder: [[UInt8]] = []
+
+    /// Go: `nativeHistogramSamples` — the histogram samples of this step's input.
+    ///
+    /// A sample whose `h` has been set to nil is one that conflicted with a classic
+    /// histogram of the same name; every reader skips those.
+    var nativeHistogramSamples: [Sample] = []
+
+    /// Go: `quantileStrs` — `labels.FormatOpenMetricsFloat` per quantile, cached
+    /// across steps and **never cleared**.
+    var quantileStrs: [Double: String] = [:]
+
+    /// Go: `signatureToLabelsWithQuantile` — the output label set per (series,
+    /// quantile), cached across steps.
+    var signatureToLabelsWithQuantile: [[UInt8]: [Double: Labels]] = [:]
 
     public init(ts: Int64 = 0, out: Vector = Vector(), enableDelayedNameRemoval: Bool = false) {
         self.ts = ts
@@ -571,6 +594,14 @@ public let functionCalls: [String: FunctionCall] = [
     "deg": funcDeg,
     "exp": funcExp,
     "floor": funcFloor,
+    "histogram_avg": funcHistogramAvg,
+    "histogram_count": funcHistogramCount,
+    "histogram_fraction": funcHistogramFraction,
+    "histogram_quantile": funcHistogramQuantile,
+    "histogram_quantiles": funcHistogramQuantiles,
+    "histogram_stddev": funcHistogramStdDev,
+    "histogram_stdvar": funcHistogramStdVar,
+    "histogram_sum": funcHistogramSum,
     "hour": funcHour,
     "ln": funcLn,
     "log10": funcLog10,

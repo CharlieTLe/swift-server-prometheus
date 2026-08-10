@@ -55,8 +55,10 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"unsafe"
 
+	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -82,6 +84,11 @@ type fnSampleIn struct {
 	// When non-nil, the sample carries genTestHistogram(n).ToFloat(nil) and F is
 	// ignored, exactly as Go ignores it when H != nil.
 	Hist *int64 `json:"hist"`
+	// A named histogram shape, for the cases where the CONTENT matters:
+	// "std/N" is genTestHistogram(N).ToFloat(nil), and "custom", "zeroneg" and
+	// "empty" are histogramVariance's three branches plus a zero-count one.
+	// Empty means no histogram. Both sides build these from the same names.
+	HistRaw string `json:"histRaw,omitempty"`
 }
 
 type fnIn struct {
@@ -94,9 +101,23 @@ type fnIn struct {
 	// len(parser.Expressions) handed to the call. Only funcRound reads it, and it
 	// reads the LENGTH rather than the values, which is why nils suffice.
 	NArgs int `json:"nargs"`
+	// A PromQL call expression whose parsed `Call.args` become the `args` the
+	// function receives, when the function reads more than the argument COUNT.
+	//
+	// The histogram family does: `histogram_quantile` reports annotations against
+	// `args[0].PositionRange()` and `args[1].PositionRange()`, and
+	// `histogram_quantiles` reads `args[1].(*parser.StringLiteral).Val`. Positions
+	// appear in the annotation text, so a placeholder AST would pin the wrong
+	// string. Parsing the same source on both sides makes them agree by
+	// construction.
+	Expr string `json:"expr"`
 	// enh.Out seeded non-empty, to pin which bodies append to it and which ignore
 	// it. Empty in every case that models a real query.
 	Seed []fnSampleIn `json:"seed"`
+	// Sort the output samples and annotations before recording them. Set for the
+	// histogram family, whose classic-histogram results come out of a Go MAP and so
+	// have no order to be exact against. PORTING.md exception 13.
+	Sorted bool `json:"sorted,omitempty"`
 }
 
 type fnSampleOut struct {
@@ -119,6 +140,29 @@ type fnOut struct {
 
 // --------------------------------------------------------------------- helpers
 
+// fnNamedHistogram builds one of the named shapes an fnSampleIn can ask for. The
+// Swift wire transcribes the same four; a divergence shows up on the first case.
+func fnNamedHistogram(name string) *histogram.FloatHistogram {
+	switch name {
+	case "custom":
+		return histCustomBuckets()
+	case "zeroneg":
+		return histWithZeroAndNegative()
+	case "empty":
+		return histEmpty()
+	case "nansum":
+		return histNaNSum()
+	case "negonly":
+		return histNegativeOnly()
+	default:
+		var n int64
+		if _, err := fmt.Sscanf(name, "std/%d", &n); err != nil {
+			panic("unknown histogram shape " + name)
+		}
+		return genTestHistogram(n).ToFloat(nil)
+	}
+}
+
 func fnBuildVector(in []fnSampleIn) promql.Vector {
 	out := make(promql.Vector, 0, len(in))
 	for _, s := range in {
@@ -126,9 +170,12 @@ func fnBuildVector(in []fnSampleIn) promql.Vector {
 			T:      parseI64(s.T),
 			Metric: labels.FromStrings(s.Metric...),
 		}
-		if s.Hist != nil {
+		switch {
+		case s.HistRaw != "":
+			smp.H = fnNamedHistogram(s.HistRaw)
+		case s.Hist != nil:
 			smp.H = genTestHistogram(*s.Hist).ToFloat(nil)
-		} else {
+		default:
 			smp.F = unfbits(s.F)
 		}
 		out = append(out, smp)
@@ -167,13 +214,40 @@ func runFnCase(in fnIn) fnOut {
 	setDelayedNameRemoval(enh, in.Delayed)
 
 	args := make(parser.Expressions, in.NArgs)
+	if in.Expr != "" {
+		// Experimental functions ON: `histogram_quantiles` is gated behind that flag,
+		// and the fixture needs its AST. Nothing else in these corpora is affected —
+		// the flag only widens which names resolve.
+		p := parser.NewParser(parser.Options{EnableExperimentalFunctions: true})
+		parsed, err := p.ParseExpr(in.Expr)
+		if err != nil {
+			panic(fmt.Sprintf("fixture expr %q: %v", in.Expr, err))
+		}
+		call, ok := parsed.(*parser.Call)
+		if !ok {
+			panic(fmt.Sprintf("fixture expr %q is not a call", in.Expr))
+		}
+		args = call.Args
+	}
 	got, annos := fn(vectorVals, nil, args, enh)
 
-	strs, _ := annos.AsStrings("", 0, 0)
-	if strs == nil {
-		strs = []string{}
+	// The `expr` is passed as the query so AsStrings renders each annotation's
+	// (line:col). Without it Go emits the bare message, and every position range in
+	// this family — which argument an annotation is reported against — becomes
+	// invisible. Four negative controls found that gap.
+	warnings, infos := annos.AsStrings(in.Expr, 0, 0)
+	strs := append(append([]string{}, warnings...), infos...)
+	samples := fnRenderVector(got)
+	if in.Sorted {
+		sort.Slice(samples, func(i, j int) bool {
+			if samples[i].Metric != samples[j].Metric {
+				return samples[i].Metric < samples[j].Metric
+			}
+			return samples[i].F < samples[j].F
+		})
+		sortStrings(strs)
 	}
-	return fnOut{Samples: fnRenderVector(got), Annos: strs}
+	return fnOut{Samples: samples, Annos: strs}
 }
 
 // -------------------------------------------------------------------- corpora
