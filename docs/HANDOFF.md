@@ -246,6 +246,14 @@ where I had written a plausible expectation and the fixture proved the implement
   controls into failures. Quirk 59. Alongside quirks 51 (magnitude for Kahan) and 54 (inexactness for
   fusion, cancellation for grouping), the rule is: **ask which *field* of the input each branch reads,
   and make sure two cases differ in it.**
+- **A comment in the right file does not stop the bug; the fixture does.** Four defects landed in one
+  session and every one was caught by a corpus, none by reading the diff: `rangeEval` counting only
+  results and not `gatherVector`'s inputs; `EvalStmt.description` missing Go's `"EVAL "` prefix;
+  `Matrix.sort` disagreeing with `sort.Sort` on duplicate label sets; and `atan2` returning
+  `Double.nan` where Go returns payload 1. The last is the sharpest: `GoMath.goNaN` already existed a
+  hundred lines away **with a comment saying exactly that and why the payload is observable**, and the
+  new code still reached for Swift's. So when a surface has a known trap, the answer is a corpus case
+  that would fail, not a note asking the next reader to remember. Quirks 74, 79.
 - **When a control cannot fail, finish the argument — sometimes the answer is "upstream's line is
   dead", and sometimes it is "the corpus needs an INVALID input".** Two survivors in the sort sweep
   were proofs: `breakPatterns`' `length >= 8` floor is unreachable because its only caller runs after
