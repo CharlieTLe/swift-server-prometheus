@@ -219,7 +219,7 @@ func funcPredictLinear(
 /// iteration's `calcTrendValue(0, …)` returns the seed untouched.
 func funcDoubleExponentialSmoothing(
     _ v: [Vector], _ m: Matrix, _ args: [any Expr], _ enh: EvalNodeHelper
-) -> (Vector, Annotations) {
+) throws -> (Vector, Annotations) {
     if v.count < 2 || v[0].isEmpty || v[1].isEmpty || m.isEmpty {
         return (enh.out, Annotations())
     }
@@ -227,12 +227,22 @@ func funcDoubleExponentialSmoothing(
     let sf = v[0][0].f
     let tf = v[1][0].f
 
-    precondition(
-        sf > 0 && sf < 1,
-        "invalid smoothing factor. Expected: 0 < sf < 1, got: \(sf)")
-    precondition(
-        tf > 0 && tf < 1,
-        "invalid trend factor. Expected: 0 < tf < 1, got: \(tf)")
+    // Go `panic`s here with an `error`, and `recover` passes a panicked error through
+    // unchanged — so these are ordinary query errors reachable from
+    // `double_exponential_smoothing(foo[5m], 0, 0.5)`. `%f` is six decimal places, and
+    // `GoFloat.format` rather than Swift's interpolation because the message is byte-exact
+    // (ADR-4): Go prints `0.000000`, `NaN` and `+Inf`, where C's `printf` would give `nan`.
+    // `sf <= 0 || sf >= 1`, NOT `!(sf > 0 && sf < 1)`. The two differ on **NaN**: every
+    // comparison with NaN is false, so Go's spelling lets a NaN factor THROUGH and the
+    // smoothing produces NaN output, while the negated form would reject it. The port had the
+    // negated form and `double_exponential_smoothing(foo[5m], NaN, 0.5)` said no — ADR-4's
+    // "byte-exactness beats idiom" applied to a comparison rather than to formatting.
+    if sf <= 0 || sf >= 1 {
+        throw EvaluationError.invalidSmoothingFactor(sf)
+    }
+    if tf <= 0 || tf >= 1 {
+        throw EvaluationError.invalidTrendFactor(tf)
+    }
 
     let l = samples.floats.count
     if l < 2 {

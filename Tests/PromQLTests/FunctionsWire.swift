@@ -140,7 +140,11 @@ private func fnRenderVector(_ v: Vector) -> [FnSampleOut] {
 /// A missing entry is a hard failure, not a skip: the corpus only emits functions
 /// this slice implements, so a lookup miss means the table lost one. The
 /// *deferred* set is asserted separately, by name, against Go's full key list.
-func runFnCase(_ input: FnIn) -> FnOut {
+// `throws` since the `matrixArg` slice: `FunctionCall` can now raise, because
+// `double_exponential_smoothing` panics in Go on an out-of-range smoothing or trend factor.
+// The corpus never passes one — an invalid factor panics in Go and would take the generator
+// with it — so this propagates rather than rendering the error.
+func runFnCase(_ input: FnIn) throws -> FnOut {
     guard let fn = functionCalls[input.fn] else {
         preconditionFailure("functionCalls has no entry for \(input.fn)")
     }
@@ -171,7 +175,7 @@ func runFnCase(_ input: FnIn) -> FnOut {
         }
         args = call.args
     }
-    let (got, annos) = fn(vectorVals, fnBuildMatrix(input.matrix), args, enh)
+    let (got, annos) = try fn(vectorVals, fnBuildMatrix(input.matrix), args, enh)
     // The `expr` is the query, so each annotation renders its (line:col). Without
     // it the bare message is emitted and which argument an annotation is reported
     // against becomes invisible.

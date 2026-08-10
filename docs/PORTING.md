@@ -1556,6 +1556,41 @@ changing behaviour.
     9, where three *unreachable* `sampleRing` panics are guarded instead — reachability is what
     decides which treatment a panic gets.
 
+85. **`funcDoubleExponentialSmoothing` rejects its factors with `sf <= 0 || sf >= 1`, and that is
+    not `!(sf > 0 && sf < 1)`.** The two spellings differ on **NaN**: every comparison with NaN is
+    false, so Go's form lets a NaN factor *through* and the smoothing produces NaN output, while
+    the negated form rejects it with an error. The port had the negated form and
+    `double_exponential_smoothing(foo[5m], NaN, 0.5)` said no — ADR-4's "byte-exactness beats
+    idiom" applied to a comparison rather than to a float format.
+
+    Both rejections are `panic(fmt.Errorf(...))`, and `evaluator.recover` passes a panicked
+    `error` through unchanged, so they are ordinary query errors:
+
+    ```
+    invalid smoothing factor. Expected: 0 < sf < 1, got: 0.000000
+    invalid trend factor. Expected: 0 < tf < 1, got: 1.000000
+    ```
+
+    `%f`, so six decimal places, and `GoFloat.format(_, .f, precision: 6)` rather than string
+    interpolation — Go prints `NaN` and `+Inf` where C's `printf` gives `nan` and `inf`.
+
+    This is why `FunctionCall` is `throws`. It was not until the `matrixArg` slice landed, and the
+    port had a `preconditionFailure` there: defensible while the oracle was the only caller (it
+    always passes valid factors, because an invalid one panics in Go and would take the fixture
+    generator with it) and a **crash** the moment a query could reach the body. Swift allows a
+    non-throwing closure where a throwing one is expected, so the other 81 bodies are unchanged.
+
+86. **`ReduceDelta` is a memory optimisation and nothing else.** The `Call` arm shrinks the
+    buffer's retention to `stepRange = min(selRange, ev.interval)` from the second step on. Three
+    separate perturbations — using `selRange` alone, using `ev.interval` alone, and dropping the
+    call entirely — are all **provably unobservable**, because each leaves the delta greater than
+    or equal to the correct value, `ReduceDelta` refuses to *raise* a delta, and
+    `matrixIterSlice` appends only points with `t > mintFloats`. Extra buffered points are
+    filtered out.
+
+    Recorded because three green controls in a row invite the conclusion that the corpus is weak,
+    and here the conclusion is the opposite: the line cannot change an answer.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

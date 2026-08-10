@@ -184,12 +184,25 @@ public final class EvalNodeHelper {
 /// timestamp are filled in by the caller. An instant-vector function need only
 /// return the right values and metrics. A scalar result is one sample in a
 /// `Vector`.
+/// ## It can THROW, because two of Go's bodies `panic` with an error
+///
+/// `funcDoubleExponentialSmoothing` panics on a smoothing or trend factor outside `(0, 1)`,
+/// and `evaluator.recover` passes a panicked `error` through unchanged — so those two messages
+/// are ordinary query errors, not crashes. The signature is therefore `throws`.
+///
+/// It was **not** `throws` until the `matrixArg` slice landed, and the port had
+/// `preconditionFailure` there instead. That was defensible while the oracle was the only
+/// caller — it always passes valid factors, because an invalid one panics in Go and would take
+/// the fixture generator with it — and it became a crash the moment a query could reach the
+/// body. HANDOFF §3's "unreachable by the oracle is a statement about today's callers" in a new
+/// disguise. Swift allows a non-throwing closure where a throwing one is expected, so the other
+/// 81 bodies are unchanged.
 public typealias FunctionCall = @Sendable (
     _ vectorVals: [Vector],
     _ matrixVals: Matrix,
     _ args: [any Expr],
     _ enh: EvalNodeHelper
-) -> (Vector, Annotations)
+) throws -> (Vector, Annotations)
 
 // MARK: - simpleFloatFunc and the math wrappers
 

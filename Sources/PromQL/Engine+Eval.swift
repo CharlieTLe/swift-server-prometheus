@@ -353,9 +353,17 @@ final class Evaluator {
                 }
                 return try rangeEvalTimestampFunctionOverVectorSelector(ctx, vs, call, e, &ws)
             }
-            for a in e.args where a is MatrixSelector || a is SubqueryExpr {
+            // Go scans the arguments for the first MatrixSelector **or** SubqueryExpr and
+            // `break`s, so a second range argument is never looked at and the first one wins
+            // whichever kind it is. No function in the table takes two, but the search order is
+            // the contract, so it is reproduced rather than replaced by "the first matrix".
+            let matrixArgIndex = e.args.firstIndex {
+                $0 is MatrixSelector || $0 is SubqueryExpr
+            }
+            if let i = matrixArgIndex, e.args[i] is SubqueryExpr {
                 throw EvaluatorNotPorted(
-                    nodeType: "Call", detail: "\((e.function?.name ?? "")) over a range")
+                    nodeType: "Call",
+                    detail: "\((e.function?.name ?? "")) over a subquery needs evalSubquery")
             }
             switch (e.function?.name ?? "") {
             case "label_replace", "label_join", "info":
@@ -383,8 +391,16 @@ final class Evaluator {
             default:
                 break
             }
+            // The first matrix argument decides which half of the arm runs. Go breaks out of
+            // the search on the first hit, so a second range argument is never looked at.
+            if let matrixArgIndex {
+                let mat = try evalCallWithMatrixArg(
+                    ctx, e, call, matrixArgIndex, &warnings)
+                _ = ws.merge(warnings)
+                return mat
+            }
             return try rangeEval(ctx, &ws, e.args) { v, enh in
-                let (vec, annos) = call(v, Matrix(), e.args, enh)
+                let (vec, annos) = try call(v, Matrix(), e.args, enh)
                 return (vec, warnings.merge(annos))
             }
 
@@ -634,6 +650,10 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     case infoMetricWithHistogram(String)
     /// Go: `vectorSelectorSingle`'s `unknown value type %v` panic.
     case unknownValueType(String)
+    /// Go: `funcDoubleExponentialSmoothing`'s two `panic(fmt.Errorf(...))`s. `%f`, so six
+    /// decimal places, and `GoFloat` rather than interpolation because the text is byte-exact.
+    case invalidSmoothingFactor(Double)
+    case invalidTrendFactor(Double)
     /// Go: `matrixSelector`'s two `errorf`s for a range modifier over histogram data.
     case anchoredWithHistograms
     case smoothedWithHistograms
@@ -642,6 +662,10 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     /// `Call` arm reads the matrix itself, so this is an internal invariant rather than a user
     /// error — but it is modelled as a thrown error because Swift cannot recover a trap.
     case rangeEvaluationOfMatrixSelector
+    /// Go: the `Call` arm's `anchored/smoothed modifier can only be used with: %s - not with %s`.
+    /// The permitted names are `slices.Sorted(maps.Keys(...))` over a Go map, so the sort is
+    /// upstream's own defence against a nondeterministic message.
+    case modifierNotSafeForFunction(modifier: String, permitted: [String], function: String)
 
     public var description: String {
         switch self {
@@ -651,12 +675,23 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
             return "this should be an info metric, with float samples: \(metric)"
         case .unknownValueType(let t):
             return "unknown value type \(t)"
+        case .invalidSmoothingFactor(let sf):
+            return
+                "invalid smoothing factor. Expected: 0 < sf < 1, got: \(GoFloat.format(sf, .f, precision: 6))"
+        case .invalidTrendFactor(let tf):
+            return
+                "invalid trend factor. Expected: 0 < tf < 1, got: \(GoFloat.format(tf, .f, precision: 6))"
         case .anchoredWithHistograms:
             return "anchored modifier is not supported with histograms"
         case .smoothedWithHistograms:
             return "smoothed modifier is not supported with histograms"
         case .rangeEvaluationOfMatrixSelector:
             return "cannot do range evaluation of matrix selector"
+        case .modifierNotSafeForFunction(let modifier, let permitted, let function):
+            var s = "\(modifier) modifier can only be used with: "
+            s += permitted.joined(separator: ", ")
+            s += " - not with \(function)"
+            return s
         }
     }
 }
@@ -1189,7 +1224,7 @@ extension Evaluator {
                     throw QueryError.tooManySamples(evaluationEnv)
                 }
             }
-            return call([vec], Matrix(), e.args, enh)
+            return try call([vec], Matrix(), e.args, enh)
         }
     }
 

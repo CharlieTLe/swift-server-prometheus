@@ -26,7 +26,7 @@ struct FunctionsElementwiseTests {
             "promql/functions-elementwise.jsonl",
             FixtureCase<FnIn, FnOut>.self
         ) { input in
-            runFnCase(input)
+            try runFnCase(input)
         }
     }
 
@@ -36,7 +36,7 @@ struct FunctionsElementwiseTests {
             "promql/functions-date.jsonl",
             FixtureCase<FnIn, FnOut>.self
         ) { input in
-            runFnCase(input)
+            try runFnCase(input)
         }
     }
 
@@ -46,7 +46,7 @@ struct FunctionsElementwiseTests {
             "promql/functions-histogram.jsonl",
             FixtureCase<FnIn, FnOut>.self
         ) { input in
-            runFnCase(input)
+            try runFnCase(input)
         }
     }
 
@@ -58,7 +58,7 @@ struct FunctionsElementwiseTests {
             "promql/functions-sort.jsonl",
             FixtureCase<FnIn, FnOut>.self
         ) { input in
-            runFnCase(input)
+            try runFnCase(input)
         }
     }
 
@@ -68,7 +68,7 @@ struct FunctionsElementwiseTests {
             "promql/functions-overtime.jsonl",
             FixtureCase<FnIn, FnOut>.self
         ) { input in
-            runFnCase(input)
+            try runFnCase(input)
         }
     }
 
@@ -399,9 +399,13 @@ struct FunctionsElementwiseInvariantTests {
     func dateConventions() {
         // Both are off-by-one traps: Go's Weekday starts at Sunday, and YearDay is
         // 1-based where the internal `yday` it comes from is 0-based.
+        // `try!` rather than propagating: `FunctionCall` is throwing since the `matrixArg`
+        // slice, but only `double_exponential_smoothing` can raise, and these are the date
+        // functions. A `try!` here would be a crash if that ever changed, which is the right
+        // failure mode for a test helper.
         func on(_ fn: FunctionCall, _ sec: Double) -> Double {
             let enh = EvalNodeHelper()
-            let (out, _) = fn([Vector([Sample(f: sec, metric: .empty)])], Matrix(), [], enh)
+            let (out, _) = try! fn([Vector([Sample(f: sec, metric: .empty)])], Matrix(), [], enh)
             return out[0].f
         }
         #expect(on(funcDayOfWeek, 0) == 4, "1970-01-01 was a Thursday")
