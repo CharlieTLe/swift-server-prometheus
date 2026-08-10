@@ -46,11 +46,15 @@ public final class EvalStmt: Statement {
         self.lookbackDelta = lookbackDelta
     }
 
-    /// ast.go — `EvalStmt` has no `String()` of its own, so it picks up the
-    /// embedded `Node`'s through `Expr`. Go prints the expression.
-    public var description: String { expr.description }
+    /// Go: `printer.go:52` — `"EVAL " + node.Expr.String()`. The prefix is real and was
+    /// missing here until `promql/exec.jsonl` compared a statement's rendering after
+    /// `Exec`: nothing else in the corpus printed an `EvalStmt`, because nothing else
+    /// built one.
+    public var description: String { "EVAL " + expr.description }
 
-    public func pretty(_ level: Int) -> String { expr.pretty(level) }
+    /// Go: `prettier.go:106` — `Pretty` ignores the level and returns the same string as
+    /// `String()`, expression included. It does NOT pretty-print the expression.
+    public func pretty(_ level: Int) -> String { "EVAL " + expr.description }
 
     /// ast.go:515 — delegates to the expression.
     public var positionRange: PositionRange { expr.positionRange }

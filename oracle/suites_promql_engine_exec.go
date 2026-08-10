@@ -1,0 +1,208 @@
+package main
+
+// Differential coverage for promql/engine.go's EXECUTION path, as far as it is ported:
+// `Exec` → `exec` → `execEvalStmt`'s instant branch → `evaluator.Eval` → `rangeEval` and
+// the arms that need no storage.
+//
+// Every case here is an instant query over a Queryable whose querier returns nothing, so
+// the answer depends only on the expression — which is exactly the subset the port
+// implements. Selectors, aggregations, subqueries, matrix arguments and the vector binops
+// are NOT in the corpus: the port throws for them by name, and a fixture asserting Go's
+// answer for something the port refuses would be a fixture that can never pass.
+//
+// ## The observables
+//
+//	valueType  Vector, scalar, string — which of execEvalStmt's three tails ran
+//	value      Value.String(), which is the ported value.go rendering
+//	err        Go's error text, "" when the query succeeded
+//	warnings   sorted, because Annotations is a map (PORTING.md exception 7)
+//	stmt       the statement's String() AFTER Exec, which is how setOffsetForAtModifier's
+//	           in-place AST rewrite becomes visible
+//
+// ## What has to be reached
+//
+//   - all three result tails: a scalar (`1+2`), an instant vector (`vector(1)`), a string;
+//   - `rangeEval`'s instant shortcut, which builds the matrix in the RESULT VECTOR's order
+//     rather than through a hash map — load-bearing for `sort`;
+//   - the sample limit, which is checked AFTER the function call, so a query that exceeds it
+//     is computed in full first;
+//   - `maxSamples` of 0 and 1, where even a one-sample result is rejected or barely fits;
+//   - unary minus, whose metadata-label drop and `DropName` are visible through the
+//     rendering;
+//   - `@` on a selector-free expression — `time() @ 100` — where setOffsetForAtModifier has
+//     nothing to rewrite but the step-invariant wrapper still shows in the statement;
+//   - every scalar comparison, which returns 1 or 0 rather than filtering;
+//   - division and modulo by zero, and NaN operands, where the rendering is `GoFloat`'s.
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/prometheus/prometheus/storage"
+)
+
+type execIn struct {
+	Query string `json:"query"`
+	// Milliseconds.
+	Ts string `json:"ts"`
+	// Nanoseconds.
+	Lookback   string `json:"lookback"`
+	MaxSamples int    `json:"maxSamples"`
+}
+
+type execOut struct {
+	ValueType string   `json:"valueType"`
+	Value     string   `json:"value"`
+	Err       string   `json:"err"`
+	Warnings  []string `json:"warnings"`
+	Stmt      string   `json:"stmt"`
+}
+
+// execEmptyQueryable hands out a querier that knows nothing, which is all the ported arms
+// need: none of them reads it.
+type execEmptyQueryable struct{}
+
+func (execEmptyQueryable) Querier(int64, int64) (storage.Querier, error) {
+	return storage.NoopQuerier(), nil
+}
+
+func runExecCase(in execIn) execOut {
+	eng := promql.NewEngine(promql.EngineOpts{
+		MaxSamples:               in.MaxSamples,
+		Timeout:                  time.Minute,
+		LookbackDelta:            time.Duration(parseI64(in.Lookback)),
+		EnableAtModifier:         true,
+		EnableNegativeOffset:     true,
+		NoStepSubqueryIntervalFn: func(int64) int64 { return int64(time.Minute / time.Millisecond) },
+		Parser: parser.NewParser(parser.Options{
+			EnableExperimentalFunctions: true,
+		}),
+	})
+	ts := time.UnixMilli(parseI64(in.Ts)).UTC()
+	q, err := eng.NewInstantQuery(
+		context.Background(), execEmptyQueryable{}, nil, in.Query, ts)
+	if err != nil {
+		return execOut{Err: err.Error(), Warnings: []string{}}
+	}
+	res := q.Exec(context.Background())
+	out := execOut{Warnings: []string{}}
+	if res.Err != nil {
+		out.Err = res.Err.Error()
+	}
+	if res.Value != nil {
+		out.ValueType = string(res.Value.Type())
+		out.Value = res.Value.String()
+	}
+	warnings, infos := res.Warnings.AsStrings(in.Query, 0, 0)
+	out.Warnings = append(append([]string{}, warnings...), infos...)
+	// Annotations is a Go map, so its order is randomised per run.
+	sort.Strings(out.Warnings)
+	// AFTER Exec: execEvalStmt rewrote the AST in place, and this is where that shows.
+	out.Stmt = q.Statement().String()
+	return out
+}
+
+func genPromQLExec(e *emitter) {
+	n := 0
+	emit := func(in execIn) {
+		if in.MaxSamples == 0 {
+			in.MaxSamples = 50_000_000
+		}
+		e.emit(fmt.Sprintf("exec/%d", n), in, runExecCase(in))
+		n++
+	}
+
+	queries := []string{
+		// Literals, and the three result tails.
+		`1`, `-1`, `0`, `1.5`, `1e100`, `Inf`, `-Inf`, `NaN`,
+		`"a string"`, `""`, `"ünïcödé"`,
+		`vector(1)`, `vector(0)`, `vector(NaN)`,
+		// Parens and unary minus, including double negation.
+		`(1)`, `((1))`, `-(1)`, `- -1`, `-(vector(1))`, `-vector(NaN)`,
+		// Every scalar binary operator. The comparisons are ARITHMETIC here — `1 > 2` is 0,
+		// not "no data" — which is the whole reason scalar comparisons exist.
+		`1 + 2`, `1 - 2`, `2 * 3`, `7 / 2`, `7 % 3`, `2 ^ 10`,
+		// A scalar comparison needs `bool` — "comparisons between scalars must use BOOL
+		// modifier" — so the bare forms are parse errors and the `bool` forms are what
+		// actually reach scalarBinop's comparison arms. Both are in the corpus: the parse
+		// error is a real answer, and without the `bool` forms six arms would be untested.
+		`1 == 1`, `1 > 2`,
+		`1 == bool 1`, `1 == bool 2`, `1 != bool 2`, `1 != bool 1`,
+		`1 > bool 2`, `2 > bool 1`, `1 < bool 2`, `2 < bool 1`,
+		`1 >= bool 1`, `1 >= bool 2`, `1 <= bool 0`, `1 <= bool 1`,
+		`NaN == bool NaN`, `NaN != bool NaN`, `NaN > bool 1`, `Inf > bool 1`,
+		// Right-associativity of `^`, and precedence against unary minus.
+		`2 ^ 3 ^ 2`, `-2 ^ 2`, `(-2) ^ 2`,
+		// Division and modulo by zero, and NaN operands — the rendering is GoFloat's.
+		`1 / 0`, `-1 / 0`, `0 / 0`, `1 % 0`, `NaN + 1`, `NaN == NaN`, `NaN != NaN`,
+		`Inf - Inf`, `Inf / Inf`, `Inf * 0`,
+		// Functions with no matrix argument, over scalars and over `vector()`.
+		`time()`, `pi()`, `abs(-3)`, `ceil(vector(1.2))`, `floor(vector(1.8))`,
+		`round(vector(1.5))`, `round(vector(1.5), 2)`, `sqrt(vector(16))`,
+		`exp(vector(0))`, `ln(vector(1))`, `log2(vector(8))`, `log10(vector(1000))`,
+		`sgn(vector(-2))`, `clamp(vector(5), 1, 3)`, `clamp_min(vector(5), 7)`,
+		`scalar(vector(42))`, `scalar(vector(NaN))`,
+		// The date functions, which read the evaluation time when given no argument.
+		`day_of_week()`, `day_of_month()`, `days_in_month()`, `hour()`, `minute()`,
+		`month()`, `year()`, `day_of_year()`,
+		`day_of_week(vector(0))`, `year(vector(1e9))`,
+		// The trigonometry and hyperbolics, which are GoMath's own algorithms.
+		`sin(vector(1))`, `cos(vector(1))`, `tan(vector(1))`, `asin(vector(0.5))`,
+		`sinh(vector(1))`, `tanh(vector(1))`, `atan(vector(1))`,
+		`rad(vector(180))`, `deg(vector(3.14159))`,
+		// timestamp over a scalar-producing expression.
+		`timestamp(vector(1))`,
+		// Nested calls and mixed arithmetic.
+		`abs(-1) + ceil(vector(0.5))`,
+		`scalar(vector(3)) * 2`,
+		`(1 + 2) * (3 - 4)`,
+		// `@` with no selector to rewrite: setOffsetForAtModifier walks and finds nothing,
+		// but the step-invariant wrapper shows in the statement.
+		`time() @ 100`,
+		`time() @ start()`,
+		`vector(time() @ 100)`,
+		// A histogram-producing function over a synthesised vector is NOT here: it needs a
+		// selector. Neither is `sort`, whose input has to come from storage.
+	}
+
+	for _, q := range queries {
+		for _, ts := range []int64{0, 1_600_000_000_000, -1_000} {
+			emit(execIn{
+				Query: q, Ts: i64(ts), Lookback: i64(int64(5 * time.Minute)),
+			})
+		}
+	}
+
+	// The sample limit. It is checked AFTER the call, so the result is computed in full and
+	// then rejected — and `maxSamples: 1` is enough for a one-sample result while 0 is not.
+	for _, maxSamples := range []int{0, 1, 2} {
+		for _, q := range []string{`1`, `vector(1)`, `1 + 2`, `"a string"`} {
+			emit(execIn{
+				Query: q, Ts: i64(1_600_000_000_000),
+				Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
+			})
+		}
+	}
+
+	// The sample-limit BOUNDARY per shape, because gatherVector's counting makes the peak
+	// higher than the result alone: `vector(1)` needs 3 and `1 + 2` needs 5.
+	for _, maxSamples := range []int{1, 2, 3, 4, 5, 6} {
+		// `vector(1) + 1` is deliberately absent: a vector/scalar binop is not ported, so a
+		// case for it could never pass. It arrives with the selectors.
+		for _, q := range []string{`vector(1)`, `1 + 2`, `(1 + 2) * 3`, `scalar(vector(1)) + 1`} {
+			emit(execIn{
+				Query: q, Ts: i64(1_600_000_000_000),
+				Lookback: i64(int64(5 * time.Minute)), MaxSamples: maxSamples,
+			})
+		}
+	}
+
+	// A query that fails to build still comes back through Exec's Result, not as a panic.
+	for _, q := range []string{`1 +`, `foo[`, `sum(`} {
+		emit(execIn{Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute))})
+	}
+}
