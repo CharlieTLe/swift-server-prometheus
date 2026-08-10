@@ -1010,6 +1010,30 @@ changing behaviour.
     compensation. Kahan's `c` is already 0 or NaN by the time the sum saturates, so
     removing the guard moves nothing. Kept because it is what Go does.
 
+60. **`avg_over_time` changes algorithm mid-range, and the trigger is tested on the
+    *candidate* sum.** Upstream's comment (functions.go:1155-1177) records the history:
+    a direct mean plus Kahan is more accurate than an incremental one, except that it
+    overflows on inputs the incremental form survives. So both the float and the
+    histogram path accumulate a direct sum until it *would* overflow, then switch
+    permanently.
+
+    Three details decide whether a port matches:
+
+    - the float path computes `newSum, newC := Inc(...)` and assigns them only if
+      `newSum` is finite, so the sample that would have overflowed is **reprocessed** by
+      the incremental branch in the same iteration. A `continue` there loses it.
+    - the histogram path works on a `sumCopy` per iteration and commits
+      `sum, kahanC = sumCopy, cCopy` only once the addition is good *and* non-overflowing
+      — so the copy discipline is a decision point, not allocation hygiene.
+    - the closing fold is `sum/count + kahanC/count`: **two divisions and one add**, not
+      `(sum + kahanC) / count`. Witnessed only once the corpus carried a series whose
+      compensation was non-zero *and* which did not overflow.
+
+    Unwitnessed in both paths, and recorded as such: the `kahanC /= (count - 1)` on
+    switching. Once a sum saturates, `mean` is around 1e307 and any surviving
+    compensation is ~1e-300, so dividing it and zeroing it are both diluted below the
+    final rounding.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

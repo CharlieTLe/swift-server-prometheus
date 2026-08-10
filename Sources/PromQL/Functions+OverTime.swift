@@ -585,3 +585,226 @@ func funcSumOverTime(
     }
     return (out, Annotations())
 }
+
+// MARK: - avg_over_time
+
+/// Go: `funcAvgOverTime` — the mean of a range, and the most intricate function in
+/// this file.
+///
+/// The top-level split is `sum_over_time`'s: both kinds present is a
+/// `MixedFloatsHistogramsWarning` and no output, no floats takes the histogram path,
+/// otherwise the float path.
+///
+/// ## Both paths switch algorithm mid-range, and the trigger is overflow
+///
+/// Upstream's own comment (functions.go:1155-1177) records the history: incremental
+/// mean plus Kahan was assumed better, then direct mean plus Kahan turned out more
+/// accurate *except* that it can overflow on inputs the incremental form handles. So
+/// both paths accumulate a **direct sum** until it would overflow, and only then
+/// switch to an incremental mean — permanently, for the rest of the range.
+///
+/// Three details decide whether a port matches:
+///
+///   * the switch test is on the **candidate** sum, not the accepted one. The float
+///     path computes `newSum, newC := Inc(...)`, and only assigns them if `newSum` is
+///     finite. So the sample that would have overflowed is *reprocessed* by the
+///     incremental branch in the same iteration — the loop does not `continue` past it.
+///   * on switching, `mean` is seeded as `sum / (count - 1)` and `kahanC` is
+///     **divided** by `count - 1` rather than reset. The seeding of `mean` is
+///     witnessed; the `kahanC` division is **not**, in either path. By the time a sum
+///     saturates, `mean` is around 1e307 and any surviving compensation is ~1e-300, so
+///     dividing it and zeroing it are both diluted below the final rounding. Kept
+///     because it is what Go does, and recorded rather than presented as verified.
+///   * `count` is `float64(i + 2)`, not an incremented counter, because the loop starts
+///     at the second sample.
+///
+/// The final fold differs per branch: incremental returns `mean + kahanC`, direct
+/// returns `sum/count + kahanC/count` — **two divisions and one add**, not
+/// `(sum + kahanC) / count`.
+///
+/// ## The histogram path is the same shape with a copy discipline
+///
+/// It works on a `sumCopy` each iteration precisely so that a failed `KahanAdd` or an
+/// overflow can be abandoned without having corrupted the running sum, and only
+/// commits `sum, kahanC = sumCopy, cCopy` once the addition is known good and
+/// non-overflowing. The Swift value semantics make the copies free, but the *decision
+/// points* are Go's and are what this reproduces.
+func funcAvgOverTime(
+    _: [Vector], _ m: Matrix, _ args: [any Expr], _ enh: EvalNodeHelper
+) -> (Vector, Annotations) {
+    if m.isEmpty {
+        return (enh.out, Annotations())
+    }
+    let firstSeries = m[0]
+    if !firstSeries.floats.isEmpty && !firstSeries.histograms.isEmpty {
+        var annos = Annotations()
+        annos.add(
+            newMixedFloatsHistogramsWarning(
+                getMetricName(firstSeries.metric), args[0].positionRange))
+        return (enh.out, annos)
+    }
+
+    if firstSeries.floats.isEmpty {
+        var annos = Annotations()
+        var counterResetSeen = false
+        var notCounterResetSeen = false
+        var nhcbBoundsReconciledSeen = false
+        var failed = false
+
+        func trackCounterReset(_ h: FloatHistogram) {
+            switch h.counterResetHint {
+            case .counterReset: counterResetSeen = true
+            case .notCounterReset: notCounterResetSeen = true
+            default: break
+            }
+        }
+
+        let out = aggrHistOverTime(m, enh) { s -> FloatHistogram? in
+            // As in `sum_over_time`: Go indexes `Histograms[0]` unguarded, so a series
+            // with no samples at all panics. See PORTING.md quirk 58.
+            precondition(
+                !s.histograms.isEmpty,
+                "avg_over_time: a series with no samples at all; Go panics here")
+            var sum = s.histograms[0].h.copy()
+            var mean: FloatHistogram? = nil
+            var kahanC: FloatHistogram? = nil
+            var count = 1.0
+            var incrementalMean = false
+            trackCounterReset(sum)
+
+            for (i, hp) in s.histograms.dropFirst().enumerated() {
+                trackCounterReset(hp.h)
+                count = Double(i + 2)
+                if !incrementalMean {
+                    // Work on copies so a failure or an overflow can be abandoned
+                    // without having disturbed the running sum.
+                    var sumCopy = sum.copy()
+                    var cCopy = kahanC?.copy()
+                    do {
+                        let (updatedC, result) = try sumCopy.kahanAdd(hp.h, cCopy)
+                        cCopy = updatedC
+                        if result.nhcbBoundsReconciled {
+                            nhcbBoundsReconciledSeen = true
+                        }
+                    } catch {
+                        failed = true
+                        _ = sumCopy.div(count)
+                        return sumCopy
+                    }
+                    if !sumCopy.hasOverflow {
+                        sum = sumCopy
+                        kahanC = cCopy
+                        continue
+                    }
+                    // Overflowed: switch to the incremental mean, seed it from the
+                    // sum so far, and fall through to reprocess THIS sample.
+                    incrementalMean = true
+                    var m0 = sum.copy()
+                    _ = m0.div(count - 1)
+                    mean = m0
+                    if var c = kahanC {
+                        _ = c.div(count - 1)
+                        kahanC = c
+                    }
+                }
+                let q = (count - 1) / count
+                if var c = kahanC {
+                    _ = c.mul(q)
+                    kahanC = c
+                }
+                var toAdd = hp.h.copy()
+                _ = toAdd.div(count)
+                guard var meanValue = mean else {
+                    preconditionFailure("avg_over_time: incremental mean without a seed")
+                }
+                _ = meanValue.mul(q)
+                do {
+                    let (updatedC, result) = try meanValue.kahanAdd(toAdd, kahanC)
+                    kahanC = updatedC
+                    if result.nhcbBoundsReconciled {
+                        nhcbBoundsReconciledSeen = true
+                    }
+                } catch {
+                    failed = true
+                    mean = meanValue
+                    return meanValue
+                }
+                mean = meanValue
+            }
+
+            if incrementalMean {
+                guard var meanValue = mean else { return sum }
+                if let c = kahanC {
+                    do {
+                        _ = try meanValue.add(c)
+                    } catch {
+                        failed = true
+                    }
+                }
+                return meanValue
+            }
+            if var c = kahanC {
+                _ = sum.div(count)
+                _ = c.div(count)
+                do {
+                    _ = try sum.add(c)
+                } catch {
+                    failed = true
+                }
+                return sum
+            }
+            _ = sum.div(count)
+            return sum
+        }
+
+        if counterResetSeen && notCounterResetSeen {
+            annos.add(newHistogramCounterResetCollisionWarning(args[0].positionRange, .agg))
+        }
+        if nhcbBoundsReconciledSeen {
+            annos.add(newMismatchedCustomBucketsHistogramsInfo(args[0].positionRange, .agg))
+        }
+        if failed {
+            var only = Annotations()
+            only.add(
+                newMixedExponentialCustomHistogramsWarning(
+                    getMetricName(firstSeries.metric), args[0].positionRange))
+            return (enh.out, only)
+        }
+        return (out, annos)
+    }
+
+    let out = aggrOverTime(m, enh) { s in
+        // Pre-set the first sample so the loop starts at the second.
+        var sum = s.floats[0].f
+        var count = 1.0
+        var mean = 0.0
+        var kahanC = 0.0
+        var incrementalMean = false
+
+        for (i, f) in s.floats.dropFirst().enumerated() {
+            count = Double(i + 2)
+            if !incrementalMean {
+                let (newSum, newC) = Kahan.inc(f.f, sum, kahanC)
+                // Keep the direct mean while the sum does not overflow.
+                if !newSum.isInfinite {
+                    sum = newSum
+                    kahanC = newC
+                    continue
+                }
+                // It would have overflowed: switch, seed from what we have, and
+                // reprocess THIS sample below rather than skipping it.
+                incrementalMean = true
+                mean = sum / (count - 1)
+                kahanC /= (count - 1)
+            }
+            let q = (count - 1) / count
+            (mean, kahanC) = Kahan.inc(f.f / count, q * mean, q * kahanC)
+        }
+        if incrementalMean {
+            return mean + kahanC
+        }
+        // Two divisions and one add — NOT (sum + kahanC) / count.
+        return sum / count + kahanC / count
+    }
+    return (out, Annotations())
+}

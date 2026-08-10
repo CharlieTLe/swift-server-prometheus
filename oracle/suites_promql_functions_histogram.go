@@ -175,6 +175,18 @@ func histHugeBuckets() *histogram.FloatHistogram {
 	}
 }
 
+// histOverflowing is large enough that two of them saturate a float64 count, which is
+// what makes avg_over_time's histogram path switch to an incremental mean.
+func histOverflowing() *histogram.FloatHistogram {
+	return &histogram.FloatHistogram{
+		Schema:          1,
+		Count:           1e308,
+		Sum:             1e308,
+		PositiveSpans:   []histogram.Span{{Offset: 0, Length: 2}},
+		PositiveBuckets: []float64{5e307, 5e307},
+	}
+}
+
 // histNegativeOnly has all its observations below zero, which is the other branch
 // of the NaN-skew check.
 func histNegativeOnly() *histogram.FloatHistogram {

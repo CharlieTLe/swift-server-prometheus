@@ -193,6 +193,8 @@ func fnNamedHistogram(name string) *histogram.FloatHistogram {
 		return histTinyBuckets()
 	case "huge":
 		return histHugeBuckets()
+	case "overflow":
+		return histOverflowing()
 	default:
 		var n int64
 		if _, err := fmt.Sscanf(name, "std/%d", &n); err != nil {

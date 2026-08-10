@@ -304,6 +304,16 @@ func fnNamedHistogram(_ name: String) -> FloatHistogram {
         h.positiveSpans = [Span(offset: 0, length: 2)]
         h.positiveBuckets = [5e15, 5e15]
         return h
+    case "overflow":
+        // Two of these saturate a float64 count, which is what makes avg_over_time's
+        // histogram path switch to an incremental mean.
+        var h = FloatHistogram()
+        h.schema = 1
+        h.count = 1e308
+        h.sum = 1e308
+        h.positiveSpans = [Span(offset: 0, length: 2)]
+        h.positiveBuckets = [5e307, 5e307]
+        return h
     case "negonly":
         var h = FloatHistogram()
         h.schema = 0

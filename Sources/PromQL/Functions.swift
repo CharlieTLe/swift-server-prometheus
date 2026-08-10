@@ -584,6 +584,7 @@ func funcTimestamp(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelpe
 public let functionCalls: [String: FunctionCall] = [
     "abs": funcAbs,
     "absent_over_time": funcAbsentOverTime,
+    "avg_over_time": funcAvgOverTime,
     "acos": funcAcos,
     "acosh": funcAcosh,
     "asin": funcAsin,

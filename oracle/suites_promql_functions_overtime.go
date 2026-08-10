@@ -79,6 +79,36 @@ func otSeriesAlternating(metric []string, big, small float64, n int) []fnSampleI
 	return otSeries(metric, pts)
 }
 
+// otSeriesOverflowThen builds a series that overflows a running float64 sum on its
+// second sample and then continues for `n` more at `tail`. That shape is what
+// distinguishes reprocessing the overflowing sample from skipping it.
+func otSeriesOverflowThen(metric []string, n int, tail float64) []fnSampleIn {
+	pts := []otPoint{{t: 1000, f: 1e308}, {t: 2000, f: 1e308}}
+	for i := 0; i < n; i++ {
+		pts = append(pts, otPoint{t: int64(i+3) * 1000, f: tail})
+	}
+	return otSeries(metric, pts)
+}
+
+// otSeriesCompensateThenOverflow interleaves huge and tiny values so the Kahan
+// compensation is non-zero, then overflows. Without a non-zero `kahanC` at the moment
+// of the switch, dividing it by `count - 1` and zeroing it are indistinguishable.
+func otSeriesCompensateThenOverflow(metric []string, n int) []fnSampleIn {
+	pts := []otPoint{}
+	for i := 0; i < n; i++ {
+		v := 1e-300
+		if i%2 == 0 {
+			v = 1e300
+		}
+		pts = append(pts, otPoint{t: int64(i+1) * 1000, f: v})
+	}
+	pts = append(pts, otPoint{t: int64(n+1) * 1000, f: 1e308})
+	pts = append(pts, otPoint{t: int64(n+2) * 1000, f: 1e308})
+	pts = append(pts, otPoint{t: int64(n+3) * 1000, f: 1e-300})
+	pts = append(pts, otPoint{t: int64(n+4) * 1000, f: 7})
+	return otSeries(metric, pts)
+}
+
 type otPoint struct {
 	t    int64
 	f    float64
@@ -778,6 +808,63 @@ func genPromQLFunctionsOverTime(e *emitter) {
 			emit(fnIn{
 				Fn: "sum_over_time", Delayed: delayed, Ts: "1500",
 				Expr:     "sum_over_time(http_requests_total[5m])",
+				Args:     [][]fnSampleIn{},
+				MatrixIn: m,
+			})
+		}
+	}
+
+	// --- avg_over_time, on sum_over_time's matrices plus the ones that force the
+	// mid-range switch from a direct mean to an incremental one.
+	//
+	// The switch triggers on the CANDIDATE sum, so the sample that would have
+	// overflowed is reprocessed by the incremental branch in the same iteration rather
+	// than skipped. A range that overflows early and then continues for many samples is
+	// what distinguishes that from a `continue`.
+	avgMatrices := append([][][]fnSampleIn{}, sumMatrices...)
+	avgMatrices = append(avgMatrices,
+		// Overflows on the second sample, then twenty more: everything after the switch
+		// runs incrementally, and the reprocessed sample is the one that overflowed.
+		[][]fnSampleIn{otSeriesOverflowThen(metric, 20, 1)},
+		[][]fnSampleIn{otSeriesOverflowThen(metric, 20, 1e300)},
+		[][]fnSampleIn{otSeriesOverflowThen(metric, 3, -1e300)},
+		// Overflows on the LAST sample, so the incremental branch runs exactly once and
+		// its seeding is all that matters.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 2}, {t: 3000, f: 1e308}, {t: 4000, f: 1e308},
+		})},
+		// Never overflows, but long and large enough that the direct path's
+		// `sum/count + kahanC/count` differs from `(sum + kahanC) / count`.
+		[][]fnSampleIn{otSeriesRun(metric, 1e16, 50, 1)},
+		[][]fnSampleIn{otSeriesRun(metric, 1e10, 101, 7)},
+		[][]fnSampleIn{otSeriesAlternating(metric, 1e17, 1, 21)},
+		// A non-trivial Kahan compensation ALREADY accumulated when the overflow hits,
+		// which is the only way the switch's `kahanC /= (count - 1)` can be told apart
+		// from `kahanC = 0` — and the only way the closing
+		// `sum/count + kahanC/count` can be told apart from `(sum + kahanC) / count`.
+		// Three controls passed until this existed.
+		[][]fnSampleIn{otSeriesCompensateThenOverflow(metric, 30)},
+		[][]fnSampleIn{otSeriesCompensateThenOverflow(metric, 7)},
+		// The same shape without the overflow, so only the closing two-divisions form
+		// is exercised.
+		[][]fnSampleIn{otSeriesAlternating(metric, 1e300, 1e-300, 31)},
+		// Two samples only, so `count - 1` is 1 and the seeding division is the identity.
+		[][]fnSampleIn{otSeries(metric, []otPoint{{t: 1000, f: 1e308}, {t: 2000, f: 1e308}})},
+		// Histograms whose running sum overflows, which is the histogram path's switch.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "overflow"}, {t: 2000, hist: "overflow"},
+			{t: 3000, hist: "huge"}, {t: 4000, hist: "tiny"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "overflow"}, {t: 2000, hist: "overflow"},
+			{t: 3000, hist: "overflow"},
+		})},
+	)
+	for _, m := range avgMatrices {
+		for _, delayed := range []bool{false, true} {
+			emit(fnIn{
+				Fn: "avg_over_time", Delayed: delayed, Ts: "1500",
+				Expr:     "avg_over_time(http_requests_total[5m])",
 				Args:     [][]fnSampleIn{},
 				MatrixIn: m,
 			})
