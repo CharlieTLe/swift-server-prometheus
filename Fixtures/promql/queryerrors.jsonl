@@ -1,0 +1,42 @@
+{"id":"timeout/0","in":{"kind":"timeout","env":"query execution","inner":"","cause":""},"out":{"text":"query timed out in query execution","mapped":""}}
+{"id":"timeout/1","in":{"kind":"timeout","env":"expression evaluation","inner":"","cause":""},"out":{"text":"query timed out in expression evaluation","mapped":""}}
+{"id":"timeout/2","in":{"kind":"timeout","env":"result sorting","inner":"","cause":""},"out":{"text":"query timed out in result sorting","mapped":""}}
+{"id":"timeout/3","in":{"kind":"timeout","env":"","inner":"","cause":""},"out":{"text":"query timed out in ","mapped":""}}
+{"id":"timeout/4","in":{"kind":"timeout","env":" ","inner":"","cause":""},"out":{"text":"query timed out in  ","mapped":""}}
+{"id":"timeout/5","in":{"kind":"timeout","env":"ünïcödé","inner":"","cause":""},"out":{"text":"query timed out in ünïcödé","mapped":""}}
+{"id":"timeout/6","in":{"kind":"timeout","env":"a \"quoted\" place","inner":"","cause":""},"out":{"text":"query timed out in a \"quoted\" place","mapped":""}}
+{"id":"timeout/7","in":{"kind":"timeout","env":"a\nnewline","inner":"","cause":""},"out":{"text":"query timed out in a\nnewline","mapped":""}}
+{"id":"canceled/8","in":{"kind":"canceled","env":"query execution","inner":"","cause":""},"out":{"text":"query was canceled in query execution","mapped":""}}
+{"id":"canceled/9","in":{"kind":"canceled","env":"expression evaluation","inner":"","cause":""},"out":{"text":"query was canceled in expression evaluation","mapped":""}}
+{"id":"canceled/10","in":{"kind":"canceled","env":"result sorting","inner":"","cause":""},"out":{"text":"query was canceled in result sorting","mapped":""}}
+{"id":"canceled/11","in":{"kind":"canceled","env":"","inner":"","cause":""},"out":{"text":"query was canceled in ","mapped":""}}
+{"id":"canceled/12","in":{"kind":"canceled","env":" ","inner":"","cause":""},"out":{"text":"query was canceled in  ","mapped":""}}
+{"id":"canceled/13","in":{"kind":"canceled","env":"ünïcödé","inner":"","cause":""},"out":{"text":"query was canceled in ünïcödé","mapped":""}}
+{"id":"canceled/14","in":{"kind":"canceled","env":"a \"quoted\" place","inner":"","cause":""},"out":{"text":"query was canceled in a \"quoted\" place","mapped":""}}
+{"id":"canceled/15","in":{"kind":"canceled","env":"a\nnewline","inner":"","cause":""},"out":{"text":"query was canceled in a\nnewline","mapped":""}}
+{"id":"tooManySamples/16","in":{"kind":"tooManySamples","env":"query execution","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in query execution","mapped":""}}
+{"id":"tooManySamples/17","in":{"kind":"tooManySamples","env":"expression evaluation","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in expression evaluation","mapped":""}}
+{"id":"tooManySamples/18","in":{"kind":"tooManySamples","env":"result sorting","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in result sorting","mapped":""}}
+{"id":"tooManySamples/19","in":{"kind":"tooManySamples","env":"","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in ","mapped":""}}
+{"id":"tooManySamples/20","in":{"kind":"tooManySamples","env":" ","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in  ","mapped":""}}
+{"id":"tooManySamples/21","in":{"kind":"tooManySamples","env":"ünïcödé","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in ünïcödé","mapped":""}}
+{"id":"tooManySamples/22","in":{"kind":"tooManySamples","env":"a \"quoted\" place","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in a \"quoted\" place","mapped":""}}
+{"id":"tooManySamples/23","in":{"kind":"tooManySamples","env":"a\nnewline","inner":"","cause":""},"out":{"text":"query processing would load too many samples into memory in a\nnewline","mapped":""}}
+{"id":"storage/24","in":{"kind":"storage","env":"","inner":"some storage error","cause":""},"out":{"text":"some storage error","mapped":""}}
+{"id":"withWarnings/25","in":{"kind":"withWarnings","env":"","inner":"some storage error","cause":""},"out":{"text":"some storage error","mapped":""}}
+{"id":"storage/26","in":{"kind":"storage","env":"","inner":"","cause":""},"out":{"text":"","mapped":""}}
+{"id":"withWarnings/27","in":{"kind":"withWarnings","env":"","inner":"","cause":""},"out":{"text":"","mapped":""}}
+{"id":"storage/28","in":{"kind":"storage","env":"","inner":"expanding series: block not found","cause":""},"out":{"text":"expanding series: block not found","mapped":""}}
+{"id":"withWarnings/29","in":{"kind":"withWarnings","env":"","inner":"expanding series: block not found","cause":""},"out":{"text":"expanding series: block not found","mapped":""}}
+{"id":"storage/30","in":{"kind":"storage","env":"","inner":"error with \"quotes\"","cause":""},"out":{"text":"error with \"quotes\"","mapped":""}}
+{"id":"withWarnings/31","in":{"kind":"withWarnings","env":"","inner":"error with \"quotes\"","cause":""},"out":{"text":"error with \"quotes\"","mapped":""}}
+{"id":"storage/32","in":{"kind":"storage","env":"","inner":"ünïcödé","cause":""},"out":{"text":"ünïcödé","mapped":""}}
+{"id":"withWarnings/33","in":{"kind":"withWarnings","env":"","inner":"ünïcödé","cause":""},"out":{"text":"ünïcödé","mapped":""}}
+{"id":"contextErr/34","in":{"kind":"contextErr","env":"query execution","inner":"an unrelated error","cause":"canceled"},"out":{"text":"query was canceled in query execution","mapped":"canceled"}}
+{"id":"contextErr/35","in":{"kind":"contextErr","env":"","inner":"an unrelated error","cause":"canceled"},"out":{"text":"query was canceled in ","mapped":"canceled"}}
+{"id":"contextErr/36","in":{"kind":"contextErr","env":"query execution","inner":"an unrelated error","cause":"deadline"},"out":{"text":"query timed out in query execution","mapped":"timeout"}}
+{"id":"contextErr/37","in":{"kind":"contextErr","env":"","inner":"an unrelated error","cause":"deadline"},"out":{"text":"query timed out in ","mapped":"timeout"}}
+{"id":"contextErr/38","in":{"kind":"contextErr","env":"query execution","inner":"an unrelated error","cause":"wrappedCanceled"},"out":{"text":"query was canceled in query execution","mapped":"canceled"}}
+{"id":"contextErr/39","in":{"kind":"contextErr","env":"","inner":"an unrelated error","cause":"wrappedCanceled"},"out":{"text":"query was canceled in ","mapped":"canceled"}}
+{"id":"contextErr/40","in":{"kind":"contextErr","env":"query execution","inner":"an unrelated error","cause":"other"},"out":{"text":"an unrelated error","mapped":"passthrough"}}
+{"id":"contextErr/41","in":{"kind":"contextErr","env":"","inner":"an unrelated error","cause":"other"},"out":{"text":"an unrelated error","mapped":"passthrough"}}

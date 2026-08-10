@@ -331,14 +331,19 @@ public struct Matrix: Value, Sendable {
         Labels.compare(a.metric, b.metric) < 0
     }
 
-    /// Go: `sort.Sort(Matrix)`.
+    /// Go: `sort.Sort(Matrix)`, through the ported pdqsort.
     ///
-    /// Neither Go's `sort.Sort` nor Swift's `sort()` is stable, and the comparator
-    /// is a total order except across duplicate label sets — which
-    /// ``containsSameLabelset`` exists to reject and upstream calls semantically
-    /// undefined. So the instability is not observable for well-formed input.
+    /// `Matrix.Less` is a total order on *distinct* label sets, so for well-formed input
+    /// any correct sort agrees. It is not total across duplicate label sets — which
+    /// ``containsSameLabelset`` exists to detect and upstream calls semantically undefined
+    /// — and there `sort.Sort`'s permutation is the answer Go gives. Since `GoCompat.GoSort`
+    /// exists (see PORTING.md quirk 66) matching it is free, so this no longer relies on
+    /// duplicate label sets being unreachable.
     public mutating func sort() {
-        series.sort(by: Matrix.less)
+        GoSort.sort(
+            count: series.count,
+            less: { Matrix.less(self.series[$0], self.series[$1]) },
+            swap: { self.series.swapAt($0, $1) })
     }
 
     /// Go: `ContainsSameLabelset`. As ``Vector/containsSameLabelset``, hashes and

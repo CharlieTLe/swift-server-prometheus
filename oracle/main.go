@@ -191,6 +191,11 @@ var suites = map[string]func(*emitter){
 	// Phase 5: engine.go's front door — NewInstantQuery/NewRangeQuery up to but not
 	// including Exec. See oracle/suites_promql_engine_newquery.go.
 	"promql/newquery": genPromQLEngineNewQuery,
+	// Phase 5: engine.go's error vocabulary, and `sort.Sort(Matrix)` — which is exported
+	// through Matrix's sort.Interface methods. See
+	// oracle/suites_promql_engine_errors.go.
+	"promql/queryerrors": genPromQLQueryErrors,
+	"promql/matrixsort":  genPromQLMatrixSort,
 }
 
 func main() {

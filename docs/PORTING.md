@@ -1304,6 +1304,39 @@ changing behaviour.
     question is what makes the two answers differ — and the answer is sometimes "an input
     that is already broken in another way".
 
+72. **The three query timing errors name a place, not a duration, and `ErrStorage` adds
+    nothing.** `ErrQueryTimeout("expression evaluation")` renders as "query timed out in
+    expression evaluation" — the payload is *where* the query was, so an empty one leaves a
+    dangling "in ". `ErrStorage.Error()` is its wrapped error's text with **no prefix**; a
+    port that added "storage: " would look tidier and break every consumer matching on the
+    message.
+
+    `contextErr`'s mapping is not symmetric with its names: `context.Canceled` becomes
+    `ErrQueryCanceled` but `context.DeadlineExceeded` becomes `ErrQuery`**`Timeout`**, so a
+    deadline is reported to the user as a timeout.
+
+    `evaluator.recover` classifies panics in a fixed order — `runtime.Error` first (wrapped
+    as `unexpected error: %w`), then `errWithWarnings` (unwrapped, **and its annotations
+    merged**, the only way a failed evaluation still returns warnings), then any `error`,
+    then `%v` over anything else. `runtime.Error` also satisfies `error`, so the first case
+    must come first. Swift cannot recover an arbitrary trap, so the classification is a
+    function over an already-caught error and the port's own invariants use `precondition`
+    (exception 9).
+
+73. **`Matrix.Sort()` had to go through the ported pdqsort, and the difference is
+    observable.** `Matrix.Less` is `labels.Compare(...) < 0` — a total order on *distinct*
+    label sets, so any correct sort agrees for well-formed input. Across **duplicate** label
+    sets it is not total, and there Swift's `sort(by:)` and Go's `sort.Sort` produce
+    genuinely different permutations: the negative control that reverts to `sort(by:)` fails
+    against the committed fixture. Duplicate label sets are what `ContainsSameLabelset`
+    exists to detect and upstream calls semantically undefined, so this was defensible while
+    `GoSort` did not exist (quirk 66) — and is not now.
+
+    A note on method, not on Prometheus: four of this slice's twelve controls are pinned only
+    by the hand-written invariant suite, because `contextErr` and `recover` are unexported and
+    only their outputs cross the wire. A sweep filtered to the *fixture* suites reports those
+    four green. Same trap as HANDOFF §4's filter mistake, in a new disguise.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
