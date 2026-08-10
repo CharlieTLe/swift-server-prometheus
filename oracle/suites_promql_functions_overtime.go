@@ -109,6 +109,18 @@ func otSeriesCompensateThenOverflow(metric []string, n int) []fnSampleIn {
 	return otSeries(metric, pts)
 }
 
+// otSeriesAt builds `n` float samples starting at `start` ms, `step` ms apart, whose
+// values start at `base` and rise by `slope` each time. Placing samples explicitly in
+// time is what the extrapolation needs — moving them within the range changes the
+// answer even when the values do not.
+func otSeriesAt(metric []string, start, step int64, n int, base, slope float64) []fnSampleIn {
+	pts := make([]otPoint, 0, n)
+	for i := 0; i < n; i++ {
+		pts = append(pts, otPoint{t: start + int64(i)*step, f: base + float64(i)*slope})
+	}
+	return otSeries(metric, pts)
+}
+
 type otPoint struct {
 	t    int64
 	f    float64
@@ -868,6 +880,127 @@ func genPromQLFunctionsOverTime(e *emitter) {
 				Args:     [][]fnSampleIn{},
 				MatrixIn: m,
 			})
+		}
+	}
+
+	// --- rate, increase and delta, through extrapolatedRate.
+	//
+	// Extrapolation, not a slope: `last - first` with the pre-reset value added back at
+	// every reset, scaled by `(sampledInterval + durationToStart + durationToEnd) /
+	// sampledInterval`, and divided by the range for `rate`. So the corpus has to move
+	// the samples *within* the range, not just change their values:
+	//
+	//   - samples filling the range, so both durations are ~0 and the factor is ~1;
+	//   - samples clustered at one end, so one duration exceeds the 1.1x threshold and
+	//     collapses to half the average gap;
+	//   - two samples only, where the average gap IS the sampled interval;
+	//   - a first sample of exactly 0 with a rising counter, which is the boundary of
+	//     the `samples.Floats[0].F >= 0` clamp guard;
+	//   - a rising counter whose extrapolated zero point lands INSIDE durationToStart,
+	//     which is the only way the clamp changes the answer.
+	//
+	// `anchored`/`smoothed` are excluded: they dispatch to `extendedRate`, which is not
+	// ported, and the port raises a precondition there.
+	// No empty matrix: `extrapolatedRate` indexes `vals[0]` with no check and Go
+	// PANICS. It took the fixture generator down. Unreachable from a query, guarded
+	// with a precondition in the port.
+	rateMatrices := [][][]fnSampleIn{
+		{otSeries(metric, nil)},
+		// Fewer than two of a kind: dropped.
+		{otSeries(metric, []otPoint{{t: -100_000, f: 5}})},
+		{otSeries(metric, []otPoint{{t: -100_000, hist: "std/1"}})},
+		// Both kinds: the mixed warning.
+		{otSeries(metric, []otPoint{{t: -100_000, f: 5}, {t: -50_000, hist: "std/1"}})},
+		// Filling the range (ts=1500, [5m] -> start -298500), evenly spaced.
+		{otSeriesAt(metric, -298_000, 1000, 10, 0, 10)},
+		{otSeriesAt(metric, -298_000, 30_000, 10, 0, 10)},
+		// Clustered at the START, so durationToEnd blows the threshold.
+		{otSeriesAt(metric, -298_000, 1000, 10, 0, 1)},
+		// Clustered at the END, so durationToStart does.
+		{otSeriesAt(metric, -20_000, 1000, 10, 0, 1)},
+		// Two samples only.
+		{otSeries(metric, []otPoint{{t: -200_000, f: 1}, {t: -100_000, f: 5}})},
+		{otSeries(metric, []otPoint{{t: -298_000, f: 1}, {t: 1000, f: 5}})},
+		// A first sample of exactly 0 with a rising counter: the clamp guard's boundary.
+		{otSeriesAt(metric, -200_000, 10_000, 8, 0, 3)},
+		// A NEGATIVE first sample, which disqualifies the clamp.
+		{otSeriesAt(metric, -200_000, 10_000, 8, -5, 3)},
+		// A rising counter whose zero point lands inside durationToStart, which is the
+		// only shape where the clamp changes the answer.
+		{otSeriesAt(metric, -100_000, 10_000, 5, 100, 1)},
+		// Flat, so resultFloat is 0 and the clamp is skipped.
+		{otSeriesAt(metric, -200_000, 10_000, 8, 7, 0)},
+		// Counter RESETS, one and several.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, f: 10}, {t: -150_000, f: 3}, {t: -100_000, f: 8},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -250_000, f: 10}, {t: -200_000, f: 3}, {t: -150_000, f: 1},
+			{t: -100_000, f: 9}, {t: -50_000, f: 2},
+		})},
+		// Decreasing throughout: every step a reset.
+		{otSeriesAt(metric, -200_000, 10_000, 8, 100, -10)},
+		// NaN and infinities in a counter.
+		{otSeries(metric, []otPoint{{t: -200_000, f: 1}, {t: -100_000, f: math.NaN()}})},
+		{otSeries(metric, []otPoint{{t: -200_000, f: math.NaN()}, {t: -100_000, f: 1}})},
+		{otSeries(metric, []otPoint{{t: -200_000, f: 1}, {t: -100_000, f: math.Inf(1)}})},
+		// Histograms: rising, falling (a reset), identical, gauge-hinted, custom.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/0"}, {t: -150_000, hist: "std/1"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/3"}, {t: -150_000, hist: "std/1"},
+			{t: -100_000, hist: "std/0"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/1"}, {t: -100_000, hist: "std/1"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "gauge"}, {t: -100_000, hist: "gauge2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "gauge"}, {t: -150_000, hist: "std/1"},
+			{t: -100_000, hist: "gauge2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "custom"}, {t: -100_000, hist: "custom2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/1"}, {t: -100_000, hist: "custom"},
+		})},
+		// A reset between the FIRST and SECOND histogram, which nulls out the first —
+		// the branch whose whole point is to ignore the first sample's bucket layout.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "custom"}, {t: -150_000, hist: "std/0"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/3"}, {t: -150_000, hist: "std/0"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// Mixed schemas, so minSchema comes from a middle point.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, hist: "std/1"}, {t: -150_000, hist: "zeroneg"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// With the metadata labels, so the warnings carry a name.
+		{otSeries(withMetadata, []otPoint{
+			{t: -200_000, hist: "gauge"}, {t: -100_000, hist: "gauge2"},
+		})},
+	}
+	for _, fn := range []string{"rate", "increase", "delta"} {
+		for _, sel := range []string{"[5m]", "[2m]", "[5m] offset 1m"} {
+			for _, m := range rateMatrices {
+				for _, delayed := range []bool{false, true} {
+					emit(fnIn{
+						Fn: fn, Delayed: delayed, Ts: "1500",
+						Expr:     fn + "(http_requests_total" + sel + ")",
+						Args:     [][]fnSampleIn{},
+						MatrixIn: m,
+					})
+				}
+			}
 		}
 	}
 

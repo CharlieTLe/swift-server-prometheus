@@ -1034,6 +1034,39 @@ changing behaviour.
     compensation is ~1e-300, so dividing it and zeroing it are both diluted below the
     final rounding.
 
+61. **`rate` does not fit a line — it extrapolates a difference, and the corpus has to
+    move samples *within* the range.** `extrapolatedRate` takes `last - first`, adds
+    back the pre-reset value at every counter reset, then scales by
+
+        (sampledInterval + durationToStart + durationToEnd) / sampledInterval
+
+    and divides by the range for `rate`. "Close enough to the boundary" means within
+    **1.1×** the average gap between samples; beyond that it extrapolates only *half* a
+    gap, on the theory that the series genuinely starts or ends inside the range.
+
+    So changing sample *values* alone cannot pin most of it. The corpus places samples
+    explicitly in time: filling the range, clustered at each end, two samples only, and
+    with a rising counter whose extrapolated zero point lands inside `durationToStart` —
+    the only shape where the negative-value clamp changes the answer. The clamp's guard
+    is `resultFloat > 0 && samples.Floats[0].F >= 0`, so a first sample of exactly 0
+    still qualifies and a negative one does not.
+
+    `histogramRate` **nulls out its first sample** when there is a reset between the
+    first and second, replacing it with an empty histogram carrying the *second's*
+    schema and custom values — so the first sample's bucket layout is deliberately not
+    checked. The custom-buckets test that follows compares against a
+    `usingCustomBuckets` that may have been reassigned from the second sample.
+
+    `extendedRate`/`extendedHistogramRate` — the `anchored`/`smoothed` branch — are
+    **not ported**; the dispatch raises a precondition, and the corpus does not generate
+    those modifiers.
+
+    And `extrapolatedRate` indexes `vals[0]` with no emptiness check, so an empty matrix
+    panics. That is the **fourth** latent crash of this kind in `functions.go` (with
+    `sampleRing`'s three in exception 9, `sum_over_time`'s and `avg_over_time`'s in
+    quirk 58, and `instantValue`'s). All are unreachable from a query and all are
+    guarded with a clear precondition rather than reproduced.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
