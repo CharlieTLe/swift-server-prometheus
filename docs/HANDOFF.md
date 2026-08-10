@@ -1,7 +1,8 @@
 # Handoff
 
-Written at the end of the session that landed Phase 5's `GoMath` hyperbolics and `Log1p` — the last
-prerequisite for `promql/functions.go`'s element-wise wrappers.
+Written at the end of the session that landed `prometheus/schema` and `promql/functions.go`'s
+element-wise arithmetic slice — the first of `FunctionCalls`' bodies to be ported, and the step that
+proves the oracle can drive them without a running engine.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -15,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable` and `histogram_stats_iterator.go` are landed. **Every `GoMath` function `functions.go` needs now exists.** Next: `functions.go`'s bodies, then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema` and **34 of `FunctionCalls`' 89 bodies** are landed. Next: the rest of `functions.go`'s bodies (dates, histograms, `*_over_time`, the sorts), then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **315,409 committed differential cases, 396 tests**, on both Swift 6.4
+Green as of this commit: **315,942 committed differential cases, 420 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -28,6 +29,7 @@ Sources/            src     generated
   PromMath             91         –
   PromModel           357         –
   PromLabels          798         –
+  PromSchema          148         –
   PromEncoding        343         –
   PromRegex         3,312     3,974
   PromHistogram     4,125       163
@@ -38,9 +40,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,993       550
-  PromQL            2,196         –
-Tests               9,923
-oracle (Go)        12,815
+  PromQL            2,794         –
+Tests              10,575
+oracle (Go)        13,573
 ```
 
 ### Verify everything in one go
@@ -230,6 +232,32 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **A behaviour is pinned only if some input can tell the two spellings apart, and "the corpus has
+  interesting values" is not the same thing.** The element-wise `functions.go` slice passed its first
+  corpus with *every* one of the 16 transcendental wrappers rewired to Swift's **libm** — because the
+  corpus's values were 0, ±1, ±0.5, ±2, 21.5, NaN and ±Inf, and libm agrees with Go on all of them.
+  The per-value arithmetic is pinned by `gocompat/*` over millions of inputs, so nothing was missing
+  *there*; what was missing was any value in *this* corpus where the two disagree. The fix is a
+  harvested witness per wrapper (`0x3ffa6d48991d5506` alone covers nine). Same shape, second instance
+  in the same slice: `clamp`'s `Max(min, Min(max, f))` survived having its operands swapped, because
+  the order only decides whose **NaN payload** survives and the corpus used `math.NaN()` for both the
+  samples and the bounds — one payload, nothing to distinguish. Generalisation for the evaluator work
+  ahead: when a layer's job is *plumbing*, its corpus needs values chosen to make the layer below
+  distinguishable, not values that are interesting to the layer below.
+- **An unexported Go field can still be a contract, and reflection is the honest way to reach it.**
+  `EvalNodeHelper.enableDelayedNameRemoval` is unexported and changes the result of every function in
+  `functions.go`: false makes each body strip the three schema metadata labels itself, true leaves
+  them. `cmd/prometheus` defaults it to **false**; `promqltest` sets it **true** (test.go:111), so the
+  exit gate runs the setting an external caller cannot construct. Pinning only the zero value would
+  have left the port's exit-gate behaviour untested, so the oracle sets the field with
+  `reflect` + `unsafe`, contained to one function. The alternative — pin one branch, assert the other
+  Swift-side — is the "no behaviour to compare" fallacy §3 already records for the in-memory
+  `Queryable`.
+- **`functions.go` is differentially testable and `engine.go` is not, and that is worth re-checking
+  before each slice.** `promql.FunctionCalls`, `FunctionCall` and every type in its signature are
+  exported, so a body can be called with a synthetic `EvalNodeHelper` and no engine. `evaluator` is
+  unexported, so nothing in `engine.go` can be. The same question — "is there an exported entry point
+  to the thing I am about to port?" — is what decides the order of the remaining Phase 5 work.
 - **Observability of a fusion tracks its position in the Horner chain, and that is what reconciles
   the two halves of the previous bullet.** `xatan`'s unrounded `fma(x, x, Q0)` is observable and
   `tan`'s structurally identical site is not, which read as luck until the hyperbolics gave four more
@@ -444,6 +472,9 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/histogram_stats_iterator.go` | in full, plus `histogramStatsSeries` from engine.go:4785 — its only constructor. PORTING.md quirks 37-38 |
 | `GoCompat.GoMath` | `math.Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Log10` + `trigReduce` | portable Go on arm64, not assembly and **not libm** — see below |
 | `GoCompat.GoMath` | `math.Log1p`, `Sinh`, `Cosh`, `Tanh`, `Asinh`, `Acosh`, `Atanh` | portable Go on arm64. 36 fused sites, 19 witnessed. PORTING.md quirks 41-43 |
+| `PromSchema` | `schema/labels.go` | new target. `isMetadataLabel` + `Metadata`; `IgnoreOverriddenMetadataLabelScratchBuilder` deferred to Phase 8 |
+| `PromQL` | `promql/engine.go`'s `EvalNodeHelper`, `EvalSeriesHelper` | **three fields only** — `ts`, `out`, `enableDelayedNameRemoval`. The caches arrive with their callers; the file lists which and whose |
+| `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` — 34 of `FunctionCalls`' 89 entries |
 
 `VectorSelector` now has its `unexpandedSeriesSet` and `series` fields, so ADR-11's mutate-in-place
 design is finally exercisable.
@@ -479,15 +510,20 @@ unexported, so `scalarBinop`, `vectorElemBinop`, `aggregation` and the rest can 
 `Engine.NewInstantQuery`, which needs the Swift evaluator to exist first. So `functions.go` is
 differentially testable *now* and `engine.go` is not, which inverts the obvious order.
 
-1. **`promql/functions.go`'s bodies**, driven through `FunctionCalls` from the oracle. Needs
-   `EvalNodeHelper` and its reset helpers (engine.go:1217-1408) as the parameter, plus
-   `EvalSeriesHelper`, `getMetricName`, `stringFromArg`, `stringSliceFromArgs`. Suggested slices:
-   - the element-wise ones — `simpleFloatFunc` + the ~26 math wrappers (**no longer blocked on
-     anything**: every `GoMath` function they reach now exists, hyperbolics included), `clamp`,
-     `funcRound` (a fused site), `funcScalar`, `funcVector`,
-     `funcTime`, `funcTimestamp`, `funcPi`, `funcSgn`, `dateWrapper` + the 8 date functions (the
-     `Int64(Double)` trap), `simpleHistogramFunc` + the `histogram_*` family, and
-     `funcHistogramQuantile`/`Fraction`/`Quantiles` on top of the already-ported `quantile.go`;
+1. **`promql/functions.go`'s bodies**, driven through `FunctionCalls` from the oracle. The
+   element-wise arithmetic slice is **done** — `EvalNodeHelper` (three fields), `EvalSeriesHelper`,
+   `simpleFloatFunc` + the 26 math wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`,
+   `timestamp`, `pi`, `sgn`. `Tests/PromQLTests/FunctionsTests.swift` asserts the table is a subset of
+   Go's whose complement is **exactly** the named deferred set, so the next slice is a matter of
+   deleting names from that list. What is left, and what each needs:
+   - **the 8 date functions** — `dateWrapper` plus `days_in_month`/`day_of_*`/`hour`/`minute`/
+     `month`/`year`. Blocked on `GoTime` growing a weekday, a year-day and a days-in-month, and they
+     carry the `int64(el.F)` saturation trap (below): `year(vector(NaN))` is legal PromQL and a Swift
+     crash. `PromQLParser` already has a `clampToInt64`; hoist it into `GoCompat` rather than copying.
+   - `simpleHistogramFunc` + the `histogram_*` family, and
+     `funcHistogramQuantile`/`Fraction`/`Quantiles` on top of the already-ported `quantile.go` —
+     these need `EvalNodeHelper`'s bucket caches and `resetHistograms`, plus `getMetricName`,
+     `stringFromArg`, `stringSliceFromArgs`;
    - the range ones — `extrapolatedRate`/`extendedRate`/`histogramRate` and the `*_over_time` family,
      which need `interpolate`, `correctForCounterResets` and the load-bearing groupings below;
    - the sorts, which need **Go's pdqsort ported** — see the note further down, and note that
@@ -636,6 +672,8 @@ it:
   `ExpandSamples*`, `ExpandChunks` → Phase 6, or Phase 10 for the remote-read path.
 - `chunkenc`'s concrete encodings (XOR, XOR2, histogram, float histogram) and the bstream/varbit
   machinery → Phases 6–7. `PromChunkEnc` currently has no conforming `Chunk` at all.
+- `schema.IgnoreOverriddenMetadataLabelScratchBuilder` → Phase 8. Its only callers are the three
+  `model/textparse` parsers; the rest of `schema/labels.go` is ported.
 - `context.WithValue` → Phase 9, for the query logger's `QueryOrigin`.
 - **`MarshalJSON` on every `promql` value type** → Phase 9, with the HTTP API. This needs three
   byte-exact surfaces `strconv` does not give you: Go's `encoding/json` float encoder (an `'f'`/`'e'`
@@ -695,6 +733,19 @@ perturbation*: 18 of 27 unfusings break the corpus, and the 6 that survive are e
 file (two provably exact, four unobservable in a 12,000,000-input search). Observable ones carry
 harvested witnesses, as `gocompat/log` does. See `Sources/GoCompat/GoMath+Trig.swift` and PORTING.md
 quirks 39-40.
+
+**The `FunctionCalls` table is deliberately partial, and safely so.** `functionCalls` holds 34 of Go's
+89 entries, and `Fixtures/promql/functioncallnames.jsonl` carries the full key set from Go so the test
+can assert that the difference is **exactly** the named deferred set. That is what makes a partial
+table safe rather than a trap: a body that goes missing fails the test instead of looking like one
+that has not landed yet. Add the implementation and delete the name from the list in the same commit.
+
+**The `enh.Out` reuse buffer is kept, not dropped.** PORTING.md exception 4 drops `sync.Pool`, and it
+would have been consistent to drop this too — engine.go:1523 resets `Out` to empty before every call,
+so in a running engine `append(enh.Out, …)` just means "build a fresh vector". But `Out` is
+*exported*, so it is part of the surface the oracle drives, and it is the only thing that
+distinguishes `funcPi`/`funcTime` (which return a fresh vector and ignore it) from every other body
+(which appends). The corpus exercises a non-empty `Out` on eleven cases for that reason, and says so.
 
 **`GoMath` is now complete for everything `functions.go` reaches.** The hyperbolics and `Log1p`
 landed with the same discipline as the trig block: libm probed first (all seven diverge — `Tanh` least
@@ -756,7 +807,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 43 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **twelve documented exceptions**, plus 45 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)
