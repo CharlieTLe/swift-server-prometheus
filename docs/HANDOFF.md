@@ -19,7 +19,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`), the last four being the sorts — which needed Go's pdqsort and `natsort.Compare` ported first. `engine.go` has started: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime` and the `limit_ratio` sampler. the error vocabulary, and `Matrix.Sort` through the ported pdqsort. `Exec`, and the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`). `timestamp` over a selector and `mergeSeriesWithSameLabelset`. Next: `matrixSelector`/`matrixIterSlice` — which makes all 82 `FunctionCalls` bodies reachable — then the vector binops and the aggregations, then `promqltest` |
 | 6–10 | not started |
 
-Green as of this commit: **333,467 committed differential cases, 483 tests**, on both Swift 6.4
+Green as of this commit: **336,812 committed differential cases, 484 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -609,6 +609,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromStorage` | `storage/interface.go`'s `MockQueryable`/`MockQuerier` | no longer deferred; they had a caller |
 | `PromTestStorage` | **not a port** — fills `util/teststorage`'s role | the in-memory `Queryable`; see below |
 | `PromQL` | `promql/histogram_stats_iterator.go` | in full, plus `histogramStatsSeries` from engine.go:4785 — its only constructor. PORTING.md quirks 37-38 |
+| `GoCompat.GoMath.atan2` | `math.Atan2` | nine ordered special cases, then `Atan(y/x)` with a quadrant shift. Unblocks PromQL's `atan2` operator. Quirk 79 |
 | `GoCompat.GoMath` | `math.Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Log10` + `trigReduce` | portable Go on arm64, not assembly and **not libm** — see below |
 | `GoCompat.GoMath` | `math.Log1p`, `Sinh`, `Cosh`, `Tanh`, `Asinh`, `Acosh`, `Atanh` | portable Go on arm64. 36 fused sites, 19 witnessed. PORTING.md quirks 41-43 |
 | `PromSchema` | `schema/labels.go` | new target. `isMetadataLabel` + `Metadata`; `IgnoreOverriddenMetadataLabelScratchBuilder` deferred to Phase 8 |
@@ -965,7 +966,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 78 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 79 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

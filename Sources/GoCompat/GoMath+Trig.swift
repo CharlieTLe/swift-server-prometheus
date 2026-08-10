@@ -623,4 +623,65 @@ extension GoMath {
         let invLn10 = Double(bitPattern: 0x3FDB_CB7B_1526_E50E)
         return log(x) * invLn10
     }
+
+    /// Go: `math.Atan2` — the angle to `(x, y)`, with the quadrant resolved.
+    ///
+    /// Nine special cases before any arithmetic, and the order matters: `y == 0` is tested
+    /// *before* `x == 0`, so `atan2(0, 0)` is `+0` rather than `π/2`. Every result carries
+    /// `y`'s sign through `Copysign`, which is what makes `atan2(-0, -1)` `-π` and
+    /// `atan2(+0, -1)` `+π`.
+    ///
+    /// `Double(signOf:magnitudeOf:)` is `math.Copysign` exactly, NaN payloads included.
+    ///
+    /// The `y == 0` case's guard is `x >= 0 && !Signbit(x)`, which is belt and braces: `x >= 0`
+    /// is already false for `-0`… except that in Go `-0 >= 0` is **true**, so the `Signbit`
+    /// test is the one doing the work. Reproduced as written rather than simplified.
+    ///
+    /// Once the special cases are out of the way it is `Atan(y/x)` plus a quadrant shift, so it
+    /// inherits `atan`'s divergence from libm (PORTING.md quirks 39-40): the division rounds
+    /// first, then Go's own `satan` runs on the result.
+    @inlinable
+    public static func atan2(_ y: Double, _ x: Double) -> Double {
+        // Special cases, in Go's order.
+        if y.isNaN || x.isNaN {
+            // `goNaN`, not `Double.nan`: Go's payload is 1 and Swift's is 0, and the payload is
+            // observable — 34 corpus cases disagreed on exactly this.
+            return goNaN
+        }
+        if y == 0 {
+            if x >= 0 && !(x.sign == .minus) {
+                return Double(signOf: y, magnitudeOf: 0)
+            }
+            return Double(signOf: y, magnitudeOf: Double.pi)
+        }
+        if x == 0 {
+            return Double(signOf: y, magnitudeOf: Double.pi / 2)
+        }
+        if x.isInfinite {
+            if x > 0 {
+                if y.isInfinite {
+                    return Double(signOf: y, magnitudeOf: Double.pi / 4)
+                }
+                return Double(signOf: y, magnitudeOf: 0)
+            }
+            if y.isInfinite {
+                return Double(signOf: y, magnitudeOf: 3 * Double.pi / 4)
+            }
+            return Double(signOf: y, magnitudeOf: Double.pi)
+        }
+        if y.isInfinite {
+            return Double(signOf: y, magnitudeOf: Double.pi / 2)
+        }
+
+        // Call atan and determine the quadrant.
+        let q = atan(y / x)
+        if x < 0 {
+            if q <= 0 {
+                return q + Double.pi
+            }
+            return q - Double.pi
+        }
+        return q
+    }
+
 }
