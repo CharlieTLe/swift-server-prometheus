@@ -160,7 +160,12 @@ func runFnCase(_ input: FnIn) -> FnOut {
         // Experimental functions on, because `histogram_quantiles` is gated behind
         // that flag and the fixture needs its AST. The flag only widens which names
         // resolve, so nothing else in these corpora is affected.
-        let parser = Parser(options: Options(enableExperimentalFunctions: true))
+        let parser = Parser(
+            options: Options(
+                enableExperimentalFunctions: true,
+                // `resets`/`changes` read the `anchored` modifier off the AST, which
+                // only parses with the extended range selectors enabled.
+                enableExtendedRangeSelectors: true))
         guard let call = try? parser.parseExpr(source) as? Call else {
             preconditionFailure("fixture expr \(source) is not a parseable call")
         }

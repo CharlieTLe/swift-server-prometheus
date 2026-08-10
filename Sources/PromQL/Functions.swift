@@ -132,6 +132,12 @@ public final class EvalNodeHelper {
     /// reflection, which is why the corpus has a `delayed` axis.
     public var enableDelayedNameRemoval: Bool
 
+    /// Go: `StartTimestamps` — OTel start timestamps aligned with the matrix samples.
+    ///
+    /// Nil until Phases 6-7 bring the ST-aware selectors. `resets` reads it; see
+    /// ``isStartTimestampReset(_:_:_:_:)``.
+    public var startTimestamps: StartTimestamps?
+
     /// Go: `signatureToMetricWithBuckets` — classic histogram bucket groups for this
     /// step, keyed by the label set with `le` removed.
     ///
@@ -588,6 +594,7 @@ public let functionCalls: [String: FunctionCall] = [
     "clamp": funcClamp,
     "clamp_max": funcClampMax,
     "clamp_min": funcClampMin,
+    "changes": funcChanges,
     "cos": funcCos,
     "count_over_time": funcCountOverTime,
     "cosh": funcCosh,
@@ -628,6 +635,7 @@ public let functionCalls: [String: FunctionCall] = [
     "present_over_time": funcPresentOverTime,
     "quantile_over_time": funcQuantileOverTime,
     "rad": funcRad,
+    "resets": funcResets,
     "round": funcRound,
     "scalar": funcScalar,
     "sgn": funcSgn,

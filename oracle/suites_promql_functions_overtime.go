@@ -518,6 +518,146 @@ func genPromQLFunctionsOverTime(e *emitter) {
 		}
 	}
 
+	// --- resets and changes.
+	//
+	// Both walk the range sample by sample across BOTH kinds, and their merge loop is
+	// where the behaviour is. Equal timestamps across the kinds are excluded on
+	// purpose: they match neither of Go's two cases, so no index advances and Go loops
+	// FOREVER. The port raises a precondition there instead, which is exception 9's
+	// treatment of an unreachable-in-practice crash.
+	//
+	// `resets` counts a change of kind, a float decrease, a histogram DetectReset, or
+	// a start-timestamp reset. `changes` counts a change of kind, a float inequality
+	// (unless BOTH are NaN) or a histogram inequality — and never reads start
+	// timestamps at all.
+	//
+	// The `anchored` modifier drives pickFirstSampleIndices, so each case runs against
+	// both `[5m]` and `[5m] anchored`.
+	counterMatrices := [][][]fnSampleIn{
+		{},
+		{otSeries(metric, nil)},
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}})},
+		// Monotonic: no resets, every step a change.
+		{otSeriesRun(metric, 0, 6, 1)},
+		// One reset.
+		{otSeries(metric, []otPoint{{t: 1000, f: 5}, {t: 2000, f: 1}, {t: 3000, f: 3}})},
+		// Several, including equal values (a reset needs <, a change needs !=).
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 5}, {t: 2000, f: 5}, {t: 3000, f: 1}, {t: 4000, f: 1},
+			{t: 5000, f: 0}, {t: 6000, f: 7},
+		})},
+		// NaN: two in a row are NOT a change, but NaN after a number is, and a number
+		// after NaN is. And NaN is never less than anything, so no reset.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: math.NaN()}, {t: 3000, f: math.NaN()},
+			{t: 4000, f: 2},
+		})},
+		{otSeries(metric, []otPoint{{t: 1000, f: math.NaN()}, {t: 2000, f: math.NaN()}})},
+		// Signed zeros, which are equal but not identical.
+		{otSeries(metric, []otPoint{{t: 1000, f: 0}, {t: 2000, f: math.Copysign(0, -1)}})},
+		// Infinities.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: math.Inf(1)}, {t: 2000, f: math.Inf(1)}, {t: 3000, f: math.Inf(-1)},
+		})},
+		// Histograms only: ascending n is no reset, descending is.
+		{otSeries(metric, []otPoint{
+			{t: 1000, hist: "std/0"}, {t: 2000, hist: "std/1"}, {t: 3000, hist: "std/2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: 1000, hist: "std/2"}, {t: 2000, hist: "std/1"}, {t: 3000, hist: "std/0"},
+		})},
+		// Identical histograms: no reset AND no change.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}, {t: 2000, hist: "std/1"}})},
+		// A change of KIND, in both directions, which counts for both functions.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, hist: "std/1"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}, {t: 2000, f: 1}})},
+		// Kinds alternating, so the merge loop switches on every step.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, hist: "std/1"}, {t: 3000, f: 2},
+			{t: 4000, hist: "std/2"}, {t: 5000, f: 3},
+		})},
+		// A block of floats then a block of histograms, so the loop drains one list
+		// before the other.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 2}, {t: 3000, hist: "std/1"}, {t: 4000, hist: "std/2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: 1000, hist: "std/1"}, {t: 2000, hist: "std/2"}, {t: 3000, f: 1}, {t: 4000, f: 2},
+		})},
+		// Gauge-hinted histograms, where DetectReset behaves differently.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "gauge2"}, {t: 2000, hist: "gauge"}})},
+		// Custom buckets against exponential: not equal, and DetectReset has to cope.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "custom"}, {t: 2000, hist: "std/1"}})},
+		// Samples spread either side of the anchored range start, which for ts=1500
+		// and [5m] is 1500 - 300000 = -298500. Everything above is inside the range, so
+		// these reach the "no anchor" arm; the ones below reach the anchor arms.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -350_000, f: 2}, {t: -100_000, f: 3}, {t: 0, f: 4},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -350_000, hist: "std/1"},
+			{t: -100_000, hist: "std/2"},
+		})},
+		// Both kinds straddling the range start, so the anchor choice between them
+		// matters — the `floats[lastFloatLE].T >= histograms[lastHistLE].T` test.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -350_000, hist: "std/0"}, {t: -100_000, f: 3},
+			{t: 0, hist: "std/2"},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -400_000, hist: "std/0"}, {t: -350_000, f: 1}, {t: -100_000, f: 3},
+		})},
+		// Every sample BEFORE the range start: nothing to measure, so `found` is false
+		// and the result is absent rather than 0.
+		{otSeries(metric, []otPoint{{t: -400_000, f: 1}, {t: -350_000, f: 2}})},
+	}
+
+	// A float and a histogram at the SAME timestamp at the anchor position, which is
+	// what makes `pickFirstSampleIndices`' tie test (`>=`, so the float wins) visible
+	// at all.
+	//
+	// These run against `[5m] anchored` ONLY, and the reason is worth recording:
+	// with a plain `[5m]` the merge loop starts at (0, 0), reaches the two
+	// equal-timestamp samples, matches NEITHER of its two cases, advances no index —
+	// and Go loops forever. That is not a thought experiment; it hung the fixture
+	// generator. Anchored, the loop starts after the tie and terminates.
+	anchorTieMatrices := [][][]fnSampleIn{
+		{otSeries(metric, []otPoint{
+			{t: -350_000, f: 1}, {t: -350_000, hist: "std/0"}, {t: -100_000, f: 3},
+			{t: 0, f: 4},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -350_000, hist: "std/0"}, {t: -350_000, f: 1}, {t: -100_000, hist: "std/2"},
+		})},
+	}
+	for _, fn := range []string{"resets", "changes"} {
+		// The offset is part of `rangeStart`, so a selector carrying one moves the
+		// anchor — and without an offset case that term of the expression is dead.
+		for _, sel := range []string{
+			"[5m]", "[5m] anchored", "[5m] anchored offset 1m", "[10m] anchored",
+		} {
+			cases := counterMatrices
+			// Only `[5m] anchored` puts the range start (ts - 5m = -298500) *after* the
+			// tie at -350000, so the merge loop begins past it. A wider range or an
+			// offset moves the start earlier, `pickFirstSampleIndices` finds no anchor
+			// and returns (0, 0) — and then the loop reaches the equal timestamps and
+			// hangs. Empirically, not hypothetically.
+			if sel == "[5m] anchored" {
+				cases = append(append([][][]fnSampleIn{}, counterMatrices...), anchorTieMatrices...)
+			}
+			for _, m := range cases {
+				for _, delayed := range []bool{false, true} {
+					emit(fnIn{
+						Fn: fn, Delayed: delayed, Ts: "1500",
+						Expr:     fn + "(http_requests_total" + sel + ")",
+						Args:     [][]fnSampleIn{},
+						MatrixIn: m,
+					})
+				}
+			}
+		}
+	}
+
 	for _, fn := range names {
 		for _, m := range matrices {
 			for _, delayed := range []bool{false, true} {

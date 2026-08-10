@@ -277,7 +277,12 @@ func runFnCase(in fnIn) fnOut {
 		// Experimental functions ON: `histogram_quantiles` is gated behind that flag,
 		// and the fixture needs its AST. Nothing else in these corpora is affected —
 		// the flag only widens which names resolve.
-		p := parser.NewParser(parser.Options{EnableExperimentalFunctions: true})
+		p := parser.NewParser(parser.Options{
+			EnableExperimentalFunctions: true,
+			// `resets`/`changes` read `args[0].(*MatrixSelector).VectorSelector.Anchored`,
+			// and `anchored` only parses with the extended range selectors enabled.
+			EnableExtendedRangeSelectors: true,
+		})
 		parsed, err := p.ParseExpr(in.Expr)
 		if err != nil {
 			panic(fmt.Sprintf("fixture expr %q: %v", in.Expr, err))

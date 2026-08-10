@@ -946,6 +946,36 @@ changing behaviour.
     governs only the sample order. Exception 7's reasoning applies to every corpus
     that renders more than one annotation, not just to `promql/annotations-set`.
 
+57. **`resets`/`changes`' merge loop does not terminate when a float and a histogram
+    share a timestamp, and this was confirmed by hanging the fixture generator.** Each
+    iteration picks the next sample with two cases — float strictly earlier, or
+    histogram strictly earlier. An **equal** timestamp matches neither, so no index
+    advances, `curSample` keeps its previous contents, and the loop condition is still
+    true.
+
+    The port reproduces the selection faithfully and raises a `precondition` on the
+    unmatched case, so a corpus that reaches it fails loudly instead of hanging — the
+    same treatment exception 9 gives `sampleRing`'s three latent bugs.
+
+    Two consequences for the corpus, both discovered the hard way:
+
+    - equal-timestamp cases cannot be pinned at all, so they are excluded;
+    - a case that is *safe* under one selector is not safe under another. The
+      anchor-tie matrices (a float and a histogram sharing a timestamp **before** the
+      range start) are fine with `[5m] anchored`, where `pickFirstSampleIndices` starts
+      the loop past the tie — but `[10m] anchored` or `[5m] anchored offset 1m` moves
+      the range start earlier, finds no anchor, returns `(0, 0)`, and hangs. Those two
+      matrices therefore run against exactly one selector.
+
+    Also pinned here: the first-sample test is
+    `iFloat + iHistogram == 1 + firstFloat + firstHistogram`, which works because
+    exactly one index advances per iteration and their **sum** is a step counter.
+    Rewriting it as `== 1` breaks every anchored case.
+
+    And `changes` never reads `enh.StartTimestamps` while `resets` does — though with
+    start timestamps nil until Phases 6-7, that difference is currently unobservable
+    and is recorded rather than tested.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
