@@ -1055,6 +1055,124 @@ func genPromQLFunctionsOverTime(e *emitter) {
 		}
 	}
 
+	// --- rate/increase/delta over ANCHORED and SMOOTHED float ranges, i.e.
+	// `extendedRate`.
+	//
+	// Neither modifier scales by a factor the way `extrapolatedRate` does: the
+	// boundaries ARE the range, so `isRate` divides by the range and nothing else.
+	// What they do differ in is the boundary values — `anchored` uses the last sample
+	// at or before the start as-is, `smoothed` interpolates to both boundaries — so
+	// every case below runs against both, and the interesting shapes are the ones with
+	// samples STRADDLING each boundary.
+	//
+	// For ts=1500 and [5m], rangeStart is -298500 and rangeEnd is 1500.
+	//
+	// Histogram ranges are excluded: `extendedHistogramRate` is not ported and its
+	// branch raises a precondition.
+	extendedMatrices := [][][]fnSampleIn{
+		// One sample only, before the range: the `f[last].T <= rangeStart` exit.
+		{otSeries(metric, []otPoint{{t: -400_000, f: 5}})},
+		// One sample inside.
+		{otSeries(metric, []otPoint{{t: -100_000, f: 5}})},
+		// Straddling the START: one before, several inside. The left boundary is
+		// interpolated when smoothed and taken as-is when anchored.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -200_000, f: 5}, {t: -100_000, f: 9},
+		})},
+		// Straddling the END too, so the right boundary interpolates as well.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -200_000, f: 5}, {t: -100_000, f: 9},
+			{t: 100_000, f: 20},
+		})},
+		// Samples EXACTLY on each boundary, where the `<`/`<=` choices decide whether
+		// the sample is interpolated and whether it is excluded from the correction.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, f: 1}, {t: -100_000, f: 5}, {t: 1500, f: 9},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -298_500, f: 1}, {t: 1500, f: 9},
+		})},
+		// Entirely before the range end but starting after the range start.
+		{otSeries(metric, []otPoint{{t: -100_000, f: 1}, {t: -50_000, f: 5}})},
+		// The LAST sample exactly at rangeStart, which is the `<=` in the
+		// `f[last].T <= rangeStart` exit rather than a `<`.
+		{otSeries(metric, []otPoint{{t: -400_000, f: 1}, {t: -298_500, f: 5}})},
+		// A DECREASING pair whose first sample sits exactly on rangeStart. Interpolating
+		// there is a no-op for a gauge (Δt is 0) but not for a counter: `interpolate`
+		// zeroes y1 when y2 < y1, so the smoothed left boundary would become 0 instead
+		// of the sample's value. Without this the `<` versus `<=` in
+		// pickOrInterpolateLeft was invisible.
+		{otSeries(metric, []otPoint{
+			{t: -298_500, f: 10}, {t: -200_000, f: 2}, {t: -100_000, f: 6},
+		})},
+		// TWO samples after rangeEnd, so the smoothed search for `f[i].T >= rangeEnd`
+		// actually finds one and moves lastSampleIndex. With a single trailing sample
+		// the search is bounded out and the index does not move at all.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, f: 1}, {t: -100_000, f: 5}, {t: 100_000, f: 9},
+			{t: 200_000, f: 20},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -100_000, f: 5}, {t: 50_000, f: 9},
+			{t: 100_000, f: 12}, {t: 200_000, f: 30},
+		})},
+		// Entirely AFTER the range end, which is the smoothed-only
+		// `f[first].T > rangeEnd` exit.
+		{otSeries(metric, []otPoint{{t: 100_000, f: 1}, {t: 200_000, f: 5}})},
+		// A counter reset strictly inside, which the correction must add back once.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -250_000, f: 10}, {t: -200_000, f: 3},
+			{t: -100_000, f: 8}, {t: 100_000, f: 12},
+		})},
+		// A reset spanning the LEFT boundary, which `interpolate` folds in by zeroing
+		// y1 — so the correction must NOT count it again. That double-counting is
+		// invisible on a monotonic series.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 10}, {t: -200_000, f: 2}, {t: -100_000, f: 6},
+		})},
+		// A reset spanning the RIGHT boundary.
+		{otSeries(metric, []otPoint{
+			{t: -200_000, f: 2}, {t: -100_000, f: 9}, {t: 100_000, f: 1},
+		})},
+		// Resets at both boundaries.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 10}, {t: -200_000, f: 2}, {t: -100_000, f: 9},
+			{t: 100_000, f: 1},
+		})},
+		// Decreasing throughout: every step a reset.
+		{otSeriesAt(metric, -300_000, 50_000, 8, 100, -10)},
+		// Flat.
+		{otSeriesAt(metric, -300_000, 50_000, 8, 7, 0)},
+		// Evenly spaced across the whole range.
+		{otSeriesAt(metric, -298_000, 30_000, 11, 0, 10)},
+		// Sub-second spacing at the boundary, where the interpolation's Δt is small.
+		{otSeries(metric, []otPoint{
+			{t: -298_501, f: 1}, {t: -298_499, f: 5}, {t: 1499, f: 9}, {t: 1501, f: 11},
+		})},
+		// NaN and infinities across a boundary.
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: math.NaN()}, {t: -100_000, f: 5}, {t: 100_000, f: 9},
+		})},
+		{otSeries(metric, []otPoint{
+			{t: -400_000, f: 1}, {t: -100_000, f: math.Inf(1)}, {t: 100_000, f: 9},
+		})},
+	}
+	for _, fn := range []string{"rate", "increase", "delta"} {
+		for _, sel := range []string{
+			"[5m] anchored", "[5m] smoothed", "[2m] anchored", "[2m] smoothed",
+			"[5m] anchored offset 1m", "[5m] smoothed offset 1m",
+		} {
+			for _, m := range extendedMatrices {
+				emit(fnIn{
+					Fn: fn, Ts: "1500",
+					Expr:     fn + "(http_requests_total" + sel + ")",
+					Args:     [][]fnSampleIn{},
+					MatrixIn: m,
+				})
+			}
+		}
+	}
+
 	for _, fn := range names {
 		for _, m := range matrices {
 			for _, delayed := range []bool{false, true} {

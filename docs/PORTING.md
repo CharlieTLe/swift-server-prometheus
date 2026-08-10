@@ -1090,6 +1090,37 @@ changing behaviour.
     wrong". Order matters too: `{job!="a",job="b"}` sets `job` while
     `{job="b",job!="a"}` does not.
 
+63. **`anchored` and `smoothed` are different modifiers sharing one code path, and only
+    `smoothed` interpolates.** Both make the selector return samples from outside the
+    range; `extendedRate` then differs:
+
+    | | `anchored` | `smoothed` |
+    |---|---|---|
+    | left boundary | last sample at or before `rangeStart`, used as-is | **interpolated** to `rangeStart` |
+    | right boundary | last sample in the range | **interpolated** to `rangeEnd` |
+    | `lastSampleIndex` | `len(f) - 1` | searched back to the first sample at or after `rangeEnd` |
+    | early exits | `f[last].T <= rangeStart` | that, plus `f[first].T > rangeEnd` |
+
+    Neither scales by an extrapolation factor the way `extrapolatedRate` does — the
+    boundaries *are* the range, so `isRate` divides by the range and nothing else.
+
+    The counter-reset correction excludes **both** boundary samples on purpose:
+    `interpolate` already folds in a reset at the boundary it touches by zeroing `y1`
+    when `y2 < y1`, so including those samples would double-count. That is what the two
+    inward index walks before the slice are for, and getting them wrong is invisible on
+    a monotonic series.
+
+    An instructive non-finding: `pickOrInterpolateLeft`'s `<` versus `<=` on a sample
+    sitting exactly on `rangeStart` is **provably absorbed**. The interpolation's Δt is
+    0, so a gauge gets the same value; a counter gets 0 instead, and
+    `correctForCounterResets` starts its running comparison at `left`, so the smaller
+    `left` removes exactly one `+= prev`. The two cancel. Worth recording because the
+    control looks like a corpus gap and is not.
+
+    `extendedHistogramRate` remains unported — it needs `validateHistogramRange`, two
+    histogram interpolators, `correctForCounterResetsHistogram`, the add/sub annotation
+    wrappers and `annosFromInterpolationError`. Its branch raises a precondition.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
