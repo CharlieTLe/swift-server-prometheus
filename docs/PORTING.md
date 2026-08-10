@@ -185,6 +185,28 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     within the natives is the input vector's. The evaluator sorts the final result
     anyway, so none of this is observable from a query.
 
+14. **`rangeEval`'s multi-step series assembly ranges a Go map, so the port picks
+    insertion order.** `for _, ss := range seriess` iterates a
+    `map[uint64]seriesAndTimestamp`, so upstream's output matrix order at the end of a
+    range evaluation is randomised per run — the third instance of exception 7's
+    situation, after exception 13.
+
+    The port appends in **first-insertion order** (the order the label hash was first
+    seen in a result vector). That is one of the orders Go can produce and the only
+    deterministic choice available.
+
+    It is currently *provably* unobservable, which is what licenses the choice rather
+    than merely excusing it: `execEvalStmt`'s range tail runs `sort.Sort(mat)`, and no
+    ported consumer reads the assembly's order — a nested `rangeEval` gathers by
+    timestamp, and a multi-series matrix reaches a function through `evalSeries` rather
+    than through here. The negative control for it therefore survives, and the argument
+    above is the reason rather than a corpus gap.
+
+    That changes when the aggregations land: HANDOFF §5 records that an inner
+    expression's matrix order becomes `aggregation`'s `for si` order, which is the order
+    Kahan sums in. Drive those fixtures with an explicitly ordered input matrix rather
+    than through `rangeEval`.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -1440,6 +1462,44 @@ changing behaviour.
     existed with a comment saying exactly that, and the new code still reached for Swift's. The
     payload is observable because results are rendered as text — so a corpus that included the
     NaN grid caught in one run what review had already written down and missed.
+
+80. **A range query has no type tails, and `start == end` does not make it an instant query.**
+    `execEvalStmt`'s guard is `s.Start.Equal(s.End) && s.Interval == 0` — **both**. So a range
+    query whose start equals its end still takes the range branch, which returns the `Matrix`
+    unchanged whatever `s.Expr.Type()` says. `1` as a range query is a one-series matrix with a
+    point per step, not a `Scalar`; the instant path's vector/scalar/matrix switch has no
+    counterpart here. The range tail's only post-processing is `sort.Sort(mat)`.
+
+    Two consequences the corpus pins because they read as bugs otherwise:
+
+    * the **inverted range** (`end < start`) is an empty matrix rather than an error or a
+      single step. `eval` checks `ev.endTimestamp < ev.startTimestamp` *before* the expression
+      switch, so nothing is evaluated at all — including the `Call` arm, which is why
+      `sort(metric)` over an inverted range produces no sort warning either.
+    * the **sort-in-range-query warning** tests the *evaluator's own* timestamps, not which
+      entry point was called. `sort(vector(1))` is step-invariant, so `preprocessExpr` wraps it
+      and a child evaluator with `start == end` runs the `Call` arm — **no warning**, in a range
+      query. `sort(vector(time()))` is not step-invariant, because `time` is
+      at-modifier-unsafe, so it keeps the outer timestamps and warns. That pair was written the
+      other way round in a Swift-side invariant and the fixture said no.
+
+    `StepInvariantExpr`'s step duplication is only *visible* because of quirk 68's rewrite:
+    `setOffsetForAtModifier` measures `@` from the **start** time, so an evaluator that re-ran
+    `http_requests @ 60` per step would read a different sample each time. Upstream evaluates
+    once and copies the point, and three equal values at three timestamps is the difference.
+
+81. **`rangeEval` discards the last step's gathered inputs on the way out, and only a nested
+    `rangeEval` can see it.** The final `ev.currentSamples = originalNumSamples +
+    mat.TotalSamples()` drops the count `gatherVector` added during the last iteration — the
+    loop leaves `currentSamples` at `tempNumSamples + <last step's inputs>`. Nothing reads
+    `currentSamples` after a *top-level* `rangeEval`, so the line looks like tidying.
+
+    It is not: an **enclosing** `rangeEval` reads `currentSamples` as its own `tempNumSamples`
+    immediately after evaluating its arguments, so the leftover propagates into the outer
+    sample-limit accounting. `(time() + 1) + 1` under a tight `maxSamples` separates the two
+    spellings and nothing simpler does — `1` on the inside is step-invariant and gets a
+    one-step child evaluator instead. Companion to quirk 74's "the limit is enforced in two
+    places": the peak also depends on *nesting depth*, not just on the result.
 
 ## Not ported
 
