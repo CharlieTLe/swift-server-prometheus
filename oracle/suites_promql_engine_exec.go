@@ -691,6 +691,221 @@ func genPromQLExec(e *emitter) {
 		}
 	}
 
+	// --- AGGREGATIONS. The nine one-row-per-group operators, over shapes chosen so the grouping,
+	// the Kahan compensation and the histogram rejections are each visible.
+	//
+	// `by ()` with no labels hashes to 0 WITHOUT touching the metric, so `sum(x)` is one group;
+	// `without (...)` drops `__name__` on top of the named labels, in BOTH the key and the output
+	// labels, and by two different mechanisms.
+	aggSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "m", "job", "a", "inst", "1"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "m", "job", "a", "inst", "2"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "m", "job", "b", "inst", "1"}, [2]int64{0, 4}),
+		fs([]string{"__name__", "m", "job", "b", "inst", "2"}, [2]int64{0, 8}),
+		fs([]string{"__name__", "m", "job", "c", "inst", "1"}, [2]int64{0, 16}),
+	}
+	// Magnitudes that make Kahan compensation visible, and the magnitude MATTERS: `1e100` plus
+	// twenty 1s is indistinguishable either way, because `1e100 ± 20` is not representable — the
+	// compensation is computed and then rounded straight back off. At `1e16` the ULP is 2, so a
+	// compensation of 20 survives the final add and the two spellings differ. HANDOFF §3's "a
+	// short series pins the algebra and not the compensation", in its magnitude form.
+	aggKahan := []memSeriesInJSON{
+		{Labels: []string{"__name__", "k", "i", "00"}, T: []string{i64(0)},
+			ST: []string{i64(0)}, F: []string{fbits(1e16)}},
+	}
+	for i := 1; i <= 20; i++ {
+		aggKahan = append(aggKahan, memSeriesInJSON{
+			Labels: []string{"__name__", "k", "i", fmt.Sprintf("%02d", i)},
+			T:      []string{i64(0)}, ST: []string{i64(0)}, F: []string{fbits(1)},
+		})
+	}
+	// The same trick at a second magnitude, and alternating signs — the shape HANDOFF §3 records
+	// for `varianceOverTime`'s compensation.
+	aggKahan2 := []memSeriesInJSON{}
+	for i := 0; i < 30; i++ {
+		v := 1.0
+		if i%2 == 0 {
+			v = 1e17
+		}
+		aggKahan2 = append(aggKahan2, memSeriesInJSON{
+			Labels: []string{"__name__", "k2", "i", fmt.Sprintf("%02d", i)},
+			T:      []string{i64(0)}, ST: []string{i64(0)}, F: []string{fbits(v)},
+		})
+	}
+	// INEXACT values, which is what a fused multiply-add needs to be visible at all: with small
+	// integers both the product and the sum are exact and unfusing changes nothing (quirk 54).
+	aggInexact := []memSeriesInJSON{
+		{Labels: []string{"__name__", "ix", "i", "1"}, T: []string{i64(0)},
+			ST: []string{i64(0)}, F: []string{fbits(0.1)}},
+		{Labels: []string{"__name__", "ix", "i", "2"}, T: []string{i64(0)},
+			ST: []string{i64(0)}, F: []string{fbits(1.0 / 3.0)}},
+		{Labels: []string{"__name__", "ix", "i", "3"}, T: []string{i64(0)},
+			ST: []string{i64(0)}, F: []string{fbits(1e8 + 0.7)}},
+		{Labels: []string{"__name__", "ix", "i", "4"}, T: []string{i64(0)},
+			ST: []string{i64(0)}, F: []string{fbits(2.0 / 7.0)}},
+		{Labels: []string{"__name__", "ix", "i", "5"}, T: []string{i64(0)},
+			ST: []string{i64(0)}, F: []string{fbits(1e-9)}},
+	}
+	// Values that overflow a direct sum, which is what flips `avg` to its incremental mean. Two
+	// samples at MaxFloat64 * 0.6 sum to +Inf; their mean does not.
+	aggOverflow := []memSeriesInJSON{
+		{Labels: []string{"__name__", "ov", "i", "1"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(1.0e308)}},
+		{Labels: []string{"__name__", "ov", "i", "2"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(1.1e308)}},
+		{Labels: []string{"__name__", "ov", "i", "3"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(1.2e308)}},
+	}
+	// NaN and infinities, which seed `stdvar`/`stddev` with NaN and which `min`/`max` treat
+	// asymmetrically — a NaN seed is REPLACED by a real value, which needs the `|| IsNaN` clause.
+	aggSpecial := []memSeriesInJSON{
+		{Labels: []string{"__name__", "sp", "i", "1"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{"7ff8000000000001"}},
+		{Labels: []string{"__name__", "sp", "i", "2"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(5)}},
+		{Labels: []string{"__name__", "sp", "i", "3"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(3)}},
+	}
+	aggInf := []memSeriesInJSON{
+		{Labels: []string{"__name__", "inf", "i", "1"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{"7ff0000000000000"}},
+		{Labels: []string{"__name__", "inf", "i", "2"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(1)}},
+	}
+	// Series with DIFFERENT names, so `without()` and `by()` group them together where the
+	// `__name__` drop is what makes the labels collide.
+	aggNames := []memSeriesInJSON{
+		fs([]string{"__name__", "n1", "job", "a"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "n2", "job", "a"}, [2]int64{0, 2}),
+	}
+
+	aggCases := []struct {
+		query  string
+		series []memSeriesInJSON
+	}{
+		// The nine operators over one group.
+		{`sum(m)`, aggSeries},
+		{`avg(m)`, aggSeries},
+		{`min(m)`, aggSeries},
+		{`max(m)`, aggSeries},
+		{`count(m)`, aggSeries},
+		{`group(m)`, aggSeries},
+		{`stddev(m)`, aggSeries},
+		{`stdvar(m)`, aggSeries},
+		{`quantile(0.5, m)`, aggSeries},
+		{`quantile(0, m)`, aggSeries},
+		{`quantile(1, m)`, aggSeries},
+		{`quantile(0.25, m)`, aggSeries},
+		// The grouping. `by ()` is one group; `by (job)` is three; `without (inst)` drops
+		// `__name__` as well as `inst`.
+		{`sum by () (m)`, aggSeries},
+		{`sum by (job) (m)`, aggSeries},
+		{`sum by (inst) (m)`, aggSeries},
+		{`sum by (job, inst) (m)`, aggSeries},
+		{`sum by (nosuch) (m)`, aggSeries},
+		{`sum without (inst) (m)`, aggSeries},
+		{`sum without (job) (m)`, aggSeries},
+		{`sum without () (m)`, aggSeries},
+		{`sum without (job, inst) (m)`, aggSeries},
+		{`count by (job) (m)`, aggSeries},
+		{`avg by (job) (m)`, aggSeries},
+		{`quantile by (job) (0.5, m)`, aggSeries},
+		{`stddev by (job) (m)`, aggSeries},
+		// `without` groups two DIFFERENT metric names together, because it drops `__name__`.
+		{`sum without (job) ({__name__=~"n1|n2"})`, aggNames},
+		{`sum by (job) ({__name__=~"n1|n2"})`, aggNames},
+		{`sum({__name__=~"n1|n2"})`, aggNames},
+		// Kahan compensation: 1e100 plus three 1s. A naive sum loses the 1s entirely; the
+		// compensated one is added back at the end.
+		{`sum(k)`, aggKahan},
+		{`avg(k)`, aggKahan},
+		{`stddev(k)`, aggKahan},
+		{`stdvar(k)`, aggKahan},
+		{`sum(k2)`, aggKahan2},
+		{`avg(k2)`, aggKahan2},
+		{`stddev(k2)`, aggKahan2},
+		{`stdvar(k2)`, aggKahan2},
+		{`quantile(0.5, k2)`, aggKahan2},
+		// INEXACT values, for Welford's fused multiply-add. With small integers the product and
+		// the sum are both exact and unfusing it changes nothing.
+		{`stdvar(ix)`, aggInexact},
+		{`stddev(ix)`, aggInexact},
+		{`avg(ix)`, aggInexact},
+		{`sum(ix)`, aggInexact},
+		{`quantile(0.5, ix)`, aggInexact},
+		{`quantile(0.3, ix)`, aggInexact},
+		// A group of ONE series whose value is NaN or infinite, which is the only shape where the
+		// variance SEED is observable: with a second sample the Welford loop poisons the value to
+		// NaN anyway, so the seed only shows when `groupCount` stays 1.
+		{`stdvar by (i) (sp)`, aggSpecial},
+		{`stddev by (i) (sp)`, aggSpecial},
+		{`stdvar by (i) (inf)`, aggInf},
+		{`stddev by (i) (inf)`, aggInf},
+		// `group` seeds its value to 1, and `group(m)`'s first sample happens to BE 1 — so the
+		// seed is only visible per-group, where some group's first sample is not.
+		{`group by (job) (m)`, aggSeries},
+		{`group by (inst) (m)`, aggSeries},
+		{`group by (i) (sp)`, aggSpecial},
+		// The overflow switch to an incremental mean. The direct sum goes +Inf; the mean is
+		// finite, so a port that never switched would answer +Inf.
+		{`avg(ov)`, aggOverflow},
+		{`sum(ov)`, aggOverflow},
+		{`avg by (i) (ov)`, aggOverflow},
+		// NaN and infinity handling. `min`/`max` replace a NaN seed with a real value;
+		// `stdvar`/`stddev` are seeded to NaN by a NaN or infinite FIRST sample.
+		{`min(sp)`, aggSpecial},
+		{`max(sp)`, aggSpecial},
+		{`sum(sp)`, aggSpecial},
+		{`avg(sp)`, aggSpecial},
+		{`count(sp)`, aggSpecial},
+		{`stddev(sp)`, aggSpecial},
+		{`stdvar(sp)`, aggSpecial},
+		{`quantile(0.5, sp)`, aggSpecial},
+		{`min(inf)`, aggInf},
+		{`max(inf)`, aggInf},
+		{`stddev(inf)`, aggInf},
+		{`stdvar(inf)`, aggInf},
+		{`sum(inf)`, aggInf},
+		{`avg(inf)`, aggInf},
+		// A quantile outside [0, 1] and a NaN quantile, each with its own warning — and the
+		// warnings are NOT exclusive.
+		{`quantile(1.5, m)`, aggSeries},
+		{`quantile(-0.5, m)`, aggSeries},
+		{`quantile(NaN, m)`, aggSeries},
+		{`quantile(scalar(m{inst="1", job="a"}), m)`, aggSeries},
+		// An aggregation over a range function, and over another aggregation.
+		{`sum(rate(m[5m]))`, aggSeries},
+		{`sum by (job) (rate(m[5m]))`, aggSeries},
+		{`max(sum by (job) (m))`, aggSeries},
+		{`sum(sum by (job) (m))`, aggSeries},
+		{`count(count by (job) (m))`, aggSeries},
+		// An aggregation over a binop, and a binop over an aggregation.
+		{`sum(m + m)`, aggSeries},
+		{`sum by (job) (m) + on(job) sum by (job) (m)`, aggSeries},
+		{`sum(m) + 1`, aggSeries},
+		// An empty input: no groups, so no output and no error.
+		{`sum(nothing)`, aggSeries},
+		{`avg by (job) (nothing)`, aggSeries},
+		{`quantile(0.5, nothing)`, aggSeries},
+	}
+	for _, c := range aggCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
+		})
+	}
+	// The sample limit against an aggregation, which is checked per STEP after the whole
+	// aggregation — and `rangeEvalAgg` resets to `tempNumSamples` first, so the peak includes the
+	// input matrix the inner expression left behind.
+	for _, maxSamples := range []int{1, 2, 3, 4, 5, 6, 7, 8, 10, 12} {
+		for _, q := range []string{`sum(m)`, `sum by (job) (m)`, `count(m)`} {
+			emit(execIn{
+				Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+				MaxSamples: maxSamples, Series: aggSeries,
+			})
+		}
+	}
+
 	// A query that fails to build still comes back through Exec's Result, not as a panic.
 	for _, q := range []string{`1 +`, `foo[`, `sum(`} {
 		emit(execIn{Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute))})

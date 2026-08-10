@@ -1652,6 +1652,53 @@ changing behaviour.
     counter-reset collision, and a vector/scalar operation always has a nil right-hand histogram —
     so it is a no-op that is reproduced rather than simplified away.
 
+91. **The aggregation sorts its grouping labels IN PLACE on the AST node, and that is
+    observable.** `sortedGrouping := e.Grouping; slices.Sort(sortedGrouping)` shares the backing
+    array, so the node itself is reordered — and `Statement().String()` after `Exec` renders
+    `sum by (inst, job) (m)` for a query written `sum by (job, inst) (m)`.
+
+    The port sorted a *copy* first, on the reasoning that nothing downstream reads the unsorted
+    order and mutating the node was gratuitous. Two of 677 fixture cases disagreed. Same shape as
+    quirk 76's `setOffsetForAtModifier`: once `Statement()` is exposed, the AST is part of the
+    observable surface.
+
+92. **`avg` and `sum` start with a direct sum and switch to an incremental mean on overflow, and
+    the switch tests the value that *would have been stored*.** Upstream's thirty-line comment
+    explains why (direct mean is usually more accurate; it overflows for inputs the incremental
+    form handles). Three details are load-bearing:
+
+    * the test is `!math.IsInf(newV, 0)` on `kahansum.Inc`'s **result**, not on the running sum;
+    * `q = (groupCount - 1) / groupCount` scales the previous mean *and* its compensation, and both
+      products are rounded before the Kahan step — `util/kahansum` casts all three arguments
+      through `float64(...)` expressly to forbid fusing (prometheus/prometheus#16895);
+    * the final value is `mean + c` in incremental mode and `value/n + c/n` — **two divisions then
+      one add** — in direct mode. Not `(value + c) / n`.
+
+    `stdvar`/`stddev` are Welford, and the second `f - mean` reads the **updated** mean.
+    `engine.go:3838`'s `value += delta * (f - mean)` is the one FMA in the whole aggregation, so
+    the subtraction rounds first and only the product and the add share a rounding.
+
+    A NaN or infinite **first** sample seeds the variance with NaN rather than 0, so `stddev` over
+    a series containing an infinity is NaN. Only observable for a group of **one** series: with a
+    second sample the Welford loop poisons the value to NaN anyway.
+
+    And the magnitude matters for testing all of this. `1e100` plus twenty 1s is
+    indistinguishable from a naive sum, because `1e100 ± 20` is not representable and the
+    compensation is rounded straight back off. At `1e16` the ULP is 2, so a compensation of 20
+    survives the final add. HANDOFF §3's Kahan lesson in its magnitude form.
+
+93. **`min`/`max` need `|| math.IsNaN(current)` or a NaN group stays NaN forever.** The comparison
+    is `if group.floatValue < f || math.IsNaN(group.floatValue)`, and without the second clause a
+    group whose first sample was NaN never accepts a real value — every subsequent `<` against NaN
+    is false. `group` seeds its value to **1**, which is only visible per-group, where some
+    group's first sample is not itself 1.
+
+    `generateGroupingKey` and `generateGroupingLabels` are not each other's inverse.
+    `without (...)` hashes through `HashWithoutLabels`, which drops `__name__` *itself* on top of
+    the named labels — and `generateGroupingLabels` then has to delete `__name__` **explicitly**,
+    because `Del(grouping...)` would not. `by ()` with an empty list is a third case in both: the
+    key is 0 without touching the metric, and the labels are empty.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
