@@ -16,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **78 of the 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`), including both halves of the anchored/smoothed rate. Next: the four sorts (Go's pdqsort), then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`), the last four being the sorts — which needed Go's pdqsort and `natsort.Compare` ported first. Next: `engine.go`'s evaluator, then `promqltest` |
 | 6–10 | not started |
 
-Green as of this commit: **326,788 committed differential cases, 448 tests**, on both Swift 6.4
+Green as of this commit: **331,959 committed differential cases, 455 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -246,6 +246,14 @@ where I had written a plausible expectation and the fixture proved the implement
   controls into failures. Quirk 59. Alongside quirks 51 (magnitude for Kahan) and 54 (inexactness for
   fusion, cancellation for grouping), the rule is: **ask which *field* of the input each branch reads,
   and make sure two cases differ in it.**
+- **When a control cannot fail, finish the argument — sometimes the answer is "upstream's line is
+  dead", and sometimes it is "the corpus needs an INVALID input".** Two survivors in the sort sweep
+  were proofs: `breakPatterns`' `length >= 8` floor is unreachable because its only caller runs after
+  the `length <= 12` return, and `natsort.Compare`'s two `i == nChunksB-1` exits are redundant because
+  the next iteration returns the same `false`. A third was a real gap of an unusual kind:
+  `partialInsertionSort`'s `j >= 1` bound only differs from `j > a` when the comparator is
+  *inconsistent*, so no amount of well-behaved data could witness it — the corpus needed NaNs placed
+  inside a sub-range that starts above zero. Quirk 67.
 - **Two negative controls can protect each other, and then neither one failing means anything.**
   `pickOrInterpolateLeftHistogram`'s `<` versus `<=` survived every corpus shape — because
   `interpolateHistograms` short-circuits on `t == t1` and hands back `h1.Copy()`, which is exactly what
@@ -609,6 +617,9 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
 | `PromQL` | `promql/functions.go`'s float-only range aggregations | `aggrOverTime`, `compareOverTime`, `varianceOverTime`, `quantile_over_time`, `mad_over_time` and the 13 entries around them. Quirks 50-52 |
 | `PromQL` | `promql/functions.go`'s `extendedRate` | plus `interpolate`, `pickOrInterpolateLeft`/`Right`, `correctForCounterResets`. Quirk 63 |
+| `GoCompat.GoSort` | Go's `sort.Sort` pdqsort (`src/sort/zsortinterface.go` @ go1.26.5) | one routine covers `sort.Sort`, `sort.Reverse` and `slices.SortFunc`; `sort.Stable` is not ported. Pinned to a Go TOOLCHAIN. Quirks 66-67 |
+| `GoCompat.GoNatsort` | `github.com/facette/natsort`'s `Compare` + `chunkify` | the package's own `Sort` has no caller. Quirks 66-67 |
+| `PromQL` | `promql/functions.go`'s four sorts | `sort`, `sort_desc`, `sort_by_label`, `sort_by_label_desc`, plus `filterFloats` and the two `vectorBy*ValueHeap` comparators. **82 of 82.** Quirks 66-67 |
 | `PromQL` | `promql/functions.go`'s `extendedHistogramRate` | plus `interpolateHistograms`, both histogram interpolators, `validateHistogramRange`, `correctForCounterResetsHistogram`, the add/sub annotation wrappers and `annosFromInterpolationError`. Quirks 64-65 |
 | `PromQL` | `promql/functions.go`'s `absent` | plus `createLabelsForAbsentFunction`. 78 of the 82 possible entries. Quirk 62 |
 | `PromQL` | `promql/functions.go`'s `rate`/`increase`/`delta` | `extrapolatedRate` and `histogramRate`. `extendedRate` (anchored/smoothed) deferred. 77 of 89. Quirk 61 |
@@ -948,7 +959,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 65 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 67 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

@@ -1176,6 +1176,49 @@ changing behaviour.
     sample, the `sort.Search` bound above, and `right.Copy()` — which Swift's value
     semantics make unobservable by construction.
 
+66. **A sorting ALGORITHM is part of the contract, because two PromQL comparators are not
+    orderings.** `sort.Sort` and `slices.SortFunc` are unstable, so the order of elements
+    a comparator calls equal is whatever the algorithm leaves behind — and
+
+    * `vectorByValueHeap.Less` is `if IsNaN(vi) { return true }; return vi < vj`, so
+      `Less(i,j)` and `Less(j,i)` are both true for two NaNs;
+    * `natsort.Compare("a1", "a01")` and `Compare("a01", "a1")` are both true, so
+      `sort_by_label`'s comparator returns -1 in both directions. `Compare(x, x)` is also
+      true for any non-empty x.
+
+    With an inconsistent comparator the output is not "some sorted permutation" — it is
+    *that algorithm's* permutation, and Swift's `sort(by:)` has undefined behaviour on
+    such a predicate rather than merely a different answer. So Go's pdqsort is ported
+    verbatim in `GoCompat/GoSort.swift`. One index-based routine covers both of Go's
+    variants: `src/sort/zsortinterface.go` and `src/slices/zsortanyfunc.go` are generated
+    from one template and differ only in how the comparison is spelled.
+
+    `sort` and `sort_desc` are each a **double negative** —
+    `sort.Sort(sort.Reverse(vectorByReverseValueHeap(v)))` and
+    `sort.Sort(sort.Reverse(vectorByValueHeap(v)))` — and collapsing either into a single
+    comparator moves the NaNs and changes the permutation of ties.
+
+    `Fixtures/gocompat/sort.jsonl` is therefore pinned to a **Go toolchain**, not to
+    prometheus v3.13.2: the tie-break order is the standard library's. It records the
+    permutation *and* the Less/Swap call counts, so a port that reaches the right order by
+    another route fails the counts.
+
+67. **`partialInsertionSort`'s left shift is bounded by 1, not by the range start — and it
+    matters.** Upstream's `for j := i - 1; j >= 1; j--` can compare and swap `data[a-1]`,
+    outside the sub-range it was handed. For a *consistent* comparator that is
+    unobservable: when `partialInsertionSort` runs with `a > 0`, `data[a-1]` is a pivot
+    partitioning has already placed at or below everything in `[a, b)`, so the loop stops
+    immediately. Telling the two spellings apart needs an **inconsistent** comparator —
+    a NaN inside a sub-range that starts above zero — which is why the corpus carries
+    `nanTail`, `nanHead` and `nearlySortedNaN` shapes. It is not a tidy-up.
+
+    Two other findings from the same sweep. `breakPatterns`' `length >= 8` guard is dead
+    by construction: its only caller runs after the `length <= 12` insertion-sort return,
+    so the argument is always at least 13. And both of `natsort.Compare`'s
+    `else if i == nChunksB-1 { return false }` exits are redundant — the alternative is
+    `continue`, and the next iteration's `if i >= nChunksB { return false }` then holds. In
+    each case a negative control *cannot* fail, and that is a proof rather than a gap.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

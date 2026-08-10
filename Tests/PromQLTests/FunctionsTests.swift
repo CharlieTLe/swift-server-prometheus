@@ -50,6 +50,18 @@ struct FunctionsElementwiseTests {
         }
     }
 
+    @Test("the four sorts match Go on every committed case, order included")
+    func sortsMatchGo() throws {
+        // Note these cases are NOT `sorted`: the output ORDER is the behaviour under
+        // test, so re-sorting the samples would delete it.
+        try Fixtures.check(
+            "promql/functions-sort.jsonl",
+            FixtureCase<FnIn, FnOut>.self
+        ) { input in
+            runFnCase(input)
+        }
+    }
+
     @Test("the float-only range aggregations match Go on every committed case")
     func overTimeMatchesGo() throws {
         try Fixtures.check(
@@ -80,14 +92,11 @@ struct FunctionsElementwiseTests {
 
         // The deferred set, by name and with its owning slice. Each of these parses
         // and type-checks today and simply has no implementation yet.
-        let deferred: Set<String> = [
-            // Still deferred: histogram Kahan arithmetic (sum/avg), vectorByValueHeap
-            // (mad/quantile), the start-timestamp machinery (resets/changes), and the
-            // rate family's interpolate/correctForCounterResets.
-            // Sorts: need Go's pdqsort, because the two sorts are observably
-            // different and neither comparator is a strict weak ordering.
-            "sort", "sort_by_label", "sort_by_label_desc", "sort_desc",
-        ]
+        // Empty: every one of Go's 82 non-nil keys now has a body. Kept as a set rather
+        // than deleted, because the assertion below is what tells the next slice whether
+        // upstream grew a function — an empty deferred set makes that a strict equality
+        // against `nilInGo` alone.
+        let deferred: Set<String> = []
 
         // Seven of Go's keys map to **nil**, so they can never have an entry here:
         // `start`/`end`/`step`/`range` are folded into a NumberLiteral by
