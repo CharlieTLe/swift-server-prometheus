@@ -16,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`), the last four being the sorts — which needed Go's pdqsort and `natsort.Compare` ported first. `engine.go` has started: `FindMinMaxTime` and the `limit_ratio` sampler. Next: the evaluator, then `promqltest` |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`), the last four being the sorts — which needed Go's pdqsort and `natsort.Compare` ported first. `engine.go` has started: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime` and the `limit_ratio` sampler. Next: `Exec` and the evaluator, then `promqltest` |
 | 6–10 | not started |
 
-Green as of this commit: **332,675 committed differential cases, 464 tests**, on both Swift 6.4
+Green as of this commit: **332,995 committed differential cases, 470 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -617,6 +617,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
 | `PromQL` | `promql/functions.go`'s float-only range aggregations | `aggrOverTime`, `compareOverTime`, `varianceOverTime`, `quantile_over_time`, `mad_over_time` and the 13 entries around them. Quirks 50-52 |
 | `PromQL` | `promql/functions.go`'s `extendedRate` | plus `interpolate`, `pickOrInterpolateLeft`/`Right`, `correctForCounterResets`. Quirk 63 |
+| `PromQL` | `promql/engine.go`'s `Engine`, `EngineOpts`, `NewEngine`, `QueryOpts`, `newQuery`, `validateOpts`, `NewInstantQuery`/`NewRangeQuery` | everything before `Exec`. No metrics, no `ActiveQueryTracker`, no logger — see PORTING.md. Quirks 70-71 |
 | `PromQL` | `promql/engine.go`'s `FindMinMaxTime`, `getTimeRangesForSelector`, `subqueryTimes` | the query planner's time arithmetic — the first of engine.go. Quirks 68-69 |
 | `PromQL` | `promql/engine.go`'s `RatioSampler`/`HashRatioSampler` | `limit_ratio`'s determinism, which rests on `Labels.Hash` (ADR-1). Quirk 68 |
 | `GoCompat.GoSort` | Go's `sort.Sort` pdqsort (`src/sort/zsortinterface.go` @ go1.26.5) | one routine covers `sort.Sort`, `sort.Reverse` and `slices.SortFunc`; `sort.Stable` is not ported. Pinned to a Go TOOLCHAIN. Quirks 66-67 |
@@ -961,7 +962,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 69 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 71 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

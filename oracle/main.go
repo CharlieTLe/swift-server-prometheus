@@ -188,6 +188,9 @@ var suites = map[string]func(*emitter){
 	// See oracle/suites_promql_engine_range.go.
 	"promql/minmaxtime":   genPromQLMinMaxTime,
 	"promql/ratiosampler": genPromQLRatioSampler,
+	// Phase 5: engine.go's front door — NewInstantQuery/NewRangeQuery up to but not
+	// including Exec. See oracle/suites_promql_engine_newquery.go.
+	"promql/newquery": genPromQLEngineNewQuery,
 }
 
 func main() {
