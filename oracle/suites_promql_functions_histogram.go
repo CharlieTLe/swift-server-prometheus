@@ -105,6 +105,23 @@ func histNaNSum() *histogram.FloatHistogram {
 	}
 }
 
+// histGauge and histGauge2 carry CounterResetHint = GaugeType, which is the ONLY
+// way irate's not-a-counter warning and idelta's not-a-gauge warning can be told
+// apart — every other shape here is a counter, so the two tests looked identical
+// until these existed. Two of them, so a case can mix a gauge with a counter and
+// reach the `either` half of each condition.
+func histGauge() *histogram.FloatHistogram {
+	h := genTestHistogram(1).ToFloat(nil)
+	h.CounterResetHint = histogram.GaugeType
+	return h
+}
+
+func histGauge2() *histogram.FloatHistogram {
+	h := genTestHistogram(3).ToFloat(nil)
+	h.CounterResetHint = histogram.GaugeType
+	return h
+}
+
 // histNegativeOnly has all its observations below zero, which is the other branch
 // of the NaN-skew check.
 func histNegativeOnly() *histogram.FloatHistogram {

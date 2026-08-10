@@ -124,9 +124,10 @@ type fnIn struct {
 	// enh.Out seeded non-empty, to pin which bodies append to it and which ignore
 	// it. Empty in every case that models a real query.
 	Seed []fnSampleIn `json:"seed"`
-	// Sort the output samples and annotations before recording them. Set for the
-	// histogram family, whose classic-histogram results come out of a Go MAP and so
-	// have no order to be exact against. PORTING.md exception 13.
+	// Sort the output SAMPLES before recording them. Set for the histogram family,
+	// whose classic-histogram results come out of a Go MAP and so have no order to be
+	// exact against. PORTING.md exception 13. Annotations are sorted unconditionally —
+	// see runFnCase.
 	Sorted bool `json:"sorted,omitempty"`
 }
 
@@ -134,11 +135,15 @@ type fnSampleOut struct {
 	Metric string `json:"metric"`
 	T      string `json:"t"`
 	F      string `json:"f"`
-	// The FloatHistogram's String(), or "" when the sample carries none. Always ""
-	// in this slice — no body here emits a histogram — so a port that passes one
-	// through fails here.
-	Hist     string `json:"hist"`
-	DropName bool   `json:"dropName"`
+	// The FloatHistogram's String(), or "" when the sample carries none.
+	Hist string `json:"hist"`
+	// The CounterResetHint, and the bucket layout, which String() does NOT print —
+	// so a body that fails to force the hint to Gauge, or skips `Compact`, would be
+	// invisible without these. Two negative controls found exactly that. -1 and ""
+	// when the sample carries no histogram.
+	HistHint    int    `json:"histHint"`
+	HistBuckets string `json:"histBuckets"`
+	DropName    bool   `json:"dropName"`
 }
 
 type fnOut struct {
@@ -149,6 +154,16 @@ type fnOut struct {
 }
 
 // --------------------------------------------------------------------- helpers
+
+// fnRenderBuckets renders the parts of a FloatHistogram that String() omits: the
+// schema, the zero bucket, and both span/bucket lists. Without it a missing
+// `Compact` or an unforced CounterResetHint passes unnoticed.
+func fnRenderBuckets(h *histogram.FloatHistogram) string {
+	out := fmt.Sprintf("s=%d zt=%v zc=%v cv=%v", h.Schema, h.ZeroThreshold, h.ZeroCount, h.CustomValues)
+	out += fmt.Sprintf(" ps=%v pb=%v", h.PositiveSpans, h.PositiveBuckets)
+	out += fmt.Sprintf(" ns=%v nb=%v", h.NegativeSpans, h.NegativeBuckets)
+	return out
+}
 
 // fnNamedHistogram builds one of the named shapes an fnSampleIn can ask for. The
 // Swift wire transcribes the same four; a divergence shows up on the first case.
@@ -164,6 +179,10 @@ func fnNamedHistogram(name string) *histogram.FloatHistogram {
 		return histNaNSum()
 	case "negonly":
 		return histNegativeOnly()
+	case "gauge":
+		return histGauge()
+	case "gauge2":
+		return histGauge2()
 	default:
 		var n int64
 		if _, err := fmt.Sscanf(name, "std/%d", &n); err != nil {
@@ -197,15 +216,21 @@ func fnRenderVector(v promql.Vector) []fnSampleOut {
 	out := make([]fnSampleOut, 0, len(v))
 	for _, s := range v {
 		hist := ""
+		hint := -1
+		buckets := ""
 		if s.H != nil {
 			hist = s.H.String()
+			hint = int(s.H.CounterResetHint)
+			buckets = fnRenderBuckets(s.H)
 		}
 		out = append(out, fnSampleOut{
-			Metric:   s.Metric.String(),
-			T:        i64(s.T),
-			F:        fbits(s.F),
-			Hist:     hist,
-			DropName: s.DropName,
+			Metric:      s.Metric.String(),
+			T:           i64(s.T),
+			F:           fbits(s.F),
+			Hist:        hist,
+			HistHint:    hint,
+			HistBuckets: buckets,
+			DropName:    s.DropName,
 		})
 	}
 	return out
@@ -271,6 +296,13 @@ func runFnCase(in fnIn) fnOut {
 	// invisible. Four negative controls found that gap.
 	warnings, infos := annos.AsStrings(in.Expr, 0, 0)
 	strs := append(append([]string{}, warnings...), infos...)
+	// Annotations are ALWAYS sorted, whatever `Sorted` says. `Annotations` is a Go
+	// map, so AsStrings' order is randomised per run and there is nothing to be
+	// byte-exact against (PORTING.md exception 7). A case with two annotations made
+	// this fixture differ run to run until it was sorted here — which is precisely
+	// the "a fixture whose own output is nondeterministic is worse than no fixture"
+	// trap in docs/HANDOFF.md §4, caught by verify-fixtures.sh.
+	sortStrings(strs)
 	samples := fnRenderVector(got)
 	if in.Sorted {
 		sort.Slice(samples, func(i, j int) bool {
@@ -279,7 +311,6 @@ func runFnCase(in fnIn) fnOut {
 			}
 			return samples[i].F < samples[j].F
 		})
-		sortStrings(strs)
 	}
 	return fnOut{Samples: samples, Annos: strs}
 }

@@ -901,6 +901,51 @@ changing behaviour.
     `linearRegression`'s `i > 0` guard on the `constY` test (at `i == 0` the sample
     *is* `initY`, so the comparison is false either way).
 
+55. **`irate` and `idelta`'s two-sample selection is a hand-written merge, not a
+    sort, and its equal-timestamp case is deliberate.** `instantValue` takes the last
+    two floats in order, then merges the last two histograms in with a four-way
+    switch: a histogram older than `ss[0]` is **discarded**, one newer than `ss[1]`
+    shifts `ss[1]` down, and everything else — *including an equal timestamp* —
+    overwrites `ss[0]`. Upstream's comment calls that "a correct order, even in the
+    (irregular) case of equal timestamps".
+
+    `isRate` then flips almost every decision, and the two hint tests are **not**
+    mirror images:
+
+    | | `irate` | `idelta` |
+    |---|---|---|
+    | float counter reset | result stays at `ss[1]` — the raw newer value | subtracted anyway |
+    | hint is `GaugeType` | warns (not a counter) | — |
+    | hint is *not* `GaugeType` | — | warns (not a gauge) |
+    | histogram counter reset | subtraction skipped | subtracted anyway |
+    | result | divided by the interval in seconds | left as a difference |
+
+    The float-reset case is the one to get right: the result is left at `ss[1]`, not
+    zeroed and not subtracted, which is why `resultSample` is seeded from `ss[1]`.
+
+    Every annotation here is reported against `args.PositionRange()` — the range of
+    the whole `Expressions` slice, not of `args[0]`.
+
+56. **A fixture that renders a histogram with `String()` alone cannot see the hint or
+    the bucket layout.** `FloatHistogram.String()` prints the count, the sum and the
+    bucket *bounds*, but not `CounterResetHint`, the schema, the zero bucket or the
+    spans. So `instantValue` failing to force the result's hint to `GaugeType`, and
+    skipping `Compact` entirely, were both invisible — three negative controls passed
+    that should not have.
+
+    `promql/functions-*` now emit `histHint` and a `histBuckets` rendering of the
+    schema, zero bucket, custom values and both span/bucket lists alongside
+    `String()`. The same gap is already recorded for `promql/histogram-stats`
+    (docs/HANDOFF.md §5), which carries `CounterResetHint` as its own field for
+    exactly this reason — **the lesson did not transfer automatically to the next
+    corpus, and that is worth noticing.**
+
+    Relatedly, `verify-fixtures.sh` caught this corpus being **nondeterministic**: a
+    case with two annotations recorded them in Go's map order, so the file differed
+    between regenerations. Annotations are now sorted unconditionally, and `Sorted`
+    governs only the sample order. Exception 7's reasoning applies to every corpus
+    that renders more than one annotation, not just to `promql/annotations-set`.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

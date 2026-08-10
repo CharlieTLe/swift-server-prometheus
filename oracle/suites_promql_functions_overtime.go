@@ -419,6 +419,105 @@ func genPromQLFunctionsOverTime(e *emitter) {
 		MatrixIn: regressionMatrices[5],
 	})
 
+	// --- irate and idelta.
+	//
+	// The two-sample selection is the whole function, and the four-way histogram merge
+	// is where it lives. These matrices exist to reach every arm of it: a histogram
+	// older than both floats (discarded), newer than both (shifts ss[1] down), between
+	// them, and at an EQUAL timestamp — which lands ss[0] = histogram, ss[1] = float
+	// and so produces a mixed-kind warning rather than a value.
+	//
+	// The hint tests are not mirror images: irate warns if EITHER histogram is a
+	// gauge, idelta warns if either is NOT one. Every hint combination is here.
+	instantMatrices := [][][]fnSampleIn{
+		{},
+		// Fewer than two samples of any kind: nothing.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}})},
+		// Two floats, rising: a plain rate.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, f: 5}})},
+		// More than two, so only the last two are read.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 100}, {t: 2000, f: 1}, {t: 3000, f: 5}, {t: 4000, f: 11},
+		})},
+		// A counter RESET between the last two: irate leaves ss[1], idelta subtracts.
+		{otSeries(metric, []otPoint{{t: 1000, f: 10}, {t: 2000, f: 3}})},
+		// Equal values, so the difference is zero.
+		{otSeries(metric, []otPoint{{t: 1000, f: 7}, {t: 2000, f: 7}})},
+		// NaN, which is neither less than nor greater than anything.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, f: math.NaN()}})},
+		{otSeries(metric, []otPoint{{t: 1000, f: math.NaN()}, {t: 2000, f: 1}})},
+		// Infinities.
+		{otSeries(metric, []otPoint{{t: 1000, f: math.Inf(-1)}, {t: 2000, f: math.Inf(1)}})},
+		// Sub-second and multi-second intervals, which the per-second division scales.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 1001, f: 2}})},
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 61000, f: 2}})},
+		// EQUAL timestamps between the last two floats: sampledInterval is 0, so
+		// nothing is returned at all.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 1000, f: 5}})},
+		// Two histograms.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}, {t: 2000, hist: "std/3"}})},
+		// A histogram counter reset (n descending), which irate skips and idelta does
+		// not.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/3"}, {t: 2000, hist: "std/1"}})},
+		// Custom buckets on both sides, and mismatched against exponential — the
+		// incompatible-schema warning.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "custom"}, {t: 2000, hist: "custom"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}, {t: 2000, hist: "custom"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "custom"}, {t: 2000, hist: "std/1"}})},
+		// A mix of a float and a histogram as the last two: the warning path.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, hist: "std/1"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}, {t: 2000, f: 1}})},
+		// The four-way merge. Two floats plus a histogram older than both: discarded,
+		// so the floats win.
+		{otSeries(metric, []otPoint{
+			{t: 500, hist: "std/1"}, {t: 1000, f: 1}, {t: 2000, f: 5},
+		})},
+		// A histogram NEWER than both floats: it becomes ss[1] and the newer float
+		// becomes ss[0], so the result is mixed.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 5}, {t: 3000, hist: "std/1"},
+		})},
+		// A histogram BETWEEN the two floats: it overwrites ss[0].
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 1500, hist: "std/1"}, {t: 2000, f: 5},
+		})},
+		// Equal timestamps across the kinds, the "irregular" case upstream calls out.
+		{otSeries(metric, []otPoint{{t: 1000, f: 1}, {t: 2000, f: 5}, {t: 2000, hist: "std/1"}})},
+		// Two histograms and two floats, all four in play.
+		{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 5}, {t: 3000, hist: "std/1"}, {t: 4000, hist: "std/3"},
+		})},
+		// With the metadata labels, so the warnings' metric name is visible.
+		{otSeries(withMetadata, []otPoint{{t: 1000, f: 1}, {t: 2000, hist: "std/1"}})},
+		// GAUGE-hinted histograms, in every combination with a counter. irate warns
+		// when EITHER is a gauge and idelta when either is NOT, so the two conditions
+		// are indistinguishable until a gauge exists at all.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "gauge"}, {t: 2000, hist: "gauge2"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "gauge"}, {t: 2000, hist: "std/3"}})},
+		{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}, {t: 2000, hist: "gauge2"}})},
+		// A gauge pair in descending order, so the reset detection and the hint
+		// warnings interact.
+		{otSeries(metric, []otPoint{{t: 1000, hist: "gauge2"}, {t: 2000, hist: "gauge"}})},
+	}
+	for _, fn := range []string{"irate", "idelta"} {
+		for _, m := range instantMatrices {
+			if len(m) == 0 {
+				// instantValue indexes vals[0] before any guard, so an empty matrix
+				// panics in Go too. Not a case, and noted in the port.
+				continue
+			}
+			for _, delayed := range []bool{false, true} {
+				emit(fnIn{
+					Fn: fn, Delayed: delayed, Ts: "1500",
+					Expr:     fn + "(http_requests_total[5m])",
+					Args:     [][]fnSampleIn{},
+					MatrixIn: m,
+				})
+			}
+		}
+	}
+
 	for _, fn := range names {
 		for _, m := range matrices {
 			for _, delayed := range []bool{false, true} {

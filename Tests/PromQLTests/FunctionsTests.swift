@@ -85,7 +85,7 @@ struct FunctionsElementwiseTests {
             // (mad/quantile), the start-timestamp machinery (resets/changes), and the
             // rate family's interpolate/correctForCounterResets.
             "avg_over_time", "sum_over_time", "changes", "resets",
-            "delta", "idelta", "increase", "irate", "rate",
+            "delta", "increase", "rate",
             // Sorts: need Go's pdqsort, because the two sorts are observably
             // different and neither comparator is a strict weak ordering.
             "sort", "sort_by_label", "sort_by_label_desc", "sort_desc",

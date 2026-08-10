@@ -8,6 +8,7 @@
 // so the generator is transcribed once.
 //===----------------------------------------------------------------------===//
 
+import GoCompat
 import PromHistogram
 import PromLabels
 import PromQLParser
@@ -62,9 +63,13 @@ struct FnSampleOut: Decodable, Equatable, Sendable {
     var metric: String
     var t: String
     var f: String
-    /// The histogram's `description`, or "" when the sample carries none. Always ""
-    /// in this slice, so a port that passes one through fails here.
+    /// The histogram's `description`, or "" when the sample carries none.
     var hist: String
+    /// The `counterResetHint`, and the bucket layout, which `description` does **not**
+    /// print — so a body that fails to force the hint to gauge, or skips `compact`,
+    /// would be invisible without these.
+    var histHint: Int
+    var histBuckets: String
     var dropName: Bool
 }
 
@@ -123,6 +128,8 @@ private func fnRenderVector(_ v: Vector) -> [FnSampleOut] {
             t: statsI64(s.t),
             f: statsHexBits(s.f),
             hist: s.h?.description ?? "",
+            histHint: s.h.map { Int($0.counterResetHint.rawValue) } ?? -1,
+            histBuckets: s.h.map(fnRenderBuckets) ?? "",
             dropName: s.dropName
         )
     }
@@ -166,18 +173,40 @@ func runFnCase(_ input: FnIn) -> FnOut {
     let (warnings, infos) = annos.asStrings(
         query: input.expr ?? "", maxWarnings: 0, maxInfos: 0)
     var samples = fnRenderVector(got)
-    var strings = warnings + infos
+    // Annotations are ALWAYS sorted: `Annotations` is a Go map, so upstream's order
+    // is randomised per run and the fixture would otherwise differ between
+    // regenerations. `sorted` governs the samples only.
+    let strings = (warnings + infos).sorted()
     if input.sorted == true {
         samples.sort {
             if $0.metric != $1.metric { return $0.metric < $1.metric }
             return $0.f < $1.f
         }
-        strings.sort()
     }
     return FnOut(samples: samples, annos: strings)
 }
 
-/// The four named histogram shapes `FnSampleIn.histRaw` can ask for, transcribed
+/// Renders the parts of a `FloatHistogram` that `description` omits: the schema, the
+/// zero bucket, and both span/bucket lists. Mirrors the oracle's `fnRenderBuckets`;
+/// without it a missing `compact` or an unforced hint passes unnoticed.
+func fnRenderBuckets(_ h: FloatHistogram) -> String {
+    func spans(_ ss: [Span]) -> String {
+        "[" + ss.map { "{\($0.offset) \($0.length)}" }.joined(separator: " ") + "]"
+    }
+    func floats(_ fs: [Double]) -> String {
+        "[" + fs.map { goFmtFloat($0) }.joined(separator: " ") + "]"
+    }
+    var out = "s=\(h.schema) zt=\(goFmtFloat(h.zeroThreshold)) zc=\(goFmtFloat(h.zeroCount))"
+    out += " cv=\(floats(h.customValues ?? []))"
+    out += " ps=\(spans(h.positiveSpans)) pb=\(floats(h.positiveBuckets))"
+    out += " ns=\(spans(h.negativeSpans)) nb=\(floats(h.negativeBuckets))"
+    return out
+}
+
+/// Go's `%v` for a float64, which `fmt` renders with `strconv`'s shortest form.
+private func goFmtFloat(_ f: Double) -> String { GoFloat.formatG(f) }
+
+/// The named histogram shapes `FnSampleIn.histRaw` can ask for, transcribed
 /// from the oracle. `genTestHistogram` comes from HistogramStatsWire.swift.
 func fnNamedHistogram(_ name: String) -> FloatHistogram {
     switch name {
@@ -221,6 +250,17 @@ func fnNamedHistogram(_ name: String) -> FloatHistogram {
         h.sum = .nan
         h.positiveSpans = [Span(offset: 0, length: 3)]
         h.positiveBuckets = [2, 5, 3]
+        return h
+    case "gauge":
+        // The only shapes with a gauge hint. irate warns when EITHER histogram is a
+        // gauge and idelta when either is NOT, so the two conditions are
+        // indistinguishable until one exists.
+        var h = genTestHistogram(1).toFloat()
+        h.counterResetHint = .gaugeType
+        return h
+    case "gauge2":
+        var h = genTestHistogram(3).toFloat()
+        h.counterResetHint = .gaugeType
         return h
     case "negonly":
         var h = FloatHistogram()

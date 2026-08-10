@@ -610,6 +610,8 @@ public let functionCalls: [String: FunctionCall] = [
     "histogram_stdvar": funcHistogramStdVar,
     "histogram_sum": funcHistogramSum,
     "hour": funcHour,
+    "idelta": funcIdelta,
+    "irate": funcIrate,
     "last_over_time": funcLastOverTime,
     "ln": funcLn,
     "log10": funcLog10,
