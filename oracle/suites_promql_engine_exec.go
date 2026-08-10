@@ -234,6 +234,19 @@ func genPromQLExec(e *emitter) {
 		fs([]string{"__name__", "http_requests", "job", "a"}, [2]int64{0, 10}, [2]int64{60_000, 20}),
 		fs([]string{"__name__", "http_requests", "job", "c"}, [2]int64{0, 100}),
 	}
+	// Two appends with the SAME label set, which the storage merges into one series before
+	// PromQL ever sees them — so this shows why the evaluator's own merge is unreachable here.
+	collide := []memSeriesInJSON{
+		fs([]string{"__name__", "collide", "a", "1"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "collide", "a", "1"}, [2]int64{60_000, 2}),
+	}
+	// Two series differing in one label at the same timestamp: dropping `__name__` leaves them
+	// still distinct, so there is nothing to merge.
+	clash := []memSeriesInJSON{
+		fs([]string{"__name__", "clash", "b", "1"}, [2]int64{60_000, 1}),
+		fs([]string{"__name__", "clash", "b", "2"}, [2]int64{60_000, 2}),
+	}
+
 	// A single series with a gap, for the lookback boundary.
 	gapped := []memSeriesInJSON{
 		fs([]string{"__name__", "gap"}, [2]int64{0, 1}, [2]int64{600_000, 2}),
@@ -289,11 +302,31 @@ func genPromQLExec(e *emitter) {
 		{`-http_requests`, threeSeries, 60_000},
 		{`scalar(http_requests)`, threeSeries, 60_000},
 		{`scalar(http_requests{job="a"})`, threeSeries, 60_000},
-		// `timestamp(<selector>)` is deliberately absent: upstream routes it through
-		// rangeEvalTimestampFunctionOverVectorSelector, which reports the SAMPLE's timestamp
-		// where a matrix evaluation reports the STEP's. The port refuses it by name rather
-		// than answering with the step, so a case here could not pass. It is the next thing
-		// this file needs.
+		// `timestamp(<selector>)` goes through rangeEvalTimestampFunctionOverVectorSelector,
+		// which reports the SAMPLE's timestamp where a matrix evaluation reports the STEP's.
+		// The three series' last samples differ, so the two paths disagree here — which is
+		// exactly why the case is worth having.
+		{`timestamp(http_requests)`, threeSeries, 60_000},
+		{`timestamp(http_requests)`, threeSeries, 120_000},
+		{`timestamp(gap)`, gapped, 300_000},
+		// That path builds its iterator with `lookbackDelta - 1`, where evalSeries uses the
+		// full delta — so a sample exactly at the boundary is visible to one and not the
+		// other. These two straddle it.
+		{`timestamp(gap)`, gapped, 299_999},
+		{`timestamp(gap)`, gapped, 300_001},
+		// With `@` the selector's offset is rewritten every step (upstream issue 8433).
+		{`timestamp(http_requests @ 0)`, threeSeries, 300_000},
+		{`timestamp(http_requests @ 60)`, threeSeries, 0},
+		// Unary minus over series that are candidates for collision — and the finding is
+		// that they are NOT. `mergeSeriesWithSameLabelset` turns out to be UNREACHABLE
+		// through a selector: two series with identical label sets are one series to the
+		// storage (which is what `collide` demonstrates — it arrives already merged), and two
+		// series that differ in any label still differ after `__name__` is dropped (`clash`).
+		// Reaching the merge needs a function that drops a DIFFERING label — label_replace, or
+		// an aggregation — so its own corpus arrives with those. Both cases stay, because
+		// "these do not collide" is exactly what a future reader will want to know.
+		{`-collide`, collide, 60_000},
+		{`-clash`, clash, 60_000},
 		// A function over a selector, which is the ordinary Call path.
 		{`abs(-http_requests)`, threeSeries, 60_000},
 		{`ceil(http_requests)`, threeSeries, 60_000},
