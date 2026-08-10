@@ -801,6 +801,77 @@ changing behaviour.
     the bare message and every one of these becomes invisible. Four negative controls
     found that gap.
 
+50. **The range functions read `matrixVal[0]` and nothing else, and three guards that
+    look alike are three different behaviours.** `rangeEval` calls a range function
+    once per input series, so the matrix it receives has exactly one entry — a port
+    that loops over it produces one sample per series and is wrong nowhere a query can
+    reach. The oracle *can* construct a multi-series matrix, so the corpus pins it.
+
+    The guards, in the order they appear in `compareOverTime`/`varianceOverTime`:
+
+    | condition | behaviour |
+    |---|---|
+    | `len(matrixVal) == 0` | return `enh.Out` — no series, no output |
+    | `len(samples.Floats) == 0` | return `enh.Out` **with no annotation** — a histogram-only range yields silence from `max_over_time` |
+    | `len(samples.Histograms) > 0` | *add* `HistogramIgnoredInMixedRangeInfo` and carry on with the floats |
+
+    And two asymmetries in the same family that read like slips:
+
+    - `ts_of_first_over_time` defaults both timestamp lists to `math.MaxInt64` and
+      takes the **min**; `ts_of_last_over_time` defaults them to **0** and takes the
+      **max**. So a series with neither floats nor histograms reports
+      `MaxInt64 / 1000` from one and `0` from the other.
+    - `first_over_time` and `last_over_time` both pick the **histogram** when a float
+      and a histogram share a timestamp, because the comparison is strict (`f.T < h.T`
+      and `h.T < f.T` respectively) and the histogram branch is the fall-through.
+
+    `ts_of_max_over_time` uses `>=` where `max_over_time` uses `>`, so on a plateau the
+    former reports the **last** maximum and the latter the first. They cannot share a
+    comparator.
+
+51. **`varianceOverTime`'s Welford is not the textbook one, and its Kahan
+    compensation is only pinnable by long runs at a large offset.** The shape is
+
+    ```go
+    delta := f.F - (mean + cMean)
+    mean, cMean = kahansum.Inc(delta/count, mean, cMean)
+    aux, cAux = kahansum.Inc(delta*(f.F-(mean+cMean)), aux, cAux)
+    ```
+
+    Three things are load-bearing: `delta` is against the **compensated** mean; the
+    second term re-reads `mean + cMean` **after** the update, so it uses the new mean;
+    and the divisor is `count`, so `stdvar_over_time` is the **population** variance.
+
+    All three, plus dropping the `aux` compensation entirely, survived a corpus of
+    three- and four-sample series — the compensation terms were simply too small to
+    see. What made them observable was a 50-sample run at `1e16`, a 101-sample run at
+    `1e10`, and an alternating `1e17`/`1` series. **A Kahan accumulator needs enough
+    samples at enough magnitude for the compensation to be non-negligible; a short
+    series pins the algebra and not the compensation.**
+
+    Still unwitnessed and recorded as such: rewriting `delta/count` as
+    `delta*(1/count)`. The two differ only when both roundings compound, and nothing in
+    822 cases distinguishes them.
+
+52. **`promql.quantile` has two fused sites, and both were wrong until
+    `quantile_over_time` reached it.** The function is unexported, so the oracle cannot
+    call it — it was ported with a comment saying so and pinned by hand-written
+    invariants instead. Adding `quantile_over_time` and `mad_over_time` made it
+    reachable, and 12 of 1,480 cases failed immediately. Both sites are the patterns
+    this document already records elsewhere:
+
+    - `weight := rank - math.Floor(rank)` compiles to one `FNMSUBD`
+      (quantile.go:743) that recomputes `q*(n-1)` **unrounded**, while the rounded
+      `rank` is still what `Floor` reads. Quirk 40's family.
+    - `values[lower].F*(1-weight) + values[upper].F*weight` fuses the **second**
+      product into the add and leaves the first a plain `FMULD` (quantile.go:744).
+
+    The lesson is the one HANDOFF §3 already states in the other direction: a corpus
+    written for one layer finds bugs in the layer beneath it. Here the layer beneath
+    had a comment explicitly saying it could not be differentially tested — and that
+    was true only until a *caller* was ported. **"Unreachable by the oracle" is a
+    statement about today's callers.**
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

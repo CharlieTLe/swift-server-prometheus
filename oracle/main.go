@@ -171,6 +171,9 @@ var suites = map[string]func(*emitter){
 	// Phase 5: the histogram family. See
 	// oracle/suites_promql_functions_histogram.go.
 	"promql/functions-histogram": genPromQLFunctionsHistogram,
+	// Phase 5: the float-only range aggregations. See
+	// oracle/suites_promql_functions_overtime.go.
+	"promql/functions-overtime": genPromQLFunctionsOverTime,
 }
 
 func main() {

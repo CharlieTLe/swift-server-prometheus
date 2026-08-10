@@ -75,6 +75,7 @@
     "promql/functions-date.jsonl": { "sha256": "51ccf34c56a9a3674384d37bca4a98ba6484e2519737f154f7b8182be3f35b10", "lines": 152 },
     "promql/functions-elementwise.jsonl": { "sha256": "1ad974a1d839e15de00255a5f59fc731e333fa25d5a365e053ffee5457d0e98b", "lines": 318 },
     "promql/functions-histogram.jsonl": { "sha256": "d76930cb7b316e4c551691c9d4920c1d6ec6e0421494c647f01d5c06b5671866", "lines": 713 },
+    "promql/functions-overtime.jsonl": { "sha256": "88dec411dea06a91bc6fec53c8c971992e10459d974932e3ebde6362f6f06306", "lines": 1480 },
     "promql/functions.jsonl": { "sha256": "9e4e60dca64cd78e7a9bc43f1613c15bb079f8e47b82fdd265446bc5d966aedd", "lines": 89 },
     "promql/histogram-stats.jsonl": { "sha256": "07615da20d1ad60650d7d0e7293247219907faace2df207d0234ae046d7da58c", "lines": 38 },
     "promql/histogramfraction.jsonl": { "sha256": "f237afd75d8c26075e4cff83e4c70ae7201b0548315ff476b122ac078b9854ea", "lines": 228 },

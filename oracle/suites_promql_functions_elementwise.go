@@ -101,6 +101,16 @@ type fnIn struct {
 	// len(parser.Expressions) handed to the call. Only funcRound reads it, and it
 	// reads the LENGTH rather than the values, which is why nils suffice.
 	NArgs int `json:"nargs"`
+	// The `matrixVals` argument: one entry per series, each a list of samples in
+	// timestamp order. The builder splits each list into Floats and Histograms by
+	// whether the sample carries one, and takes the series' metric from its first
+	// sample.
+	//
+	// Note the range functions only ever read `matrixVals[0]` — `rangeEval` hands
+	// them one series at a time — so a multi-series matrix is something only the
+	// oracle can construct. It is in the corpus precisely because a port that looped
+	// would be wrong nowhere else.
+	MatrixIn [][]fnSampleIn `json:"matrix,omitempty"`
 	// A PromQL call expression whose parsed `Call.args` become the `args` the
 	// function receives, when the function reads more than the argument COUNT.
 	//
@@ -201,6 +211,30 @@ func fnRenderVector(v promql.Vector) []fnSampleOut {
 	return out
 }
 
+func fnBuildMatrix(in [][]fnSampleIn) promql.Matrix {
+	out := make(promql.Matrix, 0, len(in))
+	for _, series := range in {
+		s := promql.Series{}
+		if len(series) > 0 {
+			s.Metric = labels.FromStrings(series[0].Metric...)
+		}
+		for _, smp := range series {
+			t := parseI64(smp.T)
+			switch {
+			case smp.HistRaw != "":
+				s.Histograms = append(s.Histograms, promql.HPoint{T: t, H: fnNamedHistogram(smp.HistRaw)})
+			case smp.Hist != nil:
+				s.Histograms = append(s.Histograms, promql.HPoint{
+					T: t, H: genTestHistogram(*smp.Hist).ToFloat(nil)})
+			default:
+				s.Floats = append(s.Floats, promql.FPoint{T: t, F: unfbits(smp.F)})
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 func runFnCase(in fnIn) fnOut {
 	fn, ok := promql.FunctionCalls[in.Fn]
 	if !ok {
@@ -229,7 +263,7 @@ func runFnCase(in fnIn) fnOut {
 		}
 		args = call.Args
 	}
-	got, annos := fn(vectorVals, nil, args, enh)
+	got, annos := fn(vectorVals, fnBuildMatrix(in.MatrixIn), args, enh)
 
 	// The `expr` is passed as the query so AsStrings renders each annotation's
 	// (line:col). Without it Go emits the bare message, and every position range in

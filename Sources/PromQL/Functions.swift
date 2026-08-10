@@ -18,8 +18,10 @@
 //
 // Deliberately not here, each with the reason:
 //
-//   * the `*_over_time` family and the rate functions — they take a `Matrix` and
-//     need `interpolate`/`correctForCounterResets`.
+//   * `sum_over_time`/`avg_over_time` (histogram Kahan arithmetic),
+//     `resets`/`changes` (the start-timestamp machinery) and the rate family (`interpolate`,
+//     `correctForCounterResets`). The float-only range aggregations that do not need
+//     any of those are in `Functions+OverTime.swift`.
 //   * `funcSort` and friends — they need Go's pdqsort ported, because the two
 //     sorts are observably different and both comparators are invalid orderings.
 //
@@ -575,6 +577,7 @@ func funcTimestamp(_ v: [Vector], _: Matrix, _: [any Expr], _ enh: EvalNodeHelpe
 /// visible.
 public let functionCalls: [String: FunctionCall] = [
     "abs": funcAbs,
+    "absent_over_time": funcAbsentOverTime,
     "acos": funcAcos,
     "acosh": funcAcosh,
     "asin": funcAsin,
@@ -586,6 +589,7 @@ public let functionCalls: [String: FunctionCall] = [
     "clamp_max": funcClampMax,
     "clamp_min": funcClampMin,
     "cos": funcCos,
+    "count_over_time": funcCountOverTime,
     "cosh": funcCosh,
     "day_of_month": funcDayOfMonth,
     "day_of_week": funcDayOfWeek,
@@ -593,6 +597,7 @@ public let functionCalls: [String: FunctionCall] = [
     "days_in_month": funcDaysInMonth,
     "deg": funcDeg,
     "exp": funcExp,
+    "first_over_time": funcFirstOverTime,
     "floor": funcFloor,
     "histogram_avg": funcHistogramAvg,
     "histogram_count": funcHistogramCount,
@@ -603,14 +608,20 @@ public let functionCalls: [String: FunctionCall] = [
     "histogram_stdvar": funcHistogramStdVar,
     "histogram_sum": funcHistogramSum,
     "hour": funcHour,
+    "last_over_time": funcLastOverTime,
     "ln": funcLn,
     "log10": funcLog10,
     "log2": funcLog2,
     "max_of": funcMaxOf,
+    "mad_over_time": funcMadOverTime,
+    "max_over_time": funcMaxOverTime,
     "min_of": funcMinOf,
+    "min_over_time": funcMinOverTime,
     "minute": funcMinute,
     "month": funcMonth,
     "pi": funcPi,
+    "present_over_time": funcPresentOverTime,
+    "quantile_over_time": funcQuantileOverTime,
     "rad": funcRad,
     "round": funcRound,
     "scalar": funcScalar,
@@ -618,10 +629,16 @@ public let functionCalls: [String: FunctionCall] = [
     "sin": funcSin,
     "sinh": funcSinh,
     "sqrt": funcSqrt,
+    "stddev_over_time": funcStddevOverTime,
+    "stdvar_over_time": funcStdvarOverTime,
     "tan": funcTan,
     "tanh": funcTanh,
     "time": funcTime,
     "timestamp": funcTimestamp,
+    "ts_of_first_over_time": funcTsOfFirstOverTime,
+    "ts_of_last_over_time": funcTsOfLastOverTime,
+    "ts_of_max_over_time": funcTsOfMaxOverTime,
+    "ts_of_min_over_time": funcTsOfMinOverTime,
     "vector": funcVector,
     "year": funcYear,
 ]

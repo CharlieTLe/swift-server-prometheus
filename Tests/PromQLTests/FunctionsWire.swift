@@ -44,6 +44,10 @@ struct FnIn: Decodable, Sendable {
     let nargs: Int
     /// `enh.out` seeded non-empty. Empty in every case that models a real query.
     let seed: [FnSampleIn]?
+    /// The `matrixVals` argument: one entry per series, each a list of samples in
+    /// timestamp order, split into floats and histograms by whether the sample
+    /// carries one. The series' metric comes from its first sample.
+    let matrix: [[FnSampleIn]]?
     /// A PromQL call expression whose parsed `Call.args` become the `args` the
     /// function receives. Set for the histogram family, which reads the arguments
     /// themselves — position ranges appear in its annotation text, and
@@ -85,6 +89,29 @@ private func fnBuildVector(_ samples: [FnSampleIn]?) -> Vector {
             smp.f = statsDoubleFromHex(s.f)
         }
         out.append(smp)
+    }
+    return out
+}
+
+private func fnBuildMatrix(_ input: [[FnSampleIn]]?) -> Matrix {
+    guard let input else { return Matrix() }
+    var out = Matrix()
+    for series in input {
+        var s = Series(metric: .empty, floats: [], histograms: [])
+        if let first = series.first {
+            s.metric = Labels(strings: first.metric)
+        }
+        for smp in series {
+            let t = statsParseI64(smp.t)
+            if let name = smp.histRaw {
+                s.histograms.append(HPoint(t: t, h: fnNamedHistogram(name)))
+            } else if let n = smp.hist {
+                s.histograms.append(HPoint(t: t, h: genTestHistogram(n).toFloat()))
+            } else {
+                s.floats.append(FPoint(t: t, f: statsDoubleFromHex(smp.f)))
+            }
+        }
+        out.append(s)
     }
     return out
 }
@@ -132,7 +159,7 @@ func runFnCase(_ input: FnIn) -> FnOut {
         }
         args = call.args
     }
-    let (got, annos) = fn(vectorVals, Matrix(), args, enh)
+    let (got, annos) = fn(vectorVals, fnBuildMatrix(input.matrix), args, enh)
     // The `expr` is the query, so each annotation renders its (line:col). Without
     // it the bare message is emitted and which argument an annotation is reported
     // against becomes invisible.
