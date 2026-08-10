@@ -13,18 +13,32 @@
 
 import GoCompat
 import GoOracleSupport
+import PromChunks
+import PromLabels
 import PromModel
 import PromQLParser
 import PromStorage
+import PromTestStorage
 import Testing
 
 @testable import PromQL
+
+/// The same wire shape as `PromTestStorageTests`' loader, declared here because the two test
+/// targets cannot share a type.
+struct ExecSeriesIn: Decodable, Sendable {
+    var labels: [String]
+    var t: [String]
+    var st: [String]
+    /// Hex bit patterns.
+    var f: [String]
+}
 
 struct ExecIn: Decodable, Sendable {
     var query: String
     var ts: String
     var lookback: String
     var maxSamples: Int
+    var series: [ExecSeriesIn]
 }
 
 struct ExecOut: Decodable, Equatable, Sendable {
@@ -59,9 +73,28 @@ struct EngineExecTests {
                     parserOptions: Options(enableExperimentalFunctions: true)))
 
             let ts = Timestamp.time(Int64(input.ts)!)
+            // A loaded in-memory storage when the case has series, and a querier that knows
+            // nothing when it does not.
+            let queryable: any Queryable
+            if input.series.isEmpty {
+                queryable = EmptyQueryable()
+            } else {
+                let store = MemStorage()
+                for s in input.series {
+                    var samples = [any PromChunks.Sample]()
+                    for i in s.t.indices {
+                        samples.append(
+                            FSample(
+                                st: Int64(s.st[i])!, t: Int64(s.t[i])!,
+                                f: Double(bitPattern: UInt64(s.f[i], radix: 16)!)))
+                    }
+                    try store.load(Labels(strings: s.labels), samples)
+                }
+                queryable = store
+            }
             let query: Query
             do {
-                query = try engine.newInstantQuery(EmptyQueryable(), nil, input.query, ts)
+                query = try engine.newInstantQuery(queryable, nil, input.query, ts)
             } catch {
                 // Go returns the build error before Exec is ever called.
                 return ExecOut(
@@ -116,7 +149,9 @@ struct EngineExecInvariantTests {
     func unportedArmsAreLoud() throws {
         // A selector, an aggregation and a range are all out of scope for this slice. What
         // matters is that each says so — a silent zero would be far worse than an error.
-        for query in ["foo", "sum(foo)", "rate(foo[5m])", "foo + bar", "1 + foo"] {
+        // A bare selector now WORKS — that is this slice. What still throws is everything
+        // the selector unlocks but that has not landed: aggregations, ranges, vector binops.
+        for query in ["sum(foo)", "rate(foo[5m])", "foo + bar", "1 + foo", "foo unless bar"] {
             let res = try run(query)
             guard let err = res.error as? EvaluatorNotPorted else {
                 Issue.record("\(query) did not report EvaluatorNotPorted: \(String(describing: res.error))")
