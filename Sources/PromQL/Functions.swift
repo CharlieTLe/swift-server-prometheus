@@ -138,6 +138,82 @@ public final class EvalNodeHelper {
     /// ``isStartTimestampReset(_:_:_:_:)``.
     public var startTimestamps: StartTimestamps?
 
+    // MARK: - Vector matching scratch
+
+    /// Go: `numSigs` — how many distinct join signatures `rangeEval` found across both sides.
+    ///
+    /// Set once, before the step loop, and read by the four `reset*` helpers below to size their
+    /// arrays. Upstream turns the signature *strings* into small integers precisely so that the
+    /// per-step lookups can be array indexing rather than map probing, and the ordinals are what
+    /// `EvalSeriesHelper` carries.
+    var numSigs: Int = 0
+
+    /// Go: `rightSigs` — the right-hand sample for each signature ordinal.
+    var rightSigs: [Sample] = []
+    /// Go: `sigsPresent` — which ordinals the right-hand side actually has.
+    var sigsPresent: [Bool] = []
+    /// Go: `matchedSigsPresent` — one-to-one matching's duplicate detector.
+    var matchedSigsPresent: [Bool] = []
+    /// Go: `matchedSigs` — many-to-one matching's duplicate detector, a *set of result hashes*
+    /// per ordinal rather than a flag, because several left-hand series legitimately share one
+    /// right-hand match and only a repeated **result** label set is an error.
+    var matchedSigs: [Set<UInt64>?] = []
+
+    /// Go: `resultMetric` — the label set a (lhs, rhs, op, matching) combination produces,
+    /// cached across steps by the concatenation of the two inputs' bytes.
+    ///
+    /// Not an optimisation the port could drop silently: the cache is keyed on the *inputs* and
+    /// the value is built once, so a mutation of the builder between steps would be shared. It
+    /// is rebuilt per node, and `Labels` is a value type here, so the sharing is safe.
+    var resultMetricCache: [[UInt8]: Labels] = [:]
+
+    /// Go: `lb` — the label builder `resultMetric` works through.
+    var lb: LabelsBuilder = LabelsBuilder(Labels.empty)
+
+    /// Go: `resetSigsPresent` — allocate on first use, then clear.
+    func resetSigsPresent() -> [Bool] {
+        if sigsPresent.isEmpty {
+            sigsPresent = [Bool](repeating: false, count: numSigs)
+        } else {
+            for i in sigsPresent.indices { sigsPresent[i] = false }
+        }
+        return sigsPresent
+    }
+
+    /// Go: `resetMatchedSigsPresent`.
+    func resetMatchedSigsPresent() -> [Bool] {
+        if matchedSigsPresent.isEmpty {
+            matchedSigsPresent = [Bool](repeating: false, count: numSigs)
+        } else {
+            for i in matchedSigsPresent.indices { matchedSigsPresent[i] = false }
+        }
+        return matchedSigsPresent
+    }
+
+    /// Go: `resetRightSigs`.
+    func resetRightSigs() -> [Sample] {
+        if rightSigs.isEmpty {
+            rightSigs = [Sample](repeating: Sample(), count: numSigs)
+        }
+        return rightSigs
+    }
+
+    /// Go: `resetMatchedSigs` — nils the per-ordinal sets rather than clearing them, which is
+    /// what Go's `clear(enh.matchedSigs)` does to a slice of maps.
+    func resetMatchedSigs() -> [Set<UInt64>?] {
+        if matchedSigs.isEmpty {
+            matchedSigs = [Set<UInt64>?](repeating: nil, count: numSigs)
+        } else {
+            for i in matchedSigs.indices { matchedSigs[i] = nil }
+        }
+        return matchedSigs
+    }
+
+    /// Go: `resetBuilder`.
+    func resetBuilder(_ lbls: Labels) {
+        lb.reset(lbls)
+    }
+
     /// Go: `signatureToMetricWithBuckets` — classic histogram bucket groups for this
     /// step, keyed by the label set with `le` removed.
     ///

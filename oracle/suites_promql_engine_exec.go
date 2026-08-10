@@ -488,6 +488,209 @@ func genPromQLExec(e *emitter) {
 		})
 	}
 
+	// --- VECTOR BINARY OPERATORS. Four shapes — vector/vector, vector/scalar, scalar/vector and
+	// the three set operators — plus the matching modifiers.
+	//
+	// The join key is turned into a small integer ORDINAL once per node, across both sides at
+	// once, so every case here exercises `rangeEval`'s signature machinery as well as the
+	// operator. Two label sets that agree on the join labels share an ordinal, and that sharing
+	// is the entire mechanism.
+	binL := []memSeriesInJSON{
+		fs([]string{"__name__", "left", "job", "a", "inst", "1"}, [2]int64{0, 10}),
+		fs([]string{"__name__", "left", "job", "a", "inst", "2"}, [2]int64{0, 20}),
+		fs([]string{"__name__", "left", "job", "b", "inst", "1"}, [2]int64{0, 30}),
+		fs([]string{"__name__", "right", "job", "a", "inst", "1"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "right", "job", "a", "inst", "2"}, [2]int64{0, 4}),
+		fs([]string{"__name__", "right", "job", "c", "inst", "1"}, [2]int64{0, 8}),
+	}
+	// A "one" side with a single series per job, for group_left/group_right.
+	binOne := []memSeriesInJSON{
+		fs([]string{"__name__", "many", "job", "a", "inst", "1"}, [2]int64{0, 10}),
+		fs([]string{"__name__", "many", "job", "a", "inst", "2"}, [2]int64{0, 20}),
+		fs([]string{"__name__", "many", "job", "b", "inst", "1"}, [2]int64{0, 30}),
+		fs([]string{"__name__", "one", "job", "a", "extra", "x"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "one", "job", "b", "extra", "y"}, [2]int64{0, 4}),
+	}
+	// TWO series on the "one" side of the same match group, which is the many-to-many error.
+	binDup := []memSeriesInJSON{
+		fs([]string{"__name__", "many", "job", "a", "inst", "1"}, [2]int64{0, 10}),
+		fs([]string{"__name__", "one", "job", "a", "k", "1"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "one", "job", "a", "k", "2"}, [2]int64{0, 3}),
+	}
+	// Two lefts that reduce to the SAME result label set under `ignoring`, which is the
+	// one-to-one "many-to-one matching must be explicit" error.
+	binAmbig := []memSeriesInJSON{
+		fs([]string{"__name__", "l", "job", "a", "x", "1"}, [2]int64{0, 10}),
+		fs([]string{"__name__", "l", "job", "a", "x", "2"}, [2]int64{0, 20}),
+		fs([]string{"__name__", "r", "job", "a"}, [2]int64{0, 2}),
+	}
+	// Values that make the comparisons discriminate, and a zero for division.
+	binCmp := []memSeriesInJSON{
+		fs([]string{"__name__", "cl", "k", "lo"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "cl", "k", "hi"}, [2]int64{0, 100}),
+		fs([]string{"__name__", "cr", "k", "lo"}, [2]int64{0, 50}),
+		fs([]string{"__name__", "cr", "k", "hi"}, [2]int64{0, 50}),
+		fs([]string{"__name__", "cr", "k", "zero"}, [2]int64{0, 0}),
+		fs([]string{"__name__", "cl", "k", "zero"}, [2]int64{0, 7}),
+	}
+
+	// Two label sets whose join keys CONCATENATE ambiguously if the encoder omits the separator
+	// after each value: `j=x, bc=y` and `j=xb, c=y` both render as `j <SEP> xbc <SEP> y` without
+	// it. The framing is `name SEP value SEP` for exactly this reason.
+	binAmbigBytes := []memSeriesInJSON{
+		fs([]string{"__name__", "ab", "j", "x", "bc", "y"}, [2]int64{0, 10}),
+		fs([]string{"__name__", "ab2", "j", "xb", "c", "y"}, [2]int64{0, 20}),
+	}
+	// Two "many" series differing ONLY in `__name__`, so the arithmetic result — which drops the
+	// name — collides. That is the many-to-one "grouping labels must ensure unique matches" error,
+	// and it needs the RESULT hash rather than the input's to be detected.
+	binNameCollide := []memSeriesInJSON{
+		fs([]string{"__name__", "m1", "job", "a"}, [2]int64{0, 10}),
+		fs([]string{"__name__", "m2", "job", "a"}, [2]int64{0, 20}),
+		fs([]string{"__name__", "one", "job", "a", "extra", "x"}, [2]int64{0, 2}),
+	}
+	// Two "many" series differing only in a label that `group_left(extra)` OVERWRITES from the one
+	// side, plus a comparison that is false for both — so `keep` is false and the duplicate check
+	// still has to fire. That is what orders the check before the filter.
+	binIncludeCollide := []memSeriesInJSON{
+		fs([]string{"__name__", "m", "job", "a", "extra", "p"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "m", "job", "a", "extra", "q"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "one", "job", "a", "extra", "x"}, [2]int64{0, 99}),
+	}
+
+	binopCases := []struct {
+		query  string
+		series []memSeriesInJSON
+	}{
+		// vector/vector arithmetic. The default matching is `ignoring()` with one-to-one, so the
+		// join key is every label except `__name__` — and the RESULT loses `__name__` too,
+		// because `changesMetricSchema` is true for the arithmetic operators.
+		{`left + right`, binL},
+		{`left - right`, binL},
+		{`left * right`, binL},
+		{`left / right`, binL},
+		{`left % right`, binL},
+		{`left ^ right`, binL},
+		{`left atan2 right`, binL},
+		// ...and the comparisons, which KEEP `__name__` because they do not change the schema,
+		// and which filter rather than compute.
+		{`cl > cr`, binCmp},
+		{`cl < cr`, binCmp},
+		{`cl >= cr`, binCmp},
+		{`cl <= cr`, binCmp},
+		{`cl == cr`, binCmp},
+		{`cl != cr`, binCmp},
+		// `bool` turns a filter into arithmetic AND drops the name.
+		{`cl > bool cr`, binCmp},
+		{`cl == bool cr`, binCmp},
+		{`cl != bool cr`, binCmp},
+		// `on` and `ignoring`, which pick the join labels — and therefore which series pair up.
+		{`left + on(job) right`, binL},
+		{`left + on(inst) right`, binL},
+		{`left + on(job, inst) right`, binL},
+		{`left + ignoring(inst) right`, binL},
+		{`left + ignoring(job) right`, binL},
+		{`left + on() right`, binL},
+		// `group_left`/`group_right` with and without an include list. `Include` is taken from
+		// the "one" side, and an EMPTY value there deletes the label rather than leaving it.
+		{`many * on(job) group_left one`, binOne},
+		{`many * on(job) group_left(extra) one`, binOne},
+		{`many * on(job) group_left(nosuch) one`, binOne},
+		{`one * on(job) group_right many`, binOne},
+		{`one * on(job) group_right(extra) many`, binOne},
+		{`many / ignoring(inst) group_left one`, binOne},
+		// The three duplicate-match errors, each with its own message.
+		{`many * on(job) group_left one`, binDup},
+		{`many * on(job) one`, binDup},
+		{`l + ignoring(x) r`, binAmbig},
+		{`l + ignoring(x) group_left r`, binAmbig},
+		// The set operators. `and` keeps the LEFT's samples untouched — no label surgery at all —
+		// `or` fills in the right's unmatched groups, and `unless` is the complement of `and`.
+		{`left and right`, binL},
+		{`left or right`, binL},
+		{`left unless right`, binL},
+		{`left and on(job) right`, binL},
+		{`left or on(job) right`, binL},
+		{`left unless on(job) right`, binL},
+		{`left and ignoring(inst) right`, binL},
+		{`left or ignoring(inst) right`, binL},
+		// One side empty, for each set operator: the short-circuits are NOT symmetric.
+		{`left and nothing`, binL},
+		{`nothing and left`, binL},
+		{`left or nothing`, binL},
+		{`nothing or left`, binL},
+		{`left unless nothing`, binL},
+		{`nothing unless left`, binL},
+		// vector/scalar and scalar/vector. The metric always comes from the vector, and for a
+		// comparison with the scalar on the LEFT the value is still the vector element's.
+		{`left + 1`, binL},
+		{`1 + left`, binL},
+		{`left - 1`, binL},
+		{`1 - left`, binL},
+		{`left / 0`, binL},
+		{`0 / left`, binL},
+		{`left > 15`, binL},
+		{`15 < left`, binL},
+		{`left > bool 15`, binL},
+		{`15 < bool left`, binL},
+		{`left % 7`, binL},
+		{`left ^ 2`, binL},
+		{`left atan2 1`, binL},
+		// A scalar-valued subexpression rather than a literal, so the scalar arm is reached
+		// through `scalar()` too.
+		{`left * scalar(cl{k="lo"})`, binCmp},
+		// The join-key framing: these two agree on `j`+`bc`+`c` only if the encoder loses a
+		// separator, so `on(j, bc, c)` must NOT pair them.
+		{`ab + on(j, bc, c) ab2`, binAmbigBytes},
+		{`{__name__=~"ab|ab2"} + on(j, bc, c) {__name__=~"ab|ab2"}`, binAmbigBytes},
+		// A NON-COMMUTATIVE operator with group_right, which is the only shape that can see the
+		// second of `VectorBinop`'s two swaps: `*` and `+` give the same answer either way round.
+		{`one / on(job) group_right many`, binOne},
+		{`one - on(job) group_right many`, binOne},
+		{`one ^ on(job) group_right many`, binOne},
+		{`one % on(job) group_right many`, binOne},
+		{`one atan2 on(job) group_right many`, binOne},
+		// ...and the same operators with group_left, so the pair differs only in direction.
+		{`many / on(job) group_left one`, binOne},
+		{`many - on(job) group_left one`, binOne},
+		// The many-to-one result collision, which needs the RESULT's hash: two lefts differing
+		// only in `__name__`, which the arithmetic drops.
+		{`{__name__=~"m1|m2"} * on(job) group_left one`, binNameCollide},
+		{`{__name__=~"m1|m2"} + on(job) group_left(extra) one`, binNameCollide},
+		// ...and a comparison, which does NOT drop the name, so the same shape succeeds.
+		{`{__name__=~"m1|m2"} > on(job) group_left one`, binNameCollide},
+		// The duplicate check ORDER: `group_left(extra)` overwrites the only label that
+		// distinguishes the two lefts, and the comparison is false for both — so `keep` is false
+		// and the check has to fire anyway.
+		{`m < on(job) group_left(extra) one`, binIncludeCollide},
+		{`m > on(job) group_left(extra) one`, binIncludeCollide},
+		{`m < bool on(job) group_left(extra) one`, binIncludeCollide},
+		// An include label the "one" side does NOT have: the empty value DELETES it from the
+		// result rather than leaving the many side's.
+		{`many * on(job) group_left(inst) one`, binOne},
+		{`many * on(job) group_left(inst, extra) one`, binOne},
+		// Nested binops, where the inner result's dropped `__name__` changes the outer join.
+		{`(left + right) + right`, binL},
+		{`(left > right) + 1`, binL},
+		{`left + right + left`, binL},
+	}
+	for _, c := range binopCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
+		})
+	}
+	// The sample limit against a binop, where `gatherVector` counts BOTH sides' inputs before the
+	// operator runs — so the peak is inputs plus result, not result alone.
+	for _, maxSamples := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14} {
+		for _, q := range []string{`left + right`, `left and right`, `left + 1`} {
+			emit(execIn{
+				Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+				MaxSamples: maxSamples, Series: binL,
+			})
+		}
+	}
+
 	// A query that fails to build still comes back through Exec's Result, not as a panic.
 	for _, q := range []string{`1 +`, `foo[`, `sum(`} {
 		emit(execIn{Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute))})

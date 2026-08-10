@@ -1591,6 +1591,67 @@ changing behaviour.
     Recorded because three green controls in a row invite the conclusion that the corpus is weak,
     and here the conclusion is the opposite: the line cannot change an answer.
 
+87. **The vector-matching join key is a small integer, and the two `sigf` branches are not
+    mirror images.** `rangeEval` computes each series' join signature **once**, across *both*
+    sides at the same time, and turns it into an `EvalSeriesHelper.sigOrdinal` — so every per-step
+    lookup in `VectorAnd`/`VectorOr`/`VectorUnless`/`VectorBinop` is array indexing rather than a
+    map probe. Two series on opposite sides sharing a key share an ordinal, and that is the whole
+    matching mechanism.
+
+    `sigf`'s `ignoring` branch prepends `labels.MetricName` to the exclusion list before sorting.
+    That is **not** redundant: `BytesWithoutLabels` — unlike `HashWithoutLabels` — does not drop
+    `__name__` of its own accord. Both spellings were perturbed and both break.
+
+    `bufHelpers` is parallel to the **gathered vector**, not to the input matrix: `gatherVector`
+    appends a helper only for a series that actually produced a sample at this step. Indexing it
+    by series would misalign every ordinal the moment one series has a gap.
+
+88. **`VectorBinop` implements cardinality by swapping, and undoes the swap in a second place.**
+    For `group_right` (one-to-many) it swaps `lhs`/`rhs` *and* their helper arrays at the top so
+    the rest of the function can always treat the right as the "one" side; `doBinOp` then swaps the
+    **values** back before computing, so the arithmetic still sees written order. Two swaps, in
+    different places, for different reasons — and only a **non-commutative** operator with
+    `group_right` can witness the second, which is why the corpus carries
+    `one / on(job) group_right many` and not just `*`.
+
+    The `oneSide` word in the duplicate-series error is decided by the *original* cardinality, so
+    it says "left" for `group_right`. That reads backwards and is correct.
+
+    Three different duplicate errors, and they are not interchangeable:
+
+    * two right-hand samples in one match group → "found duplicate series for the match group …
+      ;many-to-many matching not allowed" (note the **missing space** after the semicolon: Go
+      concatenates two literals and the second starts with `;`);
+    * one-to-one, two lefts on one right → "many-to-one matching must be explicit
+      (group_left/group_right)";
+    * many-to-one, two **results** with the same label set → "grouping labels must ensure unique
+      matches". The key is the *result* hash, not the input's: several lefts sharing a right is
+      legal, and only a collision after `resultMetric` has dropped `__name__` and applied
+      `group_x(...)` is not. Two series differing only in `__name__` are what witness it.
+
+    That third check runs **before** the `!keep && !returnBool` filter, so a comparison that
+    filters every element out can still fail for duplicate matches.
+
+89. **`changesMetricSchema` is true for arithmetic and false for comparisons, so `a + b` loses
+    `__name__` and `a > b` keeps it.** The seven arithmetic operators drop the three schema
+    metadata labels through `resultMetric`; the six comparisons do not, unless `bool` is used —
+    which is what `dropMetricName` carries in.
+
+    `resultMetric`'s other two details: only **one-to-one** strips the join labels (many-to-one
+    keeps the "many" side's, which is the point of `group_left`), and an `Include` label the
+    "one" side does not have is **deleted** from the result rather than taken from the "many"
+    side.
+
+90. **`VectorscalarBinop` reports the VECTOR's value even when the scalar is written on the
+    left.** For `1 < foo` the result is forced back to the vector element's value; without that
+    every match would report 1. `returnBool` then forces `keep` true, so a `bool` comparison
+    emits an output per element rather than filtering.
+
+    It also skips an element on an error **unless the error is a warning**. That guard cannot fire
+    at this pin — the only warning `vectorElemBinop` produces is the histogram⊕histogram
+    counter-reset collision, and a vector/scalar operation always has a nil right-hand histogram —
+    so it is a no-op that is reproduced rather than simplified away.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

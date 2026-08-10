@@ -153,4 +153,60 @@ extension Labels {
         }
         return XXHash64.sum64(b)
     }
+
+    // MARK: - Signature bytes
+
+    /// Go: `Labels.BytesWithLabels(b, names...)` — the framed bytes of only the named
+    /// labels. `names` must be sorted ascending.
+    ///
+    /// The evaluator's join signature (`engine.go`'s `sigf`) is this turned into a `string` and
+    /// used as a map key, so what matters is that two label sets collide **iff** they agree on
+    /// the named labels. The framing is `name 0xFF value 0xFF` rather than stringlabels' own
+    /// `labelSep`-prefixed packing, which is the same choice ``goHash(forNames:)`` already
+    /// makes and is licensed by PORTING.md exception 1: Go's own doc comment says the `Bytes`
+    /// encoding "may change over time or between runs".
+    ///
+    /// It is not a *hash*, so unlike `goHash(forNames:)` there is no collision to reason about
+    /// — which is exactly why upstream keys the signature map on bytes rather than on a hash.
+    public func bytesWithLabels(_ names: [String]) -> [UInt8] {
+        var b = [UInt8]()
+        var j = 0
+        for l in self {
+            while j < names.count && names[j].utf8Lexicographic < l.name.utf8Lexicographic {
+                j += 1
+            }
+            if j == names.count { break }
+            if l.name == names[j] {
+                b.append(contentsOf: l.name.utf8)
+                b.append(Self.sep)
+                b.append(contentsOf: l.value.utf8)
+                b.append(Self.sep)
+            }
+        }
+        return b
+    }
+
+    /// Go: `Labels.BytesWithoutLabels(b, names...)`. `names` must be sorted ascending.
+    ///
+    /// Unlike ``goHash(withoutNames:)`` this does **not** drop `__name__` of its own accord —
+    /// `Bytes*` and `Hash*` differ there, and the evaluator relies on it: `sigf`'s `without`
+    /// branch prepends `labels.MetricName` to `names` itself before sorting, precisely because
+    /// this function would otherwise keep it.
+    public func bytesWithoutLabels(_ names: [String]) -> [UInt8] {
+        var b = [UInt8]()
+        var j = 0
+        for l in self {
+            while j < names.count && names[j].utf8Lexicographic < l.name.utf8Lexicographic {
+                j += 1
+            }
+            if j < names.count && l.name == names[j] {
+                continue
+            }
+            b.append(contentsOf: l.name.utf8)
+            b.append(Self.sep)
+            b.append(contentsOf: l.value.utf8)
+            b.append(Self.sep)
+        }
+        return b
+    }
 }
