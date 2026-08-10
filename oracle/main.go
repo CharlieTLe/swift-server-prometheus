@@ -174,6 +174,14 @@ var suites = map[string]func(*emitter){
 	// Phase 5: the float-only range aggregations. See
 	// oracle/suites_promql_functions_overtime.go.
 	"promql/functions-overtime": genPromQLFunctionsOverTime,
+	// Phase 5: the four sorts, and the two pieces of machinery they need to be
+	// byte-exact about — Go's pdqsort and natsort.Compare. Neither PromQL comparator
+	// is a strict weak ordering, so the ALGORITHM is the contract. Note
+	// `gocompat/sort` is pinned to a Go TOOLCHAIN rather than to prometheus v3.13.2;
+	// see oracle/suites_gosort.go.
+	"gocompat/sort":         genGoPdqsort,
+	"gocompat/natsort":      genGoNatsort,
+	"promql/functions-sort": genPromQLFunctionsSort,
 }
 
 func main() {
