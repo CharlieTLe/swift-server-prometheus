@@ -47,6 +47,7 @@ public import PromLabels
 public import PromQLParser
 
 internal import PromMath
+public import PromHistogram
 
 /// Go: `aggrOverTime` — apply `aggrFn` to the matrix's single series.
 ///
@@ -59,8 +60,14 @@ func aggrOverTime(
         return enh.out
     }
     let el = matrixVal[0]
-    enh.out.append(Sample(f: aggrFn(el)))
-    return enh.out
+    // Go writes `return append(enh.Out, …)` and does **not** assign back to the field,
+    // so `enh.Out` keeps its original length. That is invisible for every caller that
+    // returns this value straight through — and load-bearing for `funcSumOverTime`,
+    // which on its error path returns `enh.Out` and thereby *discards* the sample this
+    // appended. Four fixture cases depend on it.
+    var out = enh.out
+    out.append(Sample(f: aggrFn(el)))
+    return out
 }
 
 /// Go: `funcCountOverTime` — the number of samples, **floats and histograms
@@ -421,4 +428,160 @@ func funcMadOverTime(
         return quantile(0.5, s.floats.map { Swift.abs($0.f - median) })
     }
     return (out, annos)
+}
+
+// MARK: - sum_over_time, and the histogram aggregation path
+
+/// Go: `aggrHistOverTime` — ``aggrOverTime(_:_:_:)``'s histogram twin, propagating an
+/// error out of the aggregation.
+///
+/// The error is *not* swallowed: `funcSumOverTime` maps an incompatible-schema failure
+/// onto a warning, and returns the partial `Sample` regardless — so a failed
+/// aggregation still appends whatever the closure got to.
+func aggrHistOverTime(
+    _ matrixVal: Matrix, _ enh: EvalNodeHelper,
+    _ aggrFn: (Series) throws -> FloatHistogram?
+) rethrows -> Vector {
+    if matrixVal.isEmpty {
+        return enh.out
+    }
+    let el = matrixVal[0]
+    var sample = Sample()
+    sample.h = try aggrFn(el)
+    // Not written back to `enh.out` — see the note in ``aggrOverTime(_:_:_:)``.
+    var out = enh.out
+    out.append(sample)
+    return out
+}
+
+/// Go: `funcSumOverTime` — the sum of a range, with a float path and a histogram path.
+///
+/// The three-way split at the top is the shape to get right:
+///
+///   * **both** kinds present → nothing, plus a `MixedFloatsHistogramsWarning`. Note
+///     this is stricter than the `*_over_time` functions in the first half of this
+///     file, which ignore the histograms and carry on with a *different* annotation.
+///   * no floats → the histogram path.
+///   * otherwise → the float path, which never looks at the histograms at all.
+///
+/// The float path's tail is not `sum + c`: an **infinite** sum returns `sum` unchanged,
+/// because adding the compensation to ±Inf would produce NaN. That guard is the whole
+/// difference between `sum_over_time(x)` being `+Inf` and being `NaN` once a value
+/// overflows.
+///
+/// The histogram path accumulates with `KahanAdd` and folds the compensation in once at
+/// the end with `Add`, and tracks two things across the whole range to decide its
+/// annotations: whether it saw **both** a `CounterReset` and a `NotCounterReset` hint
+/// (a collision), and whether any addition had to reconcile custom bucket bounds. Both
+/// are reported once, after the loop — Go does it in a `defer`, so they fire even on the
+/// error return.
+func funcSumOverTime(
+    _: [Vector], _ m: Matrix, _ args: [any Expr], _ enh: EvalNodeHelper
+) -> (Vector, Annotations) {
+    if m.isEmpty {
+        return (enh.out, Annotations())
+    }
+    let firstSeries = m[0]
+    if !firstSeries.floats.isEmpty && !firstSeries.histograms.isEmpty {
+        var annos = Annotations()
+        annos.add(
+            newMixedFloatsHistogramsWarning(
+                getMetricName(firstSeries.metric), args[0].positionRange))
+        return (enh.out, annos)
+    }
+
+    if firstSeries.floats.isEmpty {
+        var annos = Annotations()
+        var counterResetSeen = false
+        var notCounterResetSeen = false
+        var nhcbBoundsReconciledSeen = false
+        var failed = false
+
+        // Go's `defer` runs on every exit, including the error one, so these two are
+        // added after the loop whatever happened.
+        func trackCounterReset(_ h: FloatHistogram) {
+            switch h.counterResetHint {
+            case .counterReset: counterResetSeen = true
+            case .notCounterReset: notCounterResetSeen = true
+            default: break
+            }
+        }
+
+        let out = aggrHistOverTime(m, enh) { s -> FloatHistogram? in
+            // Go indexes `s.Histograms[0]` with no guard, so a series with neither
+            // floats nor histograms **panics** — `len(Floats) == 0` routes it here.
+            // Unreachable from a query (`rangeEval` only calls a range function for a
+            // series it found), and reported clearly rather than reproduced as a
+            // crash, exactly as PORTING.md exception 9 does for `sampleRing`.
+            precondition(
+                !s.histograms.isEmpty,
+                "sum_over_time: a series with no samples at all; Go panics here")
+            var sum = s.histograms[0].h.copy()
+            trackCounterReset(sum)
+            var comp: FloatHistogram? = nil
+            for hp in s.histograms.dropFirst() {
+                trackCounterReset(hp.h)
+                do {
+                    let (updatedC, result) = try sum.kahanAdd(hp.h, comp)
+                    comp = updatedC
+                    if result.nhcbBoundsReconciled {
+                        nhcbBoundsReconciledSeen = true
+                    }
+                } catch {
+                    failed = true
+                    return sum
+                }
+            }
+            if var c = comp {
+                do {
+                    let result = try sum.add(c)
+                    if result.nhcbBoundsReconciled {
+                        nhcbBoundsReconciledSeen = true
+                    }
+                } catch {
+                    failed = true
+                }
+                _ = c
+            }
+            return sum
+        }
+
+        if counterResetSeen && notCounterResetSeen {
+            annos.add(newHistogramCounterResetCollisionWarning(args[0].positionRange, .agg))
+        }
+        if nhcbBoundsReconciledSeen {
+            annos.add(newMismatchedCustomBucketsHistogramsInfo(args[0].positionRange, .agg))
+        }
+        if failed {
+            // Go checks `errors.Is(err, ErrHistogramsIncompatibleSchema)` and replaces
+            // the whole result — the partial sum is discarded and only the warning
+            // survives.
+            var only = Annotations()
+            only.add(
+                newMixedExponentialCustomHistogramsWarning(
+                    getMetricName(firstSeries.metric), args[0].positionRange))
+            return (enh.out, only)
+        }
+        return (out, annos)
+    }
+
+    let out = aggrOverTime(m, enh) { s in
+        var sum = 0.0
+        var c = 0.0
+        for f in s.floats {
+            (sum, c) = Kahan.inc(f.f, sum, c)
+        }
+        if sum.isInfinite {
+            // Adding the compensation to ±Inf would give NaN.
+            //
+            // **Unwitnessed.** Removing this guard moves no case in
+            // `promql/functions-overtime.jsonl`, including the runs that overflow with
+            // small values interleaved: Kahan's compensation is already 0 or NaN by the
+            // time the sum saturates. Kept because it is what Go does, and recorded
+            // rather than presented as verified.
+            return sum
+        }
+        return sum + c
+    }
+    return (out, Annotations())
 }

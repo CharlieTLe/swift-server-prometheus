@@ -16,10 +16,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **72 of `FunctionCalls`' 89 bodies** are landed. Next: `rate`/`increase`/`delta` via `extrapolatedRate`, `sum`/`avg_over_time`, the sorts, then the evaluator |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **73 of `FunctionCalls`' 89 bodies** are landed. Next: `rate`/`increase`/`delta` via `extrapolatedRate`, `avg_over_time`, the sorts, then the evaluator |
 | 6–10 | not started |
 
-Green as of this commit: **324,852 committed differential cases, 448 tests**, on both Swift 6.4
+Green as of this commit: **324,962 committed differential cases, 448 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
 
 ```
@@ -40,9 +40,9 @@ Sources/            src     generated
   PromStorage       1,735         –
   PromTestStorage     453         –
   PromQLParser      5,993       550
-  PromQL            4,436         –
+  PromQL            4,901         –
 Tests              11,321
-oracle (Go)        14,874
+oracle (Go)        15,215
 ```
 
 ### Verify everything in one go
@@ -232,6 +232,20 @@ where I had written a plausible expectation and the fixture proved the implement
   passes with the fusion undone has not tested it. Note `xatan`'s unrounded `fma(x, x, Q0)` is
   observable while `tan`'s structurally identical site is not — so "no witness found" is a fact about
   the search, not a licence to simplify.
+- **A corpus built from one family of generated values pins one axis — and this is now the third
+  instance.** Every histogram shape in the `functions-*` corpora came from `genTestHistogram` (hint
+  `UnknownCounterReset`) or was a hand-built gauge, so `sum_over_time`'s
+  `counterResetSeen && notCounterResetSeen` could never both be true: the collision warning, its `&&`,
+  and its absence were all invisible. The bounds-reconciliation info needed two custom-bucket shapes
+  with *different* bounds, and there was one custom shape used twice. Four new shapes turned five silent
+  controls into failures. Quirk 59. Alongside quirks 51 (magnitude for Kahan) and 54 (inexactness for
+  fusion, cancellation for grouping), the rule is: **ask which *field* of the input each branch reads,
+  and make sure two cases differ in it.**
+- **Go's `append(enh.Out, …)` without a write-back is load-bearing in exactly one place.**
+  `aggrOverTime`/`aggrHistOverTime` return the appended slice and leave the field's length alone, so
+  `funcSumOverTime`'s incompatible-schema path — which returns `enh.Out` — *discards* the sample the
+  aggregation produced. A port that mutates in place returns a partial sum beside the warning where Go
+  returns the warning alone. Quirk 58. Slice-value semantics are not always allocation detail.
 - **A corpus case that is safe under one input is not safe under another, and "safe" can mean "does
   not hang the generator".** `resets`/`changes`' merge loop does not terminate when a float and a
   histogram share a timestamp — neither of Go's two cases matches, so no index advances. Equal-timestamp
@@ -580,6 +594,7 @@ The **protocol substrate is done and merged**. What exists now:
 | `PromQL` | `promql/functions.go`'s element-wise arithmetic slice | `simpleFloatFunc` + 26 wrappers, `clamp`×3, `round`, `scalar`, `vector`, `time`, `timestamp`, `pi`, `sgn` |
 | `PromQL` | `promql/functions.go`'s `dateWrapper` + the 8 date functions | |
 | `PromQL` | `promql/functions.go`'s float-only range aggregations | `aggrOverTime`, `compareOverTime`, `varianceOverTime`, `quantile_over_time`, `mad_over_time` and the 13 entries around them. Quirks 50-52 |
+| `PromQL` | `promql/functions.go`'s `sum_over_time` | `aggrHistOverTime` and the histogram Kahan path. 73 of 89 in total. Quirks 58-59 |
 | `PromQL` | `promql/functions.go`'s `resets`/`changes` | `pickFirstSampleIndices` and `durationMilliseconds`; first reader of `StartTimestamps`. 72 of 89 in total. Quirk 57 |
 | `PromQL` | `promql/functions.go`'s `irate`/`idelta` | `instantValue` and `isStartTimestampReset`. 70 of 89 in total. Quirks 55-56 |
 | `PromQL` | `promql/functions.go`'s regression and smoothing | `linearRegression`, `calcTrendValue`, `deriv`, `predict_linear`, `double_exponential_smoothing`. 68 of 89 in total. Quirks 53-54 |
@@ -914,7 +929,7 @@ test code) is not, and because TSDB failures are loud (CRC mismatch) while PromQ
 ## 7. Documents worth reading, in order
 
 1. `README.md` — what this is, how correctness is defined
-2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 57 replicated Go quirks
+2. `docs/PORTING.md` — the fidelity contract and its **thirteen documented exceptions**, plus 59 replicated Go quirks
 3. `docs/DECISIONS.md` — ADRs 1–14, including the reasoning behind every awkward-looking choice
 4. `docs/ROADMAP.md` — the ten phases and their exit gates
 5. `CLAUDE.md` — conventions (cite the Go source in every file header, at the pin)

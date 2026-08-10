@@ -658,6 +658,132 @@ func genPromQLFunctionsOverTime(e *emitter) {
 		}
 	}
 
+	// --- sum_over_time.
+	//
+	// Its three-way split is stricter than the rest of this family: BOTH kinds present
+	// is a MixedFloatsHistogramsWarning and no output, where max_over_time would ignore
+	// the histograms and warn differently. No floats takes the histogram path.
+	//
+	// The histogram path's annotations depend on what it saw across the WHOLE range —
+	// a CounterReset hint together with a NotCounterReset one is a collision, and any
+	// bound reconciliation is reported once. Go adds both in a `defer`, so they fire on
+	// the error return too. The `hintPair` shapes below exist for that.
+	// A series with NEITHER floats nor histograms is excluded: `len(Floats) == 0`
+	// routes it to the histogram path, which indexes `Histograms[0]` with no guard, so
+	// Go PANICS. It took the fixture generator down. Unreachable from a query, and
+	// guarded with a clear precondition in the port instead.
+	sumMatrices := [][][]fnSampleIn{}
+	for _, m := range matrices {
+		if len(m) == 1 && len(m[0]) == 0 {
+			continue
+		}
+		sumMatrices = append(sumMatrices, m)
+	}
+	sumMatrices = append(sumMatrices,
+		// Histogram-only, ascending and descending.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "std/0"}, {t: 2000, hist: "std/1"}, {t: 3000, hist: "std/2"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "std/3"}, {t: 2000, hist: "std/1"},
+		})},
+		// A single histogram: the loop body never runs and `comp` stays nil, so the
+		// final `Add` is skipped.
+		[][]fnSampleIn{otSeries(metric, []otPoint{{t: 1000, hist: "std/1"}})},
+		// Custom buckets throughout, and mixed against exponential — the
+		// incompatible-schema path, which discards the partial sum and keeps only the
+		// warning.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "custom"}, {t: 2000, hist: "custom"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "std/1"}, {t: 2000, hist: "custom"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "custom"}, {t: 2000, hist: "std/1"}, {t: 3000, hist: "custom"},
+		})},
+		// Gauge hints, and the zero/negative shape.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "gauge"}, {t: 2000, hist: "gauge2"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "zeroneg"}, {t: 2000, hist: "zeroneg"},
+		})},
+		// Both kinds: the strict mixed warning, with and without the metadata labels.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, hist: "std/1"},
+		})},
+		[][]fnSampleIn{otSeries(withMetadata, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, hist: "std/1"},
+		})},
+		// Float sums that OVERFLOW, which is the one case where the compensation is
+		// deliberately not added back.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: 1e308}, {t: 2000, f: 1e308}, {t: 3000, f: 1},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: -1e308}, {t: 2000, f: -1e308},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: math.Inf(1)}, {t: 2000, f: 1}, {t: 3000, f: 0.1},
+		})},
+		// Both counter-reset hints in one range: the ONLY way the collision warning
+		// fires, since every other shape is unknown or gauge.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "crhint"}, {t: 2000, hist: "ncrhint"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "ncrhint"}, {t: 2000, hist: "crhint"}, {t: 3000, hist: "std/1"},
+		})},
+		// One hint only, so the collision must NOT fire.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "crhint"}, {t: 2000, hist: "crhint"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "ncrhint"}, {t: 2000, hist: "ncrhint"},
+		})},
+		// Custom buckets with DIFFERENT bounds, which forces a reconciliation and is
+		// the only way the MismatchedCustomBuckets info fires.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "custom"}, {t: 2000, hist: "custom2"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "custom2"}, {t: 2000, hist: "custom"}, {t: 3000, hist: "custom2"},
+		})},
+		// Wildly different magnitudes, so the histogram Kahan compensation carries a
+		// non-zero term and the final Add(comp) is not a no-op.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "huge"}, {t: 2000, hist: "tiny"}, {t: 3000, hist: "tiny"},
+			{t: 4000, hist: "tiny"},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, hist: "huge"}, {t: 2000, hist: "tiny"}, {t: 3000, hist: "huge"},
+			{t: 4000, hist: "tiny"},
+		})},
+		// A float sum that overflows to +Inf while the compensation is non-zero, so
+		// `sum + c` would be NaN and the guard is what keeps it +Inf.
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: 1e308}, {t: 2000, f: 1e-308}, {t: 3000, f: 1e308},
+			{t: 4000, f: 1e-308},
+		})},
+		[][]fnSampleIn{otSeries(metric, []otPoint{
+			{t: 1000, f: 1}, {t: 2000, f: 1e308}, {t: 3000, f: 1e308}, {t: 4000, f: 0.5},
+		})},
+		// And sums where the compensation genuinely matters.
+		[][]fnSampleIn{otSeriesRun(metric, 1e16, 50, 1)},
+		[][]fnSampleIn{otSeriesAlternating(metric, 1e17, 1, 21)},
+	)
+	for _, m := range sumMatrices {
+		for _, delayed := range []bool{false, true} {
+			emit(fnIn{
+				Fn: "sum_over_time", Delayed: delayed, Ts: "1500",
+				Expr:     "sum_over_time(http_requests_total[5m])",
+				Args:     [][]fnSampleIn{},
+				MatrixIn: m,
+			})
+		}
+	}
+
 	for _, fn := range names {
 		for _, m := range matrices {
 			for _, delayed := range []bool{false, true} {

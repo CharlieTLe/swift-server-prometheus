@@ -642,6 +642,7 @@ public let functionCalls: [String: FunctionCall] = [
     "sin": funcSin,
     "sinh": funcSinh,
     "sqrt": funcSqrt,
+    "sum_over_time": funcSumOverTime,
     "stddev_over_time": funcStddevOverTime,
     "stdvar_over_time": funcStdvarOverTime,
     "tan": funcTan,

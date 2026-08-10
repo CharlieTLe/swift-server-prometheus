@@ -183,6 +183,16 @@ func fnNamedHistogram(name string) *histogram.FloatHistogram {
 		return histGauge()
 	case "gauge2":
 		return histGauge2()
+	case "crhint":
+		return histCounterReset()
+	case "ncrhint":
+		return histNotCounterReset()
+	case "custom2":
+		return histCustomBuckets2()
+	case "tiny":
+		return histTinyBuckets()
+	case "huge":
+		return histHugeBuckets()
 	default:
 		var n int64
 		if _, err := fmt.Sscanf(name, "std/%d", &n); err != nil {

@@ -267,6 +267,43 @@ func fnNamedHistogram(_ name: String) -> FloatHistogram {
         var h = genTestHistogram(3).toFloat()
         h.counterResetHint = .gaugeType
         return h
+    case "crhint":
+        // The two hints whose CO-OCCURRENCE is what sum_over_time's collision warning
+        // tests; every other shape here is unknown or gauge.
+        var h = genTestHistogram(1).toFloat()
+        h.counterResetHint = .counterReset
+        return h
+    case "ncrhint":
+        var h = genTestHistogram(2).toFloat()
+        h.counterResetHint = .notCounterReset
+        return h
+    case "custom2":
+        // DIFFERENT custom bounds from "custom", so adding the two forces a bounds
+        // reconciliation — the only way the MismatchedCustomBuckets info fires.
+        var h = FloatHistogram()
+        h.schema = -53
+        h.count = 8
+        h.sum = 19
+        h.customValues = [1, 5, 20]
+        h.positiveSpans = [Span(offset: 0, length: 3)]
+        h.positiveBuckets = [3, 4, 1]
+        return h
+    case "tiny":
+        var h = FloatHistogram()
+        h.schema = 1
+        h.count = 1e-16
+        h.sum = 1e-16
+        h.positiveSpans = [Span(offset: 0, length: 2)]
+        h.positiveBuckets = [5e-17, 5e-17]
+        return h
+    case "huge":
+        var h = FloatHistogram()
+        h.schema = 1
+        h.count = 1e16
+        h.sum = 1e16
+        h.positiveSpans = [Span(offset: 0, length: 2)]
+        h.positiveBuckets = [5e15, 5e15]
+        return h
     case "negonly":
         var h = FloatHistogram()
         h.schema = 0

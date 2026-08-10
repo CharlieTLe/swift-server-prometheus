@@ -84,7 +84,7 @@ struct FunctionsElementwiseTests {
             // Still deferred: histogram Kahan arithmetic (sum/avg), vectorByValueHeap
             // (mad/quantile), the start-timestamp machinery (resets/changes), and the
             // rate family's interpolate/correctForCounterResets.
-            "avg_over_time", "sum_over_time",
+            "avg_over_time",
             "delta", "increase", "rate",
             // Sorts: need Go's pdqsort, because the two sorts are observably
             // different and neither comparator is a strict weak ordering.

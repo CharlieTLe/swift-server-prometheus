@@ -976,6 +976,40 @@ changing behaviour.
     start timestamps nil until Phases 6-7, that difference is currently unobservable
     and is recorded rather than tested.
 
+58. **`aggrOverTime` and `aggrHistOverTime` return `append(enh.Out, …)` without
+    assigning back, and one caller depends on it.** Go's field keeps its original
+    length, so the appended sample lives only in the returned slice. Every caller that
+    returns that value straight through cannot tell the difference — but
+    `funcSumOverTime`'s incompatible-schema path returns **`enh.Out`**, and thereby
+    *discards* the sample the aggregation just produced. A port that mutates the helper
+    in place returns a partial sum alongside the warning; Go returns the warning alone.
+    Four fixture cases.
+
+    `sum_over_time` also panics on a series with **neither** floats nor histograms:
+    `len(Floats) == 0` routes it to the histogram path, which indexes `Histograms[0]`
+    unguarded. It took the fixture generator down. Unreachable from a query, guarded
+    with a clear precondition — exception 9's treatment again.
+
+59. **Four of `sum_over_time`'s histogram behaviours were unreachable because every
+    test shape shared a counter-reset hint.** `genTestHistogram` produces
+    `UnknownCounterReset`, and the corpus's hand-built shapes were gauges — so
+    `counterResetSeen && notCounterResetSeen` could never both be true, and the
+    collision warning, its `&&`, and its absence were all invisible. Likewise the
+    bounds-reconciliation info needed two custom-bucket histograms with **different**
+    bounds, and the corpus had one custom shape used twice.
+
+    Adding four shapes — a `CounterReset` hint, a `NotCounterReset` hint, a second set
+    of custom bounds, and a tiny/huge pair whose Kahan compensation is non-zero — turned
+    five silent controls into failures.
+
+    **The generalisation, which now has three instances in this document (quirks 51, 54,
+    59): a corpus built from one family of generated values pins one axis.** Ask which
+    *field* of the input each branch reads, and make sure two cases differ in it.
+
+    Still unwitnessed: `sum_over_time`'s `IsInf(sum)` guard before adding the
+    compensation. Kahan's `c` is already 0 or NaN by the time the sum saturates, so
+    removing the guard moves nothing. Kept because it is what Go does.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
