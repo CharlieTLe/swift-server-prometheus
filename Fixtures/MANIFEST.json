@@ -3,6 +3,7 @@
   "upstreamDescribe": "v0.313.2",
   "goVersion": "go1.26.5",
   "files": {
+    "block/labels.jsonl": { "sha256": "4e7b75076ef34b97592c5ccb87a9f9127485b75f7f6437b0c0651754a5b8b36c", "lines": 7 },
     "block/meta.jsonl": { "sha256": "156998aedb669f9fb9215a35ad9d563664b1098d4714617b507bf6b93ff9f4d3", "lines": 25 },
     "chunkenc/chunkmeta.jsonl": { "sha256": "32475dd0955ef4d422b5eae7e9481989d66baadf654568e88d8c5ae871cd136b", "lines": 140 },
     "chunkenc/compatible.jsonl": { "sha256": "705caedcd4167985825cbcb5ecb43ce9699d8894e024e55d071c9c9b8af76481", "lines": 36 },

@@ -274,6 +274,10 @@ public struct IndexSymbols: Sendable {
 
 /// ADR-10: Go compares strings by BYTE, Swift by Unicode collation. The symbol table is sorted by Go's
 /// ordering, so its binary search must use Go's comparison or it searches a differently-sorted array.
+/// Go's byte ordering, for callers outside this module (ADR-10). `goStringLess` itself stays internal so
+/// the module's own call sites keep the shorter name.
+public func goStringLessBytes(_ a: String, _ b: String) -> Bool { goStringLess(a, b) }
+
 func goStringLess(_ a: String, _ b: String) -> Bool {
     Array(a.utf8).lexicographicallyPrecedes(Array(b.utf8))
 }
