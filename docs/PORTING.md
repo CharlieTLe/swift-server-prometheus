@@ -2169,6 +2169,27 @@ changing behaviour.
     says why they coincide: "Symbol numbers are in order, so the strings will also be in order." Sorting by
     string would agree today and diverge the moment a symbol table is built in a different order.
 
+149. **`json.MarshalIndent` collapses an EMPTY object to `{}` on one line.** Not `{\n\t}`. So a
+    `meta.json` whose stats are all zero contains `"stats": {}` with no inner newline. A hand-written
+    encoder that always emits the multi-line form differs in every such file — which is most of them, since
+    an empty-stats block is the common case.
+
+150. **`omitempty` does not apply to a struct, and `compaction.level` does not carry it.**
+    `Stats BlockStats \`json:"stats,omitempty"\`` reads as if an all-zero stats block would vanish; Go's
+    `omitempty` has no effect on struct values, so `stats` is always present. And inside `compaction`,
+    `Level int \`json:"level"\`` is bare while `sources`, `deletable`, `parents`, `failed` and `hints` all
+    carry `omitempty` — so `"level": 0` is emitted and the others are not. Pattern-matching the tags gets
+    this wrong; 24 of 25 corpus cases caught it.
+
+151. **`encoding/json` escapes `<`, `>` and `&`, and `strconv.Quote` does not.** HTML-escaping is on by
+    default (`SetEscapeHTML(false)` would disable it, and Prometheus does not), so a `hints` entry
+    containing those characters is written `\u003c`, `\u003e`, `\u0026`. Reusing the pinned
+    `GoStrconv.quote` for JSON is therefore wrong, and the two also differ on `\u2028`/`\u2029`.
+
+152. **A ULID is 26 Crockford base32 characters over 128 bits, so its first character holds only 3 bits.**
+    26 x 5 = 130, and the top two are padding — a ULID string whose first character is above `7` is invalid
+    and upstream's parser rejects it. The alphabet omits I, L, O and U.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

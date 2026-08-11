@@ -1835,9 +1835,28 @@ so a 512 MiB index is fully resident, and a reader cannot observe an appender's 
 question again), and `sync` is a no-op with `handle.synchronize()` left for a durability slice that has a
 test able to observe it.
 
-**Next in Phase 6:** a `BlockReader` tying the chunk and index readers together — `meta.json`, then
-resolving a series' chunk refs through the segment files — at which point Phase 6 can read a complete on-disk
-block that a real Prometheus wrote. `MemPostings` waits for the Head in Phase 7.
+### 6k. `meta.json` and ULID — LANDED, byte for byte
+
+`Sources/PromBlock/BlockMeta.swift`. A block's `meta.json` is the only JSON in the TSDB, which makes it the
+only place `encoding/json`'s own behaviour is a compatibility surface — so the port emits it **by hand** and
+25 corpus cases say whether that was right. Hint strings travel as hex, because they are where the escaping
+cases live and a JSON string field would repair exactly what is under test.
+
+Quirks 149-152. Two of them cost 24 of the 25 cases on the first run:
+
+* **an empty object collapses to `{}`** on one line, so an all-zero-stats block contains `"stats": {}` with
+  no inner newline — and that is the common case, not an edge one;
+* **`omitempty` does not apply to structs, and `compaction.level` does not carry it.** The tag on `stats`
+  reads as if an empty stats block would vanish; it never does. Inside `compaction`, `level` is bare while
+  every other field carries `omitempty`. Pattern-matching the tags gets this wrong.
+
+Also: `encoding/json` HTML-escapes `<`, `>` and `&` where `strconv.Quote` does not, so the pinned
+`GoStrconv.quote` is the wrong tool for JSON (quirk 151); and a ULID's first character can never exceed `7`,
+because 26 base32 characters hold 130 bits for a 128-bit value (quirk 152).
+
+**Next in Phase 6:** the `BlockReader` itself — open a directory, read `meta.json`, and resolve a series'
+chunk refs through the segment files, tying §6d-§6j together. Everything it needs is now ported and pinned,
+so it is composition rather than new format work. `MemPostings` waits for the Head in Phase 7.
 
 **Previously next, now done:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
 machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus
