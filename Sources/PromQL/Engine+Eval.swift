@@ -384,10 +384,11 @@ final class Evaluator {
             }
             _ = ws.merge(ws2)
             if e.smoothed {
-                // `smoothSeries` interpolates a selector's own samples; it lands with the
-                // rest of the smoothing machinery.
-                throw EvaluatorNotPorted(
-                    nodeType: "VectorSelector", detail: "the `smoothed` modifier needs smoothSeries")
+                // A DIFFERENT function from `foo[5m] smoothed`: this interpolates the selector's
+                // own samples onto the step grid, where the range form widens a window.
+                let (mat, smoothAnnos) = try smoothSeries(e.series, e.offset, e.positionRange)
+                _ = ws.merge(smoothAnnos)
+                return mat
             }
             return try evalSeries(ctx, e.series, e.offset, false)
 
