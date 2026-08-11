@@ -1203,12 +1203,25 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   question, reached at last.** `Labels` is `String`-backed, so the raw bytes arrive as U+FFFD and
   pass validation. §6 has been saying the deciding moment is Phase 8; the exit gate says it is now.
 
-The other ~30 are one shape: histogram comparison where the two **renderings are identical**.
-`compareNativeHistogram` compares spans structurally and `zeroThreshold`/`customValues` exactly,
-none of which `FloatHistogram.String()` prints, so `{count:0, sum:0} != {count:0, sum:0}` is a real
-difference in an invisible field — almost certainly span structure after `Compact(0)`. **The next
-step is to print the spans in the failure message**, which is ten minutes and turns 30 opaque
-failures into a diagnosis.
+The other ~30 are one shape, and the failure message now prints the invisible fields so the
+diagnosis is immediate. For `histogram_mul_div * 0`:
+
+```
+want schema=0 zt=0.001 zc=0.0 pSpans=(0,3) pB=[0.0, 0.0, 0.0]
+got  schema=0 zt=0.001 zc=0.0 pSpans=       pB=[]
+```
+
+**Go's `Compact(0)` KEEPS all-zero buckets; the port's strips them.** `vectorElemBinop`'s
+float×histogram arm is `hrhs.Copy().Mul(lhs).Compact(0)`, so multiplying by zero leaves three
+buckets of 0 upstream and nothing here — and the two `String()` renderings are identical, which is
+why 30 failures looked opaque.
+
+`PromHistogram.compact` is pinned by twelve differential suites, so the likely explanation is a
+**corpus gap rather than a transcription error**: an all-zero histogram is a shape
+`Fixtures/histogram/*` may never build, exactly as quirk 59 and the Kahan-magnitude lesson describe.
+Start by adding `Compact` cases over an all-zero histogram to the `histogram/float-*` corpus and see
+whether Go and the port already disagree there — that isolates it to `compact` or to `mul` in one
+step, and it is the single highest-value ~30 assertions left in the gate.
 
 Three things the first run taught, all of them recorded because they cost time:
 

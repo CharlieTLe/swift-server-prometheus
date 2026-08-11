@@ -112,11 +112,12 @@ struct PromQLTestTests {
 /// runner-incompleteness and nothing else.
 // The 39 remaining failures, categorised so the next slice has targets rather than a list:
 //
-//   ~30  histogram comparison where the two RENDERINGS ARE IDENTICAL. `compareNativeHistogram`
-//        compares spans structurally and `zeroThreshold`/`customValues` exactly, none of which
-//        `FloatHistogram.String()` prints — so `{count:0, sum:0}` != `{count:0, sum:0}` is a real
-//        difference in a field the message cannot show. Almost certainly span structure after
-//        `Compact(0)`: the next step is to print the spans in the failure message and find out.
+//   ~30  histogram comparison where the two RENDERINGS ARE IDENTICAL. Diagnosed: Go's `Compact(0)`
+//        KEEPS all-zero buckets and the port's strips them, so `hrhs.Copy().Mul(0).Compact(0)`
+//        leaves `pSpans=(0,3) pB=[0,0,0]` upstream and nothing here. The failure message prints the
+//        fields `String()` omits, which is what made this a one-look diagnosis. `PromHistogram`'s
+//        `compact` is pinned by twelve suites, so suspect a CORPUS GAP — an all-zero histogram —
+//        before a transcription error. See HANDOFF §5e.
 //     2  `expect warn: conflicting counter resets during histogram aggregation` not firing for
 //        `sum_over_time`/`avg_over_time` over a mixed-hint matrix. A REAL engine finding: quirk 59
 //        says the corpus for that warning could never make `counterResetSeen &&
