@@ -1816,9 +1816,28 @@ was exactly four bytes short and the divergence appeared *at the offset table* r
 was missing. The lesson is the diagnostic one — "N bytes short, consistently" points at a dropped
 fixed-width field, and the reported offset is where the shift becomes visible, not where it starts.
 
-**Next in Phase 6:** `RealFS` (thin, `FileManager`-backed) and a `BlockReader` tying the chunk and index
-readers together — at which point Phase 6 can read and write a complete on-disk block. `MemPostings` waits
-for the Head in Phase 7.
+### 6j. `RealFS` — LANDED, and the property that makes the corpora mean something
+
+`Sources/PromFS/RealFS.swift`, `FileManager`-backed. **Deliberately thin and deliberately barely tested**,
+and the reason is worth stating: every corpus in the project drives `InMemoryFS`, so the byte-level behaviour
+of both writers and both readers is already pinned against Go without `RealFS` existing. What is left for it
+to get right is the *mapping onto the filesystem* — exactly the part a differential corpus cannot check — so
+its tests are a handful of round trips in a temporary directory and stop there.
+
+**One test carries the weight: `implementationsAgree`.** The same sequence of operations — append, pad,
+`write(at:)`, pad again — is run through both implementations and the bytes, the final position and the
+directory listing are compared. That is the property that makes a corpus passing on `InMemoryFS` say
+something about a real directory. Without it the in-memory implementation could drift and every fixture
+would still be green.
+
+Two divergences from upstream stay documented rather than fixed: reads are **eager** (ADR-15 declines mmap,
+so a 512 MiB index is fully resident, and a reader cannot observe an appender's writes — quirk 120's
+question again), and `sync` is a no-op with `handle.synchronize()` left for a durability slice that has a
+test able to observe it.
+
+**Next in Phase 6:** a `BlockReader` tying the chunk and index readers together — `meta.json`, then
+resolving a series' chunk refs through the segment files — at which point Phase 6 can read a complete on-disk
+block that a real Prometheus wrote. `MemPostings` waits for the Head in Phase 7.
 
 **Previously next, now done:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
 machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus
