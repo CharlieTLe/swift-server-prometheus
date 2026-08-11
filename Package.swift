@@ -32,6 +32,8 @@ let package = Package(
         .library(name: "PromIndex", targets: ["PromIndex"]),
         .library(name: "PromFS", targets: ["PromFS"]),
         .library(name: "PromBlock", targets: ["PromBlock"]),
+        .library(name: "PromTombstones", targets: ["PromTombstones"]),
+        .library(name: "PromRecord", targets: ["PromRecord"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -100,12 +102,27 @@ let package = Package(
         // scratch directory.
         .target(name: "PromFS", dependencies: ["PromEncoding"]),
 
+        // Phase 6: `tsdb/tombstones`' interval arithmetic, plus Phase 7's `Stone`. Its own target
+        // because it is Go's own package boundary and because `tsdb/record` imports it without
+        // importing anything else of the block.
+        .target(name: "PromTombstones", dependencies: ["PromStorage", "GoCompat"]),
+
+        // Phase 7: `tsdb/record` — the WAL's wire format. Byte-exact, exported and stateless, which
+        // makes it the one piece of the write path that can be pinned before `head.go` or `wlog` exists.
+        .target(
+            name: "PromRecord",
+            dependencies: [
+                "PromLabels", "PromHistogram", "PromChunks", "PromEncoding", "PromStorage",
+                "PromTombstones", "PromModel", "GoCompat",
+            ]
+        ),
+
         // Phase 6: a block's `meta.json` and the reader that ties the index and chunk readers together.
         .target(
             name: "PromBlock",
             dependencies: [
                 "PromIndex", "PromChunks", "PromChunkEnc", "PromStorage", "PromEncoding", "PromFS",
-                "PromLabels", "GoCompat",
+                "PromLabels", "PromTombstones", "GoCompat",
             ]
         ),
 
@@ -258,7 +275,14 @@ let package = Package(
             name: "PromBlockTests",
             dependencies: [
                 "PromBlock", "PromFS", "PromIndex", "PromChunks", "PromChunkEnc", "PromStorage",
-                "GoOracleSupport", "GoCompat",
+                "PromTombstones", "GoOracleSupport", "GoCompat",
+            ]
+        ),
+        .testTarget(
+            name: "PromRecordTests",
+            dependencies: [
+                "PromRecord", "PromLabels", "PromHistogram", "PromChunks", "PromStorage",
+                "PromTombstones", "PromModel", "GoOracleSupport", "GoCompat",
             ]
         ),
         .testTarget(

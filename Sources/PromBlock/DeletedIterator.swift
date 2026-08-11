@@ -47,6 +47,7 @@
 
 public import PromChunkEnc
 public import PromHistogram
+public import PromTombstones
 
 /// Go: `tsdb.DeletedIterator` — a chunk iterator with deletion intervals applied.
 ///

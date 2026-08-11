@@ -45,6 +45,7 @@ public import PromChunkEnc
 public import PromIndex
 public import PromLabels
 public import PromStorage
+public import PromTombstones
 
 /// Go: `storage.SelectHints`, reduced to the fields `selectSeriesSet` reads.
 public struct BlockSelectHints: Sendable {

@@ -85,6 +85,18 @@ public struct HeadChunkID: RawRepresentable, Sendable, Hashable {
     public init(rawValue: UInt64) { self.rawValue = rawValue }
 }
 
+/// Go: `ChunkDiskMapperRef` (`head_chunks.go:78`) — the location of a head chunk on disk: the segment
+/// index in the upper four bytes, the byte offset in the lower four.
+///
+/// **The type only.** `newChunkDiskMapperRef`, `Unpack`, `GreaterThan` and `GreaterThanOrEqualTo` arrive
+/// with `head_chunks.go` itself; nothing has a caller for them yet. What does have a caller is the type,
+/// because the WAL's MmapMarkers record carries one as a raw BE64 — so `Fixtures/record/mmapmarkers`
+/// pins its width and byte order, and only that.
+public struct ChunkDiskMapperRef: RawRepresentable, Sendable, Hashable {
+    public var rawValue: UInt64
+    public init(rawValue: UInt64) { self.rawValue = rawValue }
+}
+
 /// Go: the two `panic`s in `NewHeadChunkRef`.
 ///
 /// Thrown rather than trapped: the widths are a contract on data, and Swift cannot recover a

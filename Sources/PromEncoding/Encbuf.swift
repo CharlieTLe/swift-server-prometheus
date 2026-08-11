@@ -174,7 +174,7 @@ public struct Decbuf {
 
     public mutating func uvarint64() -> UInt64 {
         if error != nil { return 0 }
-        let (x, n) = GoVarint.uvarint(Array(b.rawBuffer))
+        let (x, n) = GoVarint.uvarint(base: b.base, count: b.count)
         guard n >= 1 else { error = .invalidSize; return 0 }
         b = b.range(n, b.count)
         return x
@@ -186,7 +186,7 @@ public struct Decbuf {
     public mutating func varint64() -> Int64 {
         if error != nil { return 0 }
         // Go decodes as unsigned first, then un-zig-zags.
-        let (ux, n) = GoVarint.uvarint(Array(b.rawBuffer))
+        let (ux, n) = GoVarint.uvarint(base: b.base, count: b.count)
         guard n >= 1 else { error = .invalidSize; return 0 }
         var x = Int64(bitPattern: ux >> 1)
         if ux & 1 != 0 { x = ~x }

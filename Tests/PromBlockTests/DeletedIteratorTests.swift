@@ -18,6 +18,7 @@
 import Foundation
 import GoOracleSupport
 import PromBlock
+import PromTombstones
 import PromChunkEnc
 import PromHistogram
 import Testing
