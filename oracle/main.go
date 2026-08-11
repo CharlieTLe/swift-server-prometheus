@@ -116,6 +116,7 @@ var suites = map[string]func(*emitter){
 	"index/pfm":                 genPostingsForMatchers,
 	"index/findintersecting":    genFindIntersecting,
 	"block/labels":              genBlockLabelQueries,
+	"block/tsintervals":         genTombstoneIntervals,
 	"block/meta":                genBlockMeta,
 	"gocompat/time-rfc3339":     genGoTimeRFC3339,
 	"gocompat/time-unixmilli":   genGoTimeUnixMilli,

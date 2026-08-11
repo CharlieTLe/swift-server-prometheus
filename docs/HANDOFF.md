@@ -2072,6 +2072,36 @@ and `blockChunkSeriesSet` — all now reachable through `blockfixture.go`. That 
 `BlockReader.samples(_:)`'s XOR-only shortcut goes away, and where the 2,183-assertion promqltest gate could
 start running against a real block instead of `MemStorage`.
 
+### 6q. Deletion-interval arithmetic — LANDED (and it is not really about tombstones)
+
+`Sources/PromBlock/DeletionIntervals.swift`. The tombstone FILE reader stays unported (exception 16), but
+`Intervals.Add` and `Interval.IsSubrange` are here because **the querier needs them when there are no
+tombstones at all**: `blockBaseSeriesSet.Next` trims a series to the requested range by *adding* deletion
+intervals — `[MinInt64, mint-1]` at the front, `[maxt+1, MaxInt64]` at the back — and then runs the same code
+a real tombstone would drive. So this is on the hot path of every range query against a block.
+
+Quirk 162 has the three shapes. The one to internalise: **the two overflow guards are the common path**, since
+those trimming intervals are precisely what hits them — and Go wraps where **Swift traps**, so dropping a
+guard crashes on the ordinary case rather than computing a wrong one. Also `Add` merges ADJACENT intervals
+(closed ranges, discrete time), and the second binary search is over a SUFFIX so `maxi` is relative — three
+controls catch a port that reads it as absolute.
+
+38 cases, each applying a whole SEQUENCE of `Add`s and recording the set after every step, because `Add`'s
+contract is an invariant (sorted, non-overlapping, merged) and one call cannot show the invariant survives.
+
+25 controls, 23 broke — one by hanging, one pair by trapping. **And one of the two survivors turned out to be
+an inert control** whose `perl` never matched: it patched nothing and reported SURVIVED, indistinguishable in
+the output from a real equivalence. That is quirk 163, the third sweep failure mode after 159 (a survivor may
+be a corpus gap) and 160 (a survivor may be a tautology). It was replaced with a live control that breaks 4 of
+38. When a survivor is unexpected, **diff the file after patching before reasoning about why**.
+
+**Next in Phase 6:** `blockBaseSeriesSet` and the `populateWithDel*` iterators, now that the interval
+arithmetic they need exists. Note the shape mismatch to resolve first: upstream's `ChunkReader.ChunkOrIterable`
+returns a `(Chunk, Iterable)` pair — one meta can name several chunks — while the port's `ChunkReader.chunk`
+returns `(encoding, bytes)`. The iterable half is the Head's concern (it is how an in-memory chunk is read
+without copying), so a block-only port can return a nil iterable, but the SIGNATURE has to allow for it or
+Phase 7 will have to change every call site. Decide that before writing the iterators.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.
