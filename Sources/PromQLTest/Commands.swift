@@ -12,6 +12,7 @@ internal import PromHistogram
 internal import PromLabels
 internal import PromConvertNHCB
 internal import PromModel
+internal import PromRegex
 internal import PromQL
 internal import PromQLParser
 internal import PromStorage
@@ -218,6 +219,8 @@ extension PromQLTestRunner {
         var failRegexp: String? = nil
         var unsupportedDirective: String? = nil
         var expects: [ExpectClause] = []
+        var expectedString: String? = nil
+        var expectRangeVector = false
         while i + 1 < lines.count {
             i += 1
             let defLine = lines[i]
@@ -233,10 +236,51 @@ extension PromQLTestRunner {
                 failRegexp = String(defLine.dropFirst("expected_fail_regexp".count)).trimmed()
                 break
             }
-            if defLine.hasPrefix("expect range vector") || defLine.hasPrefix("expect string") {
-                unsupportedDirective = "the `\(defLine)` directive"
+            // Go: `expectStringPrefix` — an instant query whose answer is a STRING. The literal is
+            // Go-quoted, so it goes through `strconv.Unquote`: backticks are a raw string, and
+            // `expect string` with nothing after it is an error rather than the empty string.
+            if defLine.hasPrefix("expect string") {
+                if defLine == "expect string" {
+                    return (
+                        i + 1,
+                        [
+                            .failed(
+                                "\(loc): expected string literal not valid - a quoted string literal"
+                                    + " is required")
+                        ]
+                    )
+                }
+                let lit = String(defLine.dropFirst("expect string ".count))
+                guard let unquoted = try? GoStrconv.unquote(lit) else {
+                    return (
+                        i + 1,
+                        [
+                            .failed(
+                                "\(loc): expected string literal not valid - check that the string is"
+                                    + " correctly quoted")
+                        ]
+                    )
+                }
+                expectedString = unquoted
                 continue
             }
+            // Go: `rangeVectorPrefix` — an INSTANT query that is allowed to answer with a range
+            // vector, over the grid this line names rather than the eval's own single timestamp.
+            // Without the directive Go rejects multiple values in an instant evaluation outright.
+            if defLine.hasPrefix("expect range vector") {
+                guard let (from, to, step) = parseExpectRangeVector(defLine) else {
+                    return (
+                        i + 1,
+                        [.failed("\(loc): invalid range vector definition \"\(defLine)\"")]
+                    )
+                }
+                cmd.from = from
+                cmd.to = to
+                cmd.step = step
+                expectRangeVector = true
+                continue
+            }
+
             // `expect <type>[ msg:<text>| regex:<pat>]`. Go: `patExpect`.
             if defLine.split(separator: " ").first.map(String.init) == "expect" {
                 switch ExpectClause(line: defLine) {
@@ -248,20 +292,19 @@ extension PromQLTestRunner {
                     if e.kind == .fail {
                         cmd.fail = true
                         if let m = e.message { failMessage = m }
-                        if e.isRegex { failRegexp = "" }
+                        // `expect fail regex:<pattern>` — the pattern, not a placeholder. The
+                        // message and the regex are mutually exclusive in `patExpect`.
+                        if e.isRegex { failRegexp = e.message }
                         continue
                     }
                     if e.kind == .ordered {
                         cmd.ordered = true
                         continue
                     }
-                    if e.isRegex {
-                        // A regex expectation needs an unanchored matcher, which is
-                        // `FastRegexMatcher`'s job — deferred with `label_replace`.
-                        unsupportedDirective = "`expect … regex:` needs an unanchored matcher"
-                    } else {
-                        expects.append(e)
-                    }
+                    // A `regex:` clause is no longer declined: `regexMatchesUnanchored` is the
+                    // capture VM's unanchored search, and this is the caller that makes the VM's
+                    // first-match cut load-bearing (quirk 115).
+                    expects.append(e)
                 case nil:
                     return (i + 1, [.failed("\(loc): unparsable expect: \(defLine)")])
                 }
@@ -282,6 +325,22 @@ extension PromQLTestRunner {
 
         if let unsupportedDirective {
             return (i + 1, [.skipped(unsupportedDirective)])
+        }
+        // Go: "expecting multiple values in instant evaluation not allowed. consider using
+        // 'expect range vector' directive". An instant eval may only answer with several values per
+        // series when the directive says so.
+        if cmd.isInstant, !expectRangeVector,
+            expected.contains(where: { $0.values.count > 1 })
+        {
+            return (
+                i + 1,
+                [
+                    .failed(
+                        "\(loc): expecting multiple values in instant evaluation not allowed."
+                            + " consider using 'expect range vector' directive to enable a range"
+                            + " vector result for an instant query")
+                ]
+            )
         }
 
         // Run it.
@@ -327,7 +386,7 @@ extension PromQLTestRunner {
             return (i + 1, [bad])
         }
 
-        return (i + 1, [compare(res, cmd, expected, expectedScalar, loc)])
+        return (i + 1, [compare(res, cmd, expected, expectedScalar, loc, expectedString)])
     }
 
     /// An `eval_fail` line: the query had to fail, and optionally with a given message.
@@ -344,20 +403,60 @@ extension PromQLTestRunner {
         if let message, text != message {
             return .failed("\(loc): \(cmd.expr): expected failure \(message), got \(text)")
         }
-        if regexp != nil {
-            // A regexp assertion needs an unanchored matcher, which is `FastRegexMatcher`'s job
-            // rather than `Matcher`'s — deferred with `label_replace`.
-            return .skipped("a `fail regex:` expectation needs an unanchored matcher")
+        if let regexp {
+            // Go: `cmd.expectedFailRegexp.MatchString(err.Error())` — an UNANCHORED search, which
+            // `PromRegex`' capture VM provides. The boolean VM cannot: it only answers whole-subject
+            // membership, which is why this was declined until `label_replace` landed.
+            guard let matched = try? regexMatchesUnanchored(regexp, text) else {
+                return .failed("\(loc): \(cmd.expr): unparsable fail regex \(regexp)")
+            }
+            if !matched {
+                return .failed(
+                    "\(loc): \(cmd.expr): expected failure matching \(regexp), got \(text)")
+            }
         }
         return .passed
     }
 
-    /// Go: `evalCmd.compareResult` — compare the answer against the expectation lines.
+    /// Go: `parseExpectRangeVector` — `expect range vector from <dur> to <dur> step <dur>`.
+///
+/// The three durations are offsets from `testStartTime`, which is the epoch, so they become absolute
+/// millisecond timestamps directly.
+func parseExpectRangeVector(_ line: String) -> (from: Int64, to: Int64, step: Int64)? {
+    // Go uses `patExpectRange`, a regexp with three capture groups. Splitting on the keywords is the
+    // same parse and keeps `PromRegex` out of the runner's parse path.
+    // `expect range vector from <d> to <d> step <d>` is NINE tokens, not eight.
+    let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    guard parts.count == 9, parts[0] == "expect", parts[1] == "range", parts[2] == "vector",
+        parts[3] == "from", parts[5] == "to", parts[7] == "step"
+    else {
+        return nil
+    }
+    guard let from = try? PromDuration.parse(parts[4]), let to = try? PromDuration.parse(parts[6]),
+        let step = try? PromDuration.parse(parts[8])
+    else {
+        return nil
+    }
+    return (from.milliseconds, to.milliseconds, step.milliseconds)
+}
+
+/// Go: `evalCmd.compareResult` — compare the answer against the expectation lines.
     private func compare(
         _ res: Result, _ cmd: EvalCommand,
         _ expected: [(labels: Labels, values: [SequenceValue])], _ expectedScalar: Double?,
-        _ loc: String
+        _ loc: String, _ expectedString: String? = nil
     ) -> AssertionOutcome {
+        if let expectedString {
+            guard let str = res.value as? StringValue else {
+                return .failed(
+                    "\(loc): \(cmd.expr): expected string result, but got"
+                        + " \(res.value?.type.documented ?? "nil")")
+            }
+            return str.v == expectedString
+                ? .passed
+                : .failed(
+                    "\(loc): \(cmd.expr): expected string \(expectedString), got \(str.v)")
+        }
         if let expectedScalar {
             guard let s = try? res.scalar() else {
                 return .failed("\(loc): \(cmd.expr): expected a scalar, got \(res.value?.type.documented ?? "nil")")
@@ -367,12 +466,12 @@ extension PromQLTestRunner {
                 : .failed("\(loc): \(cmd.expr): expected \(expectedScalar), got \(s.v)")
         }
 
-        // An instant query yields a Vector; a range query a Matrix.
-        if cmd.isInstant {
+        // An instant query yields a Vector; a range query a Matrix — **except** when the expression is
+        // a range selector or subquery, which answers with a Matrix from an instant query too. That is
+        // what `expect range vector` announces, and the comparison then falls through to the matrix
+        // branch below, using the grid the directive named rather than the eval's single timestamp.
+        if cmd.isInstant, !(res.value is Matrix) {
             guard let vec = try? res.vector() else {
-                if res.value is Matrix {
-                    return .skipped("an instant query returning a range vector")
-                }
                 return .failed("\(loc): \(cmd.expr): expected a vector, got \(res.value?.type.documented ?? "nil")")
             }
             if vec.samples.count != expected.count {
