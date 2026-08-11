@@ -26,6 +26,10 @@ struct IndexReaderIn: Codable, Sendable {
     var postingsQueries: [[String]]?
     var labelValueQueries: [[String]]?
     var labelNamesForIDs: [[UInt64]]?
+    /// `(name, predicate-spec)` pairs. A closure cannot cross JSONL, so the fixture names a predicate
+    /// both sides build — see `matchPredicate`. The spec `nil` means `PostingsForAllLabelValues`, which is
+    /// a DIFFERENT branch upstream from a predicate that always returns true.
+    var matchQueries: [[String]]?
     /// The generated file's bytes. INPUT, because the port has no index writer — the oracle writes the
     /// file with Go's own `index.Writer` and hands the bytes over. On the output side this would be the
     /// port comparing against itself.
@@ -68,6 +72,43 @@ struct IndexReaderOut: Decodable, Equatable, Sendable {
     var labelValuesErrs: [String]
     var namesFor: [[String]]
     var namesForErrs: [String]
+    var matchResults: [[UInt64]]
+    var matchErrs: [String]
+}
+
+/// The `matchQueries` vocabulary, built to match `oracle/suites_index_reader.go`'s `matchPredicate`
+/// name for name. Both degenerate cases are here on purpose: `all` and `none` are what decide whether
+/// the traversal's `val != lastVal` stop condition and the empty-postings return are reached.
+private func matchPredicate(_ spec: String) -> (String) -> Bool {
+    if spec == "all" { return { _ in true } }
+    if spec == "none" { return { _ in false } }
+    if spec == "empty" { return { $0.isEmpty } }
+    if spec.hasPrefix("eq:") {
+        let want = String(spec.dropFirst(3))
+        return { $0 == want }
+    }
+    if spec.hasPrefix("ne:") {
+        let unwanted = String(spec.dropFirst(3))
+        return { $0 != unwanted }
+    }
+    if spec.hasPrefix("prefix:") {
+        let p = String(spec.dropFirst(7))
+        return { $0.hasPrefix(p) }
+    }
+    if spec.hasPrefix("suffix:") {
+        let p = String(spec.dropFirst(7))
+        return { $0.hasSuffix(p) }
+    }
+    if spec.hasPrefix("contains:") {
+        let p = String(spec.dropFirst(9))
+        return { $0.contains(p) }
+    }
+    if spec.hasPrefix("longerthan:") {
+        let want = Int(spec.dropFirst("longerthan:".count)) ?? 0
+        // Go's `len(v)` is a BYTE count, not a character count (ADR-9's neighbour), so `é` is 2.
+        return { $0.utf8.count > want }
+    }
+    fatalError("unknown match predicate spec: \(spec)")
 }
 
 private func unhex(_ s: String) -> [UInt8] {
@@ -97,7 +138,7 @@ struct IndexReaderTests {
                 seriesChunks: [], seriesErrs: [], tableNames: [], tableValues: [], tableOffs: [],
                 tableEntryAt: [], tableErr: "", queryResults: [], queryErrs: [], labelNames: [],
                 labelNamesErr: "", labelValues: [], labelValuesErrs: [], namesFor: [],
-                namesForErrs: [])
+                namesForErrs: [], matchResults: [], matchErrs: [])
 
             // The oracle already wrote the file and handed it over, so the port never writes one — which
             // is the whole point of this seam.
@@ -230,6 +271,20 @@ struct IndexReaderTests {
                     } catch {
                         out.namesFor.append([])
                         out.namesForErrs.append(String(describing: error))
+                    }
+                }
+
+                for q in input.matchQueries ?? [] where q.count == 2 {
+                    do {
+                        // `nil` must take the OTHER branch, not pass an always-true closure.
+                        let p = try indexPostingsForLabelMatching(
+                            bs, postingsTable: toc.postingsTable, sparse: sparseAll, name: q[0],
+                            match: q[1] == "nil" ? nil : matchPredicate(q[1]))
+                        out.matchResults.append(try expandPostings(p).map(\.rawValue))
+                        out.matchErrs.append("")
+                    } catch {
+                        out.matchResults.append([])
+                        out.matchErrs.append(String(describing: error))
                     }
                 }
 

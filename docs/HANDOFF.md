@@ -1947,6 +1947,50 @@ what makes `samples(_:)`'s XOR-only shortcut go away (it exists because chunk-en
 problem, Phase 7's) and what would let the promqltest gate run against a real block rather than `MemStorage`
 — which would be the strongest single check the TSDB port can get, since the gate is 2,183 assertions wide.
 
+### 6n. `PostingsForMatchers` — LANDED, on an exact seam
+
+`Sources/PromBlock/PostingsForMatchers.swift`, plus `indexPostingsForLabelMatching` in the index reader,
+which it needed and which did not exist. This is the function that turns a query's label matchers into a
+postings list — where the TSDB's query planning actually lives.
+
+**The seam is exact and needs no adapter, which is the best case this project has had.** `*index.Reader`
+satisfies `tsdb.IndexReader` in full, so the oracle calls upstream's own exported `PostingsForMatchers`
+against a real index file written by upstream's own `index.Writer`. No mock anywhere in the comparison — and
+that matters more here than usual, because the function's hardest behaviours are about what the index does
+NOT contain. A series with no `l` label has no posting under any value of `l`, and that absence is the entire
+reason `labelMustBeSet` exists. 82 queries over ten files; the corpus records both the refs and the label
+sets they resolve to, so a wrong answer names the series rather than just the count.
+
+Two things worth carrying forward:
+
+**`labelMustBeSet` is a per-NAME fact, not a per-matcher one.** A name is required when ANY matcher on it
+rejects the empty string, which is what makes upstream's `{l=~".", l!="1"}` example work: `l=~"."` guarantees
+`l` is present, so `l!="1"` becomes a cheap subtraction instead of "all postings except l=1". Keying the map
+per matcher instead breaks that one optimisation and leaves *every single-matcher query correct* — the exact
+shape a hand-written test passes and a corpus catches. It is a control, and it breaks.
+
+**Quirk 156: upstream's matcher sort uses a comparator that never returns 0.** It works only because
+`SortStableFunc` is stable; a Swift `sort(by:)` given the same predicate can trap on it. The port does a
+stable partition, which is what the Go code means rather than what it says.
+
+**Nine argued survivors, and the pattern is one finding (quirk 157):** upstream's four `.*`/`.+` cases and
+both set-matching fast paths are *optimisations reachable by the general path*, so a corpus can pin the
+answer but never the plan. Deleting the `l=~".*"` case entirely still passes. That survivor was not left as
+analysis: the corpus was widened to ten same-name `.*` queries covering all four `labelMustBeSet` x isNot
+quadrants, and it still survives — so the equivalence is evidence-backed. The genuinely semantic behaviours
+all broke: the per-name keying, the isNot/matchesEmpty quadrants, `l=""`'s inverse walk (issue #3575), the
+final intersect-then-subtract, and every perturbation of the traversal underneath.
+
+`controls-pfm.sh` also carries a **deliberate no-op control** that must report SURVIVED. A sweep in which
+everything breaks is indistinguishable from a sweep whose build is broken, and that control is what makes
+the other SURVIVED verdicts mean anything. Worth copying into future sweeps.
+
+**Next in Phase 6:** `blockBaseSeriesSet` and `blockChunkSeriesSet` — the iterator shape that turns a
+postings list into series with samples, and with it `blockQuerier`. `PostingsForMatchers` was the piece those
+need; what is left is `labelValuesWithMatchers`/`labelNamesWithMatchers` (thin, on top of this) and the
+`populateWithDel*` iterators, whose tombstone half is exception 16's unported territory and whose chunk half
+is where `BlockReader.samples(_:)`'s XOR-only shortcut finally goes away.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.

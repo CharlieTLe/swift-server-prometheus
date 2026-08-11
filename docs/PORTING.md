@@ -2219,6 +2219,31 @@ changing behaviour.
     `toc.labelIndicesTable` cannot be observed on any file Prometheus has written since v2 — an argued
     control survivor rather than a fix, since a v1 file has a real table there.
 
+156. **`PostingsForMatchers`'s matcher sort uses a comparator that never returns 0, and it works only
+    because the sort is STABLE.** `slices.SortStableFunc(ms, func(i, j) int { if !sub(i) && sub(j) { return
+    -1 }; return +1 })` reports "greater" for every pair that is not (intersecting, subtracting) —
+    including two matchers of the same kind, and including (subtracting, intersecting), which it should
+    report as +1 and does. It is not a valid strict weak ordering, so a comparison sort is free to do
+    anything with it; `SortStableFunc` happens to produce the intended partition because equal elements keep
+    their input order. A Swift `sort(by:)` given the same predicate can trap ("Fatal error: ... not a strict
+    weak ordering") or scramble, so the port does a **stable partition** — `filter { !sub } + filter { sub }`
+    — which is what the Go code means rather than what it says.
+
+    Two negative controls establish that the partition is unobservable on a static index (removing it and
+    reversing it both survive): `its` is intersected and `notIts` subtracted after the loop, and both are
+    order-insensitive. Upstream's comment says the sort is about a **concurrent appender** adding series
+    between two `ix.Postings` calls, which the Head will make reachable in Phase 7.
+
+157. **Upstream's `.*`/`.+` special cases and set-matching fast paths are all reachable by the general
+    path, so a corpus can pin the ANSWER but never the PLAN.** Nine of `controls-pfm.sh`'s controls survive
+    for this reason and each is argued in place. The instructive one: deleting the `l=~".*"` case entirely
+    still passes, because falling through produces either an empty subtraction (the inverse of `.*` matches
+    nothing) or an intersection with "every series having the label", which any other matcher on a required
+    name already implies. The corpus was widened to ten same-name `.*` queries covering all four
+    `labelMustBeSet` x isNot quadrants and it still survives — so the equivalence is evidence-backed, not
+    merely plausible. The branches stay because they are upstream's shape and because the equality fast path
+    is the difference between a binary search and a full traversal of every value of a label.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

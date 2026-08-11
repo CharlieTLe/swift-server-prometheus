@@ -105,7 +105,7 @@ let package = Package(
             name: "PromBlock",
             dependencies: [
                 "PromIndex", "PromChunks", "PromChunkEnc", "PromStorage", "PromEncoding", "PromFS",
-                "GoCompat",
+                "PromLabels", "GoCompat",
             ]
         ),
 
