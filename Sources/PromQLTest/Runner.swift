@@ -47,7 +47,8 @@ public import PromQL
 public import PromQLParser
 public import PromStorage
 
-internal import PromHistogram
+public import PromHistogram
+
 internal import PromModel
 internal import PromTestStorage
 
@@ -82,6 +83,55 @@ public func almostEqual(_ a: Double, _ b: Double, _ epsilon: Double = defaultEps
         return diff < epsilon * minNormal
     }
     return diff / Swift.min(absSum, Double.greatestFiniteMagnitude) < epsilon
+}
+
+/// Go: `compareNativeHistogram` (test.go:1402) — histogram equality with float tolerance.
+///
+/// `Schema` and `ZeroThreshold` are compared **exactly** while every count and sum goes through
+/// `almostEqual`; the spans must match structurally and the buckets element-wise. And the counter
+/// reset hint is compared **only when the expectation set one** — upstream's `counterResetHintSet`
+/// flag, because a `.test` file that does not write a hint means "don't care" rather than
+/// "unknown".
+public func compareNativeHistogram(
+    _ exp: FloatHistogram, _ cur: FloatHistogram, counterResetHintSet: Bool
+) -> Bool {
+    if exp.schema != cur.schema || !almostEqual(exp.count, cur.count)
+        || !almostEqual(exp.sum, cur.sum)
+    {
+        return false
+    }
+    if exp.usesCustomBuckets {
+        if !customBucketBoundsMatch(exp.customValues, cur.customValues) {
+            return false
+        }
+    }
+    if exp.zeroThreshold != cur.zeroThreshold || !almostEqual(exp.zeroCount, cur.zeroCount) {
+        return false
+    }
+    if exp.negativeSpans != cur.negativeSpans || exp.positiveSpans != cur.positiveSpans {
+        return false
+    }
+    if !floatBucketsMatch(exp.negativeBuckets, cur.negativeBuckets)
+        || !floatBucketsMatch(exp.positiveBuckets, cur.positiveBuckets)
+    {
+        return false
+    }
+    if counterResetHintSet && exp.counterResetHint != cur.counterResetHint {
+        return false
+    }
+    return true
+}
+
+/// Go: `floatBucketsMatch` — element-wise, with tolerance.
+func floatBucketsMatch(_ a: [Double], _ b: [Double]) -> Bool {
+    a.count == b.count && zip(a, b).allSatisfy { almostEqual($0, $1) }
+}
+
+/// Go: `histogram.CustomBucketBoundsMatch` — nil and empty are the same thing.
+func customBucketBoundsMatch(_ a: [Double]?, _ b: [Double]?) -> Bool {
+    let x = a ?? []
+    let y = b ?? []
+    return x.count == y.count && zip(x, y).allSatisfy { $0 == $1 }
 }
 
 /// One `eval` assertion's outcome.
