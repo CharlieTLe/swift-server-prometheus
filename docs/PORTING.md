@@ -2148,6 +2148,27 @@ changing behaviour.
     zeros. The padding is not cosmetic: the batching arithmetic (quirk 128) compares against
     `SegmentHeaderSize`, so a 5-byte header moves every segment boundary.
 
+145. **`writePostingsToTmpFiles` re-READS the series section it just wrote.** It does not keep the series
+    in memory: it flushes, mmaps the file under construction, and walks the series records back — consuming
+    padding, taking `startPos/16` as each series' ordinal, and collecting them per (label name, label
+    value). So the series section is the source of truth for the postings, and a posting's ordinal is a
+    POSITION, not the `ref` the caller passed to `AddSeries`.
+
+146. **The postings offsets are written relative to a temporary file and adjusted on the way in.** `fPO`'s
+    offsets point into `fP`; `writePostings` copies `fP` into the index after 4-byte padding and records
+    `postingsStart`; `writePostingsOffsetTable` then adds `postingsStart` to every offset as it copies
+    `fPO`. Get the adjustment wrong and every postings list is unreachable **while the file still passes
+    every checksum** — the offsets are not covered by any CRC that would catch it.
+
+147. **The postings offset table has TWO four-byte header fields, and they are easy to conflate.** `"alen"`
+    is a placeholder for the section length, patched at the end; the BE32 postings count is written
+    immediately after it. Writing only one of them makes the file exactly four bytes short, and the
+    divergence surfaces at the offset table rather than where the field was dropped.
+
+148. **A label name's values are written in SYMBOL-ORDINAL order, not string order** — upstream's comment
+    says why they coincide: "Symbol numbers are in order, so the strings will also be in order." Sorting by
+    string would agree today and diverge the moment a symbol table is built in a different order.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

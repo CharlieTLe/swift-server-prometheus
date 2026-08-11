@@ -1,15 +1,13 @@
 //===----------------------------------------------------------------------===//
 // `index.Writer`'s meta, symbol and series stages, compared against Go's real index files.
 //
-// **The comparison is a PREFIX comparison, and that is a deliberate limit rather than a shortcut.** The
-// port does not write the postings sections yet (§6i owns them), so its TOC offsets diverge from Go's after
-// the series section — but everything up to `toc.Series`'s end is written by the code under test and is
-// byte-identical, so that range is what is compared. `index/reader.jsonl` supplies Go's files; this reuses
-// them rather than needing a corpus of its own, which also means the two suites cannot drift apart.
+// **The comparison is the WHOLE FILE**, byte for byte, plus every TOC offset — the magic and version, the
+// symbol table with its back-patched length, count and hash, every series record, the postings lists, and
+// the postings offset table with its adjusted offsets.
 //
-// What the prefix covers: the magic and version, the symbol table with its back-patched length, count and
-// hash, and every series record with its padding, uvarint length prefix, label ordinals, double-delta chunk
-// metas and hash. That is the whole of what this slice writes.
+// `index/reader.jsonl` supplies Go's files, so this suite needs no corpus of its own and the two cannot
+// drift apart. Comparing bytes rather than round-tripping matters: a writer bug and a reader bug that
+// cancelled out would pass a round-trip test and fail this one.
 //===----------------------------------------------------------------------===//
 
 import Foundation
@@ -22,10 +20,14 @@ import Testing
 @Suite("index: the writer's meta, symbol and series stages")
 struct IndexWriterTests {
 
-    /// Rebuilds each corpus file's input with the port's writer and compares the byte range Go's own TOC
-    /// says belongs to the symbol and series sections.
-    @Test("the written prefix is byte-identical to Go's")
-    func prefixMatchesGo() throws {
+    /// Rebuilds each corpus file's input with the port's writer and compares the ENTIRE file against Go's,
+    /// byte for byte, plus every TOC offset.
+    ///
+    /// §6i started as a prefix comparison because the postings sections were not ported; they are now, so
+    /// this is the whole file. The reader suite's fixtures supply Go's files, which means a writer bug and a
+    /// reader bug cannot cancel out — the bytes are compared directly rather than round-tripped.
+    @Test("the written file is byte-identical to Go's")
+    func fileMatchesGo() throws {
         var checked = 0
         var mismatches: [String] = []
 
@@ -74,29 +76,29 @@ struct IndexWriterTests {
             let portBytes = try r.read(offset: 0, length: r.size)
             try r.close()
 
-            // Go's TOC says where the series section ends: the next section's offset. With no postings
-            // written by the port, Go's `labelIndices` is the first offset past the series records.
-            let prefixEnd = Int(expected.toc.labelIndices)
-            guard prefixEnd > 0, prefixEnd <= goBytes.count, prefixEnd <= portBytes.count else {
+            // **The WHOLE file now**, not a prefix: the postings sections landed, so the port writes
+            // every section Go does and the two files should be identical byte for byte.
+            if goBytes != portBytes {
+                let firstDiff = zip(goBytes, portBytes).enumerated().first {
+                    $0.element.0 != $0.element.1
+                }?.offset ?? min(goBytes.count, portBytes.count)
                 mismatches.append(
-                    "\(decoded.id): prefix end \(prefixEnd) out of range "
-                        + "(go \(goBytes.count), port \(portBytes.count))")
-                continue
+                    "\(decoded.id): differs at byte \(firstDiff) (go \(goBytes.count) bytes, "
+                        + "port \(portBytes.count))")
             }
-            let goPrefix = Array(goBytes[0..<prefixEnd])
-            let portPrefix = Array(portBytes[0..<prefixEnd])
-            if goPrefix != portPrefix {
-                // Report the first differing offset, which localises a framing bug immediately.
-                let firstDiff = zip(goPrefix, portPrefix).enumerated().first { $0.element.0 != $0.element.1 }?
-                    .offset ?? min(goPrefix.count, portPrefix.count)
+            // Every TOC offset, not just the two the prefix covered.
+            let portTOC = w.toc
+            if portTOC != IndexTOC(
+                symbols: expected.toc.symbols, series: expected.toc.series,
+                labelIndices: expected.toc.labelIndices,
+                labelIndicesTable: expected.toc.labelIndicesTable,
+                postings: expected.toc.postings, postingsTable: expected.toc.postingsTable)
+            {
                 mismatches.append(
-                    "\(decoded.id): prefix differs at byte \(firstDiff) of \(prefixEnd)")
-            }
-            // And the TOC offsets the port computed for the sections it wrote must agree.
-            if w.toc.symbols != expected.toc.symbols || w.toc.series != expected.toc.series {
-                mismatches.append(
-                    "\(decoded.id): toc symbols/series \(w.toc.symbols)/\(w.toc.series) "
-                        + "want \(expected.toc.symbols)/\(expected.toc.series)")
+                    "\(decoded.id): toc \(portTOC) want symbols=\(expected.toc.symbols) "
+                        + "series=\(expected.toc.series) li=\(expected.toc.labelIndices) "
+                        + "lit=\(expected.toc.labelIndicesTable) p=\(expected.toc.postings) "
+                        + "pt=\(expected.toc.postingsTable)")
             }
             checked += 1
         }

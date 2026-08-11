@@ -1798,9 +1798,27 @@ the two) and only then the port, which is worth knowing: the harness is as expos
 Rule going forward, per ADR-10a: **anywhere the port keys, de-duplicates or compares strings that
 originate as Go bytes, use `[UInt8]`.**
 
-**Next in Phase 6:** `index.Writer`'s postings sections (§6i's remainder — the tmp file, the series sort,
-`writePostingsOffsetTable`), then `RealFS` thinly and a `BlockReader` tying the chunk and index readers
-together. `MemPostings` waits for the Head in Phase 7.
+**The postings sections landed too, so `IndexWriter` now writes a byte-identical WHOLE FILE** — every
+section Go writes, and every TOC offset. The suite compares bytes rather than round-tripping, which matters:
+a writer bug and a reader bug that cancelled out would pass a round-trip and fail this.
+
+Quirks 145-148. Two are worth reading before touching the postings code:
+
+* `writePostingsToTmpFiles` **re-reads the series section it just wrote** rather than keeping series in
+  memory, so a posting's ordinal is a POSITION (`startPos/16`), not the `ref` the caller passed;
+* the offsets in `fPO` are **relative to `fP`** and get `postingsStart` added as they are copied in. Get
+  that adjustment wrong and every postings list is unreachable **while the file still passes every
+  checksum** — no CRC covers an offset.
+
+And the bug that cost the most time was neither: the offset table has **two** four-byte header fields, a
+length placeholder (`"alen"`) and a BE32 count. I wrote the placeholder and dropped the count, so every file
+was exactly four bytes short and the divergence appeared *at the offset table* rather than where the field
+was missing. The lesson is the diagnostic one — "N bytes short, consistently" points at a dropped
+fixed-width field, and the reported offset is where the shift becomes visible, not where it starts.
+
+**Next in Phase 6:** `RealFS` (thin, `FileManager`-backed) and a `BlockReader` tying the chunk and index
+readers together — at which point Phase 6 can read and write a complete on-disk block. `MemPostings` waits
+for the Head in Phase 7.
 
 **Previously next, now done:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
 machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus

@@ -1,10 +1,31 @@
 //===----------------------------------------------------------------------===//
 // Ported from tsdb/index/index.go @ v3.13.2 — `Writer`'s meta, symbol and series stages, on `PromFS`.
 //
-// **The postings sections are NOT here.** `writePostingsToTmpFiles` sorts every series by label into a
-// SECOND file and `writePostingsOffsetTable` reads it back; that is its own slice, and §6i scopes it. What
-// is here writes a byte-identical file prefix — magic, version, symbol table, series records — which is
-// what the corpus compares.
+// ## The postings sections re-READ the series records this writer already wrote
+//
+// `writePostingsToTmpFiles` does not keep the series in memory. It flushes, mmaps the file it is writing,
+// and walks the series section back — consuming padding, taking `startPos/16` as each series' ordinal, and
+// collecting them per (label name, label value). So the series section is the source of truth for the
+// postings, and the ordinals are positions rather than the `ref` the caller passed to `AddSeries`.
+//
+// The port reads the file back through `PromFS` instead of mmapping (ADR-15), which is the same bytes.
+//
+// ## Two temporary files, and the offsets in one are relative to the other
+//
+// `fP` holds the postings lists, each 4-byte aligned and framed `<BE32 len><payload><BE32 CRC>`. `fPO`
+// holds the offset-table entries, whose offsets are **relative to `fP`**. `writePostings` then copies `fP`
+// into the index after 4-byte padding and records `postingsStart`, and `writePostingsOffsetTable` copies
+// `fPO` while **adding `postingsStart` to every offset**. Get that adjustment wrong and every postings
+// list is unreachable while the file still passes every checksum.
+//
+// The port holds both in memory rather than on disk. That is byte-equivalent — what matters is `fP`'s
+// layout, because the offsets are positions within it — and it avoids two more `PromFS` handles for data
+// that never outlives the call.
+//
+// ## The all-postings list is written FIRST, under `("", "")`
+//
+// Before any real label, `writePosting("", "", offsets)` records every series in file order. That is the
+// entry `LabelNames` has to skip (quirk 139), and writing it first is why it has the lowest offset.
 //
 // ## The stages are a strict ladder and skipping one is an error
 //
@@ -129,6 +150,14 @@ public final class IndexWriter {
     /// usually cited for *ordering*; this is the same hazard in *hashing and equality*, and the corpus
     /// caught it as a four-byte divergence 83 bytes into the series section.
     private var symbolCache: [[UInt8]: UInt32] = [:]
+    /// Go: `labelNames` — how many series use each label name, which drives the batching. The port keeps
+    /// the count for the same reason and keys it by BYTES (ADR-10a).
+    private var labelNameUses: [[UInt8]: Int] = [:]
+    /// Go: the `fP` and `fPO` temporary files, held in memory here. See the file header.
+    private var postingsBuf: [UInt8] = []
+    private var postingsOffsetBuf: [UInt8] = []
+    private var postingsOffsetCount = 0
+    private var postingsStart: UInt64 = 0
     private var lastSeries: [(name: String, value: String)] = []
     private var lastSeriesRef: UInt64 = 0
     private var lastChunkRef: UInt64 = 0
@@ -176,11 +205,15 @@ public final class IndexWriter {
             try finishSymbols()
             toc.series = pos
         case .done:
-            // The postings sections belong to §6i; this writer stops after the series section and the TOC.
             toc.labelIndices = pos
+            // The postings depend on the series section being complete, which is why this is the `done`
+            // stage's work rather than `Close`'s.
+            try writePostingsToBuffers()
             toc.postings = pos
+            try writePostings()
             toc.labelIndicesTable = pos
             toc.postingsTable = pos
+            try writePostingsOffsetTable()
             try writeTOC()
         case .none:
             break
@@ -202,6 +235,7 @@ public final class IndexWriter {
         lastSymbol = sym
         let bytes = Array(sym.utf8)
         symbolCache[bytes] = UInt32(numSymbols)
+        ordinalToSymbol[UInt32(numSymbols)] = bytes
         numSymbols += 1
         var buf: [UInt8] = []
         GoVarint.putUvarint(&buf, UInt64(bytes.count))
@@ -286,6 +320,7 @@ public final class IndexWriter {
             guard let nameIndex = symbolCache[Array(l.name.utf8)] else {
                 throw IndexWriteError.symbolEntryMissing(l.name)
             }
+            labelNameUses[Array(l.name.utf8), default: 0] += 1
             GoVarint.putUvarint(&payload, UInt64(nameIndex))
             guard let valueIndex = symbolCache[Array(l.value.utf8)] else {
                 throw IndexWriteError.symbolEntryMissing(l.value)
@@ -323,6 +358,169 @@ public final class IndexWriter {
         lastChunkRef = runningChunkRef
     }
 
+    /// Go: `writePosting` — one postings list into `fP`, and its offset-table entry into `fPO`.
+    ///
+    /// The list is 4-byte aligned "for more efficient postings list scans", and the offset recorded is
+    /// `fP`'s position BEFORE the padding is... no: after it, because `AddPadding` runs first and `fP.pos`
+    /// is read afterwards. An off-by-the-padding here is invisible until a reader lands mid-list.
+    private func writePosting(_ name: String, _ value: String, _ offsets: [UInt32]) throws {
+        // Align to 4 bytes.
+        let rem = postingsBuf.count % 4
+        if rem != 0 {
+            postingsBuf.append(contentsOf: [UInt8](repeating: 0, count: 4 - rem))
+        }
+
+        // The offset-table entry, whose offset is relative to `fP`.
+        var entry: [UInt8] = []
+        GoVarint.putUvarint(&entry, 2)  // Key count, always 2.
+        appendUvarintStr(&entry, name)
+        appendUvarintStr(&entry, value)
+        GoVarint.putUvarint(&entry, UInt64(postingsBuf.count))
+        postingsOffsetBuf.append(contentsOf: entry)
+        postingsOffsetCount += 1
+
+        // Go: `EncodePostingsRaw` — a BE32 count then that many BE32 offsets.
+        var payload: [UInt8] = []
+        appendBE32(&payload, UInt32(offsets.count))
+        for off in offsets {
+            appendBE32(&payload, off)
+        }
+        var framed: [UInt8] = []
+        appendBE32(&framed, UInt32(payload.count))
+        framed.append(contentsOf: payload)
+        appendBE32(&framed, CRC32C.checksum(payload))
+        postingsBuf.append(contentsOf: framed)
+    }
+
+    /// Go: `writePostingsToTmpFiles` — re-read the series section and collect the postings.
+    ///
+    /// The batching by `maxPostings` is omitted: it bounds memory by processing label names in groups, and
+    /// the result is identical either way because each name's postings are written independently. The port
+    /// notes it rather than reproducing it, since the *output* is what the corpus pins.
+    private func writePostingsToBuffers() throws {
+        try f.flush()
+        let r = try fs.openForReading(path)
+        let all = try r.read(offset: 0, length: r.size)
+        try r.close()
+
+        // Walk the series section: every record is 16-byte aligned, prefixed with a uvarint length, and
+        // followed by a 4-byte CRC.
+        var seriesOrdinals: [UInt32] = []
+        var perName: [[UInt8]: [[UInt8]: [UInt32]]] = [:]
+        var p = Int(toc.series)
+        let end = Int(toc.labelIndices)
+        while p < end {
+            // Go: `ConsumePadding` — zero bytes until the next record.
+            while p < end && all[p] == 0 { p += 1 }
+            if p >= end { break }
+            let startPos = p
+            if startPos % seriesByteAlign != 0 {
+                throw IndexWriteError.seriesNotAligned(UInt64(startPos))
+            }
+            let ordinal = UInt32(startPos / seriesByteAlign)
+            seriesOrdinals.append(ordinal)
+
+            let (recLen, lenWidth) = GoVarint.uvarint(all, p)
+            p += lenWidth
+            let payloadStart = p
+
+            // The labels, so each (name, value) learns this series.
+            var q = p
+            let (numLabels, nlW) = GoVarint.uvarint(all, q)
+            q += nlW
+            for _ in 0..<Int(numLabels) {
+                let (lno, w1) = GoVarint.uvarint(all, q)
+                q += w1
+                let (lvo, w2) = GoVarint.uvarint(all, q)
+                q += w2
+                guard let name = ordinalToSymbol[UInt32(truncatingIfNeeded: lno)],
+                    let value = ordinalToSymbol[UInt32(truncatingIfNeeded: lvo)]
+                else {
+                    continue
+                }
+                perName[name, default: [:]][value, default: []].append(ordinal)
+            }
+
+            p = payloadStart + Int(recLen) + 4  // Skip the payload and its CRC.
+        }
+
+        // The ALL-postings list first, under `("", "")`.
+        try writePosting("", "", seriesOrdinals)
+
+        // Then each label name in Go byte order, and within it each value in SYMBOL-ORDINAL order —
+        // upstream's comment: "Symbol numbers are in order, so the strings will also be in order."
+        let names = perName.keys.sorted { $0.lexicographicallyPrecedes($1) }
+        for name in names {
+            guard let values = perName[name] else { continue }
+            let sortedValues = values.keys.sorted { a, b in
+                (symbolCache[a] ?? 0) < (symbolCache[b] ?? 0)
+            }
+            for v in sortedValues {
+                try writePosting(
+                    String(decoding: name, as: UTF8.self), String(decoding: v, as: UTF8.self),
+                    values[v] ?? [])
+            }
+        }
+    }
+
+    /// Go: `writePostings` — 4-byte padding, then copy `fP` in, recording where it landed.
+    private func writePostings() throws {
+        try f.addPadding(to: 4)
+        postingsStart = pos
+        try f.append(postingsBuf)
+    }
+
+    /// Go: `writePostingsOffsetTable` — copy `fPO` in, **adding `postingsStart` to every offset**.
+    private func writePostingsOffsetTable() throws {
+        let startPos = pos
+        // Go writes the literal "alen" as a placeholder for the length.
+        try f.append(Array("alen".utf8))
+
+        var hashed: [UInt8] = []
+        var out: [UInt8] = []
+        appendBE32(&out, UInt32(postingsOffsetCount))
+        hashed.append(contentsOf: out)
+
+        var p = 0
+        var remaining = postingsOffsetCount
+        while remaining > 0 && p < postingsOffsetBuf.count {
+            var entry: [UInt8] = []
+            let (keyCount, w0) = GoVarint.uvarint(postingsOffsetBuf, p)
+            p += w0
+            GoVarint.putUvarint(&entry, keyCount)
+            for _ in 0..<2 {
+                let (l, w) = GoVarint.uvarint(postingsOffsetBuf, p)
+                p += w
+                GoVarint.putUvarint(&entry, l)
+                entry.append(contentsOf: postingsOffsetBuf[p..<(p + Int(l))])
+                p += Int(l)
+            }
+            let (off, w3) = GoVarint.uvarint(postingsOffsetBuf, p)
+            p += w3
+            // THE ADJUSTMENT. Offsets in `fPO` are relative to `fP`.
+            GoVarint.putUvarint(&entry, off + postingsStart)
+            out.append(contentsOf: entry)
+            hashed.append(contentsOf: entry)
+            remaining -= 1
+        }
+        // ALL of `out`, count included. Go writes `"alen"` (the length placeholder) and THEN the BE32
+        // count — two separate four-byte fields — and dropping the count made every file exactly four
+        // bytes short, with the divergence appearing at the offset table rather than where the mistake was.
+        try f.append(out)
+
+        // Go: `writeLengthAndHash` — patch the length, then append the CRC over count-plus-entries.
+        let l = pos - startPos - 4
+        var lenBuf: [UInt8] = []
+        appendBE32(&lenBuf, UInt32(truncatingIfNeeded: l))
+        try f.write(lenBuf, at: Int(startPos))
+        var crcBuf: [UInt8] = []
+        appendBE32(&crcBuf, CRC32C.checksum(hashed))
+        try f.append(crcBuf)
+    }
+
+    /// The inverse of `symbolCache`, for resolving a series record's ordinals while re-reading it.
+    private var ordinalToSymbol: [UInt32: [UInt8]] = [:]
+
     /// Go: `writeTOC` — six big-endian offsets and a hash over them.
     private func writeTOC() throws {
         var buf: [UInt8] = []
@@ -343,6 +541,12 @@ public final class IndexWriter {
         try f.sync()
         try f.close()
     }
+}
+
+private func appendUvarintStr(_ out: inout [UInt8], _ s: String) {
+    let bytes = Array(s.utf8)
+    GoVarint.putUvarint(&out, UInt64(bytes.count))
+    out.append(contentsOf: bytes)
 }
 
 private func appendBE32(_ out: inout [UInt8], _ v: UInt32) {
