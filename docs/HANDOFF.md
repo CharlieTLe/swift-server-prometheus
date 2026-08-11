@@ -1991,6 +1991,47 @@ need; what is left is `labelValuesWithMatchers`/`labelNamesWithMatchers` (thin, 
 `populateWithDel*` iterators, whose tombstone half is exception 16's unported territory and whose chunk half
 is where `BlockReader.samples(_:)`'s XOR-only shortcut finally goes away.
 
+### 6o. `FindIntersectingPostings` — LANDED, and the session's most useful lesson
+
+`Sources/PromIndex/FindIntersecting.swift`, plus `GoHeap.initialized` (Go's `heap.Init`, which the port did
+not have). The question it answers is not "which series match" but **"which of these candidate lists have at
+least one series in common with `p`"** — it returns INDEXES into `candidates`. That is what
+`labelValuesWithMatchers` needs: one candidate list per label value, and the answer is which values survive.
+
+Exported, so the corpus drives it directly. Two behaviours are worth carrying (quirk 158): the heap **never
+actually pops** — `popIndex` marks the root and re-sinks it, because a real `heap.Pop` would box an
+allocation per candidate — so `Len() > 0` does NOT mean non-empty, which upstream flags in a comment because
+it is the wrong guess. And `heap.Init` rather than repeated pushes, because the heap's order is the order of
+the returned slice.
+
+**Read quirk 159 before adding to any corpus.** This slice is where the project learned that *a SURVIVED
+control is a hypothesis, not a proof*:
+
+- The first corpus had 32 cases covering what looked like every interesting shape — ties, reversed orders,
+  shared values, heap sizes at every power of two.
+- The control replacing `heap.Init` with a push loop **survived all 32**.
+- The equivalence argument was easy to write and completely wrong: "the loop always seeks to the heap
+  minimum, so pops happen in value order and layout cannot matter; ties compare equal both ways so no swap
+  resolves them."
+- A brute-force search — the two constructions side by side over 300k random inputs — found a divergence in
+  **15 trials**. The shape: several candidates tying on their FIRST value, where the initial layout is the
+  only tie-break there is. Three such cases are in the corpus now and the control breaks on all three.
+
+So the rule for the rest of the port: when a perturbation is a *plausible alternative implementation* rather
+than an obvious bug, treat a survivor as a corpus gap until a search says otherwise. The argued survivors
+elsewhere in the sweeps are argued from **proofs about the data** — a superset intersection, an empty
+subtraction, two offsets assigned the same value on adjacent lines — never from reasoning about order.
+Reasoning about heap layouts, iteration orders and tie-breaks is exactly the kind that feels rigorous and is
+not.
+
+**Next in Phase 6:** `labelValuesWithMatchers` and `labelNamesWithMatchers`, which sit directly on top of
+this and `PostingsForMatchers`. They are unexported, so the seam is `blockIndexReader.LabelValues` reached
+through `NewBlockQuerier` — which needs a `tsdb.BlockReader`, and that interface is only five methods
+(`Index`, `Chunks`, `Tombstones`, `Meta`, `Size`), all satisfiable in the oracle by delegation to
+`index.Reader` + `chunks.Reader` + `tombstones.NewMemTombstones()`. **That adapter is the unlock for the rest
+of `querier.go`**, including `blockQuerier.Select` and the `populateWithDel*` iterators — so write it once,
+carefully, as its own step.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.

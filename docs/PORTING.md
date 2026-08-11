@@ -2244,6 +2244,37 @@ changing behaviour.
     merely plausible. The branches stay because they are upstream's shape and because the equality fast path
     is the difference between a binary search and a full traversal of every value of a label.
 
+158. **`FindIntersectingPostings`' heap never actually pops, and `Len() > 0` does not mean non-empty.**
+    `popIndex` marks the root `popped` and calls `heap.Fix` instead of `heap.Pop`, because Go's
+    `heap.Interface.Pop` returns `any` and would box an allocation per candidate. `Less` sorts popped
+    elements to the BOTTOM (`if h[i].popped != h[j].popped { return h[j].popped }`), so a popped root sinks
+    and `empty()` — `len == 0 || h[0].popped` — reports exhaustion. Upstream flags the `Len()` trap in a
+    comment because it is precisely the wrong guess.
+
+    It also calls `heap.Init` rather than pushing each element. `Init` sifts DOWN from the last internal
+    node backwards; pushes sift UP from the end. Both give valid heaps, in different orders, and the order
+    is the order of the returned indexes — so `GoHeap.initialized` exists for this one call site.
+
+159. **A SURVIVED control is a HYPOTHESIS, not a proof — search for a distinguishing input before writing
+    the equivalence argument.** The methodology note this project most needed and did not have.
+
+    `index/findintersecting.jsonl` was first written with 32 cases covering what looked like every
+    interesting shape: ties, reversed orders, shared values, heap sizes at every power of two. The control
+    replacing `heap.Init` with a push loop survived all 32, and the equivalence argument was easy to write:
+    "the loop always seeks to the heap minimum, so pops happen in value order and layout cannot matter;
+    ties compare equal both ways so no swap resolves them." Plausible, and **wrong**.
+
+    A brute-force search over small random inputs — two implementations side by side, 300k trials — found a
+    divergence in 15 trials, and three more shortly after. The shape: several candidates tying on their
+    FIRST value, where the initial layout is the only tie-break there is. Those cases are now in the corpus
+    and the control breaks on all three.
+
+    So the rule: when a perturbation is a *plausible alternative implementation* rather than an obvious bug,
+    a survivor means the corpus has a gap until a search says otherwise. Reasoning about heap layouts,
+    iteration orders and tie-breaks is exactly the kind that feels rigorous and is not. The argued survivors
+    elsewhere in the sweeps are argued from *proofs about the data* (a superset intersection, an empty
+    subtraction, two offsets assigned the same value on adjacent lines) — not from reasoning about order.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
