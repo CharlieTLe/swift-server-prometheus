@@ -2179,6 +2179,49 @@ Also fixed here: a control that reported COMPILE (`if postings.next() {` orphans
 first: upstream returns a `(Chunk, Iterable)` pair because one meta can name several chunks, the port's
 `chunk` returns `(encoding, bytes)`. Then `blockQuerier.Select`, and Phase 6's read path is closed.
 
+### 6t. The populate iterators — LANDED, and five declared gaps are closed
+
+`Sources/PromBlock/PopulateIterators.swift`: `populateWithDelGenericSeriesIterator` and
+`populateWithDelSeriesIterator`. This is where §6s's trimming becomes observable.
+
+**ADR-16 first.** Upstream's `ChunkOrIterable` returns a `(Chunk, Iterable)` pair — never both — because one
+meta can name SEVERAL chunks, which is how the out-of-order head presents a series read from more than one.
+The port's `ChunkReader.chunk` returns `(encoding, bytes)`, one result, which is right for a *file* reader. The
+decision: grow the pair NOW, at a new `BlockChunkSource` seam above the file reader, with a block always
+filling the chunk and leaving the iterable nil. The reasons are in the ADR; the short version is that the
+branch is observable (an iterable installs `bufIter` unconditionally, a chunk does not) and deferring means
+rewriting exactly the call sites whose corpora pin sample sequences rather than bytes.
+
+**Quirk 167 is the one to internalise:** the interval list is rebuilt PER CHUNK, which is what makes
+`DeletedIterator`'s consuming cursor (quirk 164) safe. Hoist it out of the loop and the first chunk deletes
+correctly while every later one silently under-deletes.
+
+**The corpus was EXTENDED rather than replaced.** `block/seriesset.jsonl` now records three things per query:
+label sets, the per-chunk trimmed ranges, and the flat sample timestamps. The Go side takes the ranges from
+`blockChunkSeriesSet` and the samples through `blockQuerier.Select` — the exported route to
+`populateWithDelSeriesIterator`, with `SelectHints` carrying `DisableTrimming` through it. That extension is
+what closes the gaps §6s declared: spot-checked, `trimming flags never set` and `the back trim interval starts
+at maxt not maxt+1` both now break.
+
+Two things are deliberately still open, and naming them is the point of this entry:
+
+1. **The populate sweep is not written.** Three controls were spot-checked by hand (the two above, plus the
+   overlap filter). A full `controls-populate.sh` is the immediate next step, and the controls it needs are
+   already identifiable: hoisting the interval list out of the per-chunk loop; `currDelIter` nil-ness; the
+   `i >= metas.count - 1` bound with its -1 start; `Seek` resuming before advancing and calling the exported
+   `next()` rather than the generic one; and `Err`'s generic-first ordering.
+2. **`populateWithDelChunkSeriesIterator` is not ported.** The port derives a trimmed chunk's RANGE from its
+   first and last surviving sample, which is what that iterator does to set a rewritten meta's bounds — but
+   the re-encoded chunk BYTES are what it additionally produces, and they are unpinned. That is the slice
+   that also closes §6r's erroring-chunk gap, since its error wrapping needs a malformed chunk.
+
+One argued survivor recorded in quirk 167: the `OverlapsClosedInterval` filter is an optimisation, not a
+correctness rule. Passing every interval gives the same samples, because the consumption handles
+before-and-after intervals and the list is rebuilt per chunk anyway.
+
+**Next in Phase 6:** `controls-populate.sh`, then `populateWithDelChunkSeriesIterator`, then
+`blockQuerier.Select` — and Phase 6's read path is closed.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.

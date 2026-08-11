@@ -38,7 +38,9 @@ import (
 	"os"
 
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
+	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	"github.com/prometheus/prometheus/tsdb/index"
 	"github.com/prometheus/prometheus/tsdb/tombstones"
 )
@@ -70,14 +72,24 @@ type seriesSetQuery struct {
 type seriesSetOut struct {
 	// Per query: the label sets of the selected series, in the order returned.
 	LabelSets [][]string `json:"labelSets"`
-	Errs      []string   `json:"errs"`
-	OpenErr   string     `json:"openErr"`
+	// Per query, per series: the chunk metas the iterator yielded, as [mint, maxt] pairs — where TRIMMING
+	// becomes visible (a query at [120,120] against a chunk spanning [100,120] yields [120,120] with trimming
+	// on and [100,120] with it off).
+	ChunkRanges [][][][2]int64 `json:"chunkRanges"`
+	// Per query, per series: the SAMPLE timestamps a flat sample iterator yielded — the other half, and what
+	// says the trimming intervals are applied to samples rather than only recorded.
+	SampleTimes [][][]int64 `json:"sampleTimes"`
+	Errs        []string    `json:"errs"`
+	OpenErr     string      `json:"openErr"`
 }
 
 func genBlockSeriesSet(e *emitter) {
 	n := 0
 	emit := func(in seriesSetIn) {
-		out := seriesSetOut{LabelSets: [][]string{}, Errs: []string{}}
+		out := seriesSetOut{
+			LabelSets: [][]string{}, ChunkRanges: [][][][2]int64{}, SampleTimes: [][][]int64{},
+			Errs: []string{},
+		}
 
 		dir, err := os.MkdirTemp("", "blockss")
 		if err != nil {
@@ -119,6 +131,8 @@ func genBlockSeriesSet(e *emitter) {
 			ir, ierr := b.Index()
 			if ierr != nil {
 				out.LabelSets = append(out.LabelSets, []string{})
+				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
+				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.Errs = append(out.Errs, ierr.Error())
 				continue
 			}
@@ -126,6 +140,8 @@ func genBlockSeriesSet(e *emitter) {
 			if cerr != nil {
 				ir.Close()
 				out.LabelSets = append(out.LabelSets, []string{})
+				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
+				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.Errs = append(out.Errs, cerr.Error())
 				continue
 			}
@@ -134,6 +150,8 @@ func genBlockSeriesSet(e *emitter) {
 				ir.Close()
 				cr.Close()
 				out.LabelSets = append(out.LabelSets, []string{})
+				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
+				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.Errs = append(out.Errs, terr.Error())
 				continue
 			}
@@ -167,6 +185,8 @@ func genBlockSeriesSet(e *emitter) {
 			}
 			if bad != "" {
 				out.LabelSets = append(out.LabelSets, []string{})
+				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
+				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.Errs = append(out.Errs, bad)
 			}
 			ir.Close()
@@ -297,6 +317,24 @@ func genBlockSeriesSet(e *emitter) {
 	}
 }
 
+// selectMatchers builds the matcher list for a query, substituting the ALL-POSTINGS matcher when a query has
+// none — which is upstream's own convention (`PostingsForMatchers` special-cases a single `{"" = ""}` matcher
+// to the all-postings key) and the only way to say "everything" through the exported `Select`.
+func selectMatchers(q seriesSetQuery) []*labels.Matcher {
+	if len(q.Matchers) == 0 {
+		return []*labels.Matcher{labels.MustNewMatcher(labels.MatchEqual, "", "")}
+	}
+	ms := make([]*labels.Matcher, 0, len(q.Matchers))
+	for _, spec := range q.Matchers {
+		m, err := parsePFMMatcher(spec)
+		if err != nil {
+			return nil
+		}
+		ms = append(ms, m)
+	}
+	return ms
+}
+
 // runSeriesSet drives the set and appends one query's worth of output. Returns an error string, or "".
 func runSeriesSet(
 	out *seriesSetOut, b *tsdb.Block, ir tsdb.IndexReader, cr tsdb.ChunkReader,
@@ -306,11 +344,46 @@ func runSeriesSet(
 		b.Meta().ULID, ir, cr, tr, p, q.Mint, q.Maxt, q.DisableTrimming)
 
 	sets := []string{}
+	ranges := [][][2]int64{}
 	for ss.Next() {
 		s := ss.At()
 		sets = append(sets, s.Labels().String())
+		rs := [][2]int64{}
+		it := s.Iterator(nil)
+		for it.Next() {
+			m := it.At()
+			rs = append(rs, [2]int64{m.MinTime, m.MaxTime})
+		}
+		ranges = append(ranges, rs)
 	}
 	out.LabelSets = append(out.LabelSets, sets)
+	out.ChunkRanges = append(out.ChunkRanges, ranges)
+
+	// A SECOND pass through `blockQuerier.Select`, which is the exported route to
+	// `populateWithDelSeriesIterator` — the flat SAMPLE view over a series' chunks. A fresh querier rather
+	// than reusing the set above, because consuming one exhausts its postings.
+	//
+	// `SelectHints` is what carries `DisableTrimming` through the exported API, so this reaches the same
+	// switch the chunk set above does. `Func` is left empty: "series" would substitute a nop chunk reader.
+	times := [][]int64{}
+	if bq, qerr := tsdb.NewBlockQuerier(b, q.Mint, q.Maxt); qerr == nil {
+		ms := selectMatchers(q)
+		hints := &storage.SelectHints{
+			Start: q.Mint, End: q.Maxt, DisableTrimming: q.DisableTrimming,
+		}
+		sset := bq.Select(context.Background(), false, hints, ms...)
+		for sset.Next() {
+			s := sset.At()
+			ts := []int64{}
+			it := s.Iterator(nil)
+			for it.Next() != chunkenc.ValNone {
+				ts = append(ts, it.AtT())
+			}
+			times = append(times, ts)
+		}
+		bq.Close()
+	}
+	out.SampleTimes = append(out.SampleTimes, times)
 	if ss.Err() != nil {
 		out.Errs = append(out.Errs, ss.Err().Error())
 	} else {

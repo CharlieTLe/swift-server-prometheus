@@ -2379,6 +2379,24 @@ changing behaviour.
     the prefilter is strict — `chk.MaxTime < mint`, `chk.MinTime > maxt` — and a chunk merely touching a
     boundary is KEPT. Six controls cover those four comparisons and all six break.
 
+167. **`populateWithDelGenericSeriesIterator` rebuilds its deletion-interval list PER CHUNK, and that is what
+    makes `DeletedIterator`'s consuming behaviour safe.** `p.bufIter.Intervals = p.bufIter.Intervals[:0]`, then
+    `Add` for each interval overlapping this chunk. Quirk 164's cursor never bites because it starts fresh
+    every chunk. **A port that hoisted the list out of the loop would delete correctly on the first chunk and
+    silently under-delete on the rest** — the same failure quirk 164 describes, reached from the other side.
+
+    Two more shapes. `currDelIter` is nil ONLY when a single chunk came back and no interval overlaps it;
+    everything else installs `bufIter`, and upstream's field comment says why — a non-nil `currDelIter` means
+    "the chunk in currMeta is invalid and a chunk rewrite is needed". And `i >= len(metas)-1` is checked
+    BEFORE the increment with `i` starting at -1, so the -1 start and the pre-check are one mechanism; written
+    as a post-increment bound it is off by one.
+
+    The `OverlapsClosedInterval` filter itself is an **optimisation, not a correctness rule** — an argued
+    survivor. Passing every interval rather than only the overlapping ones gives the same samples: an interval
+    entirely before the chunk is consumed by `Next`'s `ts > tr.Maxt` branch, one entirely after keeps the
+    sample via `ts <= tr.Maxt`, and since the list is rebuilt per chunk the consumption cannot leak. The
+    filter avoids the work, not a wrong answer.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

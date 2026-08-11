@@ -354,3 +354,55 @@ Three things it does **not** get, each for a reason:
 the oracle can write real segment files while the port writes to memory and the two byte strings are
 compared. That is the same trick §6e already used for the batching arithmetic, generalised — and the same
 principle as §5e(c) and §6a: pin the exported behaviour, and pick the seam so the corpus can reach it.
+
+## ADR-16 — `ChunkOrIterable` keeps Go's two-result shape, even though a block only ever fills one
+
+**Status:** accepted.
+
+**Context.** Upstream's `ChunkReader` is
+
+```go
+ChunkOrIterable(meta chunks.Meta) (chunkenc.Chunk, chunkenc.Iterable, error)
+```
+
+and returns *either* a chunk or an iterable, never both. The port's `ChunkReader.chunk(ref:)` returns
+`(encoding: Encoding, bytes: [UInt8])` — one result, because a block segment holds exactly one chunk per
+reference and the encoding byte is what says how to decode it.
+
+The iterable branch is not dead code upstream. `ChunkOrIterable` returns a nil chunk and a non-nil iterable
+when **one meta refers to several chunks**, which is how the out-of-order head presents a series whose samples
+live in more than one chunk that must be merged on read. `populateWithDelGenericSeriesIterator.next` branches
+on exactly that: a non-nil chunk may be used as-is when no deletion applies, an iterable must always go
+through `bufIter`.
+
+So the question for this slice: does the port's chunk reader keep its one-result shape, with the iterators
+adapting, or does it grow the pair now?
+
+**Decision.** Grow the pair now — the port's chunk-source protocol returns an optional chunk *and* an optional
+iterable, with a block reader always filling the chunk and leaving the iterable nil.
+
+**Why.** Three reasons, in order of weight:
+
+1. **The branch is observable, not an implementation detail.** `next(copyHeadChunk:)` takes a different path
+   for an iterable — `bufIter` is installed unconditionally rather than only when a deletion overlaps — and
+   `populateWithDelChunkSeriesIterator` re-encodes in one case and not the other. A port that collapsed the
+   two would have to reintroduce the distinction later *inside* the iterators, where it is much harder to see.
+
+2. **The alternative is a call-site rewrite in Phase 7, not a signature change.** The OOO head is the first
+   caller that needs the iterable, and it arrives in the same phase as the Head itself. Deferring means every
+   `populateWithDel*` call site written now gets edited then — and those are precisely the files whose logic is
+   hardest to re-verify, because their corpora pin sample sequences rather than bytes.
+
+3. **It costs almost nothing today.** `BlockChunkSource` (the port's name for the seam) is a two-method
+   protocol; the block implementation is four lines and returns `(chunk: decoded, iterable: nil)`.
+
+**Consequences.**
+
+- The port's `ChunkReader.chunk(ref:)` keeps its `(encoding, bytes)` shape — it is the *file* reader and
+  genuinely has one result. `BlockChunkSource` sits above it and is what the iterators take.
+- `nil` iterable is not an error; `nil` chunk with `nil` iterable is. Upstream never returns both nil, and the
+  port throws rather than silently producing an empty series, because a silent empty series is the failure
+  mode the whole fidelity contract exists to prevent.
+- The `copyHeadChunk` parameter is threaded through and **ignored** by the block path, exactly as upstream's
+  `ChunkReaderWithCopy` type assertion fails for a block's chunk reader. It is not dropped, because dropping
+  it is the same call-site rewrite this ADR is avoiding.
