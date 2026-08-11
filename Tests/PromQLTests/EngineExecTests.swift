@@ -153,12 +153,11 @@ struct EngineExecInvariantTests {
     @Test("an unported expression names itself rather than answering wrongly")
     func unportedArmsAreLoud() throws {
         // A silent zero would be far worse than an error, so every arm this slice does not
-        // implement says which one it is. The list shrinks each slice: a bare selector, a range
-        // selector and a function over a range all WORK now. What is left is the aggregations,
-        // the vector binops, subqueries, and the three series-shaped functions.
+        // implement says which one it is. The list has shrunk each slice, and this is what is
+        // left: subqueries, the three series-shaped functions, and the binop fill modifiers.
         for query in [
-            "topk(3, foo)", "bottomk(3, foo)", "limitk(3, foo)", "limit_ratio(0.5, foo)",
-            "count_values(\"v\", foo)",
+            // What is left: subqueries, the three series-shaped functions, and the binop fill
+            // modifiers. Everything else in `promql` now evaluates.
             "rate(foo[5m:1m])", "max_over_time(foo[5m])[1h:1m]",
             "label_replace(foo, \"a\", \"b\", \"c\", \"d\")",
         ] {
@@ -189,6 +188,9 @@ struct EngineExecInvariantTests {
             "sum(foo)", "avg(foo)", "min(foo)", "max(foo)", "count(foo)", "group(foo)",
             "stddev(foo)", "stdvar(foo)", "quantile(0.5, foo)",
             "sum by (job) (foo)", "sum without (inst) (foo)", "sum(rate(foo[5m]))",
+            // The four k-of-the-input operators and count_values.
+            "topk(3, foo)", "bottomk(3, foo)", "limitk(3, foo)", "limit_ratio(0.5, foo)",
+            "count_values(\"v\", foo)", "topk by (job) (2, foo)",
         ] {
             let res = try run(query)
             #expect(

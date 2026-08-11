@@ -1699,6 +1699,53 @@ changing behaviour.
     because `Del(grouping...)` would not. `by ()` with an empty list is a third case in both: the
     key is 0 without touching the metric, and the labels are empty.
 
+94. **`topk`/`bottomk`/`limitk`/`limit_ratio` emit their heap's INTERNAL order, so the heap has to
+    be Go's.** `limitk` and `limit_ratio` iterate `aggr.heap` with no sort at all; `topk`/`bottomk`
+    do sort, but through `sort.Sort` over a comparator that is not a strict weak ordering
+    (`vectorByValueHeap.Less` returns true for a NaN on the left, itself included), so the heap
+    order is the sort's *input* and still decides the output for ties and NaNs.
+    `GoCompat.GoHeap` is `container/heap`'s `Push`/`Fix`/`up`/`down` for that reason, alongside
+    `GoSort`.
+
+    Both comparators special-case a NaN on the left to "true", so a NaN sorts first under *both* —
+    which is why the replacement test needs its extra clause,
+    `IsNaN(heap[0].F) && !IsNaN(s.F)`. Without it a NaN at the root is never displaced, because
+    every `<` against it is false.
+
+    `k` is clamped to the **input size**, so `topk(100, x)` over three series is k = 3.
+
+95. **`advanceRemainingSeries` is load-bearing in one of its two call sites and inert in the
+    other.** `nextValues` *consumes*, so a point left unread at step N is still at the head of its
+    slice at step N+1. Both early exits therefore drain the remaining series first — guarded by
+    `enh.Ts != ev.endTimestamp`, since on the last step nothing follows.
+
+    For `k < 1` that is essential: the whole step is discarded, and without the drain the next step
+    reads the previous step's values. Its negative control breaks.
+
+    For `limitk`'s early `break seriesLoop` it is **unobservable**: `limitk` fills from the first
+    series in a fixed matrix order, so the same series wins every step, the skipped ones are never
+    emitted, and at the next step `nextValues` rejects their stale points anyway (`T != ts`). Its
+    control survives, and the two calls look identical.
+
+96. **`count_values` recomputes its grouping key per step, validates with UTF8 rules, and formats
+    with `'f'`.** Three separate things a port can get wrong:
+
+    * the key includes the *value* label, which changes per sample, so it cannot be precomputed —
+      which is why this one operator goes through plain `rangeEval` rather than `rangeEvalAgg`.
+      Upstream says so in a comment and accepts the cost;
+    * the label name is checked against `model.UTF8Validation`, so `a.b` is accepted where legacy
+      validation would reject it — and the error message is `%s` on the string *literal*, so it
+      arrives quoted;
+    * the value is `strconv.FormatFloat(f, 'f', -1, 64)`, so `1e-9` renders as `0.000000001` and
+      not `1e-09`.
+
+    Its output order is a Go **map**'s. Sorting the result does not always rescue that: a corpus
+    case wrapping it in `sort_by_label` still differed between regenerations, because
+    `natsort.Compare` treats `0.1` and `0.000000001` as *equal* (it compares digit chunks
+    numerically, and `1 == 000000001`) and the unstable sort then preserves the map's order.
+    Exception 7's trap in a second disguise: **a sort only rescues a nondeterministic order when
+    the sort key is unambiguous.**
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

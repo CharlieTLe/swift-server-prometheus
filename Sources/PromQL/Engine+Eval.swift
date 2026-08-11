@@ -405,8 +405,29 @@ final class Evaluator {
             let sortedGrouping = e.grouping
 
             if e.op == .countValues {
-                throw EvaluatorNotPorted(
-                    nodeType: "AggregateExpr", detail: "count_values needs aggregationCountValues")
+                guard let valueLabel = e.param as? StringLiteral else {
+                    throw EvaluatorNotPorted(
+                        nodeType: "AggregateExpr", detail: "count_values parameter is not a string")
+                }
+                let name = String(decoding: valueLabel.val, as: UTF8.self)
+                if !ValidationScheme.utf8.isValidLabelName(name) {
+                    // `%s` on the *expression*, so the message carries the quoted literal.
+                    throw EvaluationError.invalidLabelName(valueLabel.description)
+                }
+                // The value label joins the grouping for `by (...)` and is left out for
+                // `without (...)`, where "everything else" already includes it.
+                var grouping = sortedGrouping
+                if !e.without {
+                    grouping.append(name)
+                    grouping.sort()
+                }
+                guard let inner = e.expr else {
+                    throw EvaluatorNotPorted(
+                        nodeType: "AggregateExpr", detail: "no inner expression")
+                }
+                return try rangeEval(ctx, nil, &ws, [inner]) { v, _, enh in
+                    self.aggregationCountValues(e, grouping, name, v[0], enh)
+                }
             }
 
             var warnings = Annotations()
@@ -837,6 +858,15 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     /// The permitted names are `slices.Sorted(maps.Keys(...))` over a Go map, so the sort is
     /// upstream's own defence against a nondeterministic message.
     case modifierNotSafeForFunction(modifier: String, permitted: [String], function: String)
+    /// Go: `rangeEvalAgg`'s three parameter rejections. `%v` on a `float64` is Go's `'g'`
+    /// shortest form, not `%f`.
+    case parameterValueIsNaN
+    case ratioValueIsNaN
+    case scalarUnderflowsInt64(Double)
+    case scalarOverflowsInt64(Double)
+    /// Go: `count_values`' `invalid label name %s`, where `%s` is the string LITERAL's rendering —
+    /// so it arrives quoted and escaped, not bare.
+    case invalidLabelName(String)
 
     public var description: String {
         switch self {
@@ -871,6 +901,16 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
             return "smoothed modifier is not supported with histograms"
         case .rangeEvaluationOfMatrixSelector:
             return "cannot do range evaluation of matrix selector"
+        case .parameterValueIsNaN:
+            return "Parameter value is NaN"
+        case .ratioValueIsNaN:
+            return "Ratio value is NaN"
+        case .scalarUnderflowsInt64(let v):
+            return "Scalar value \(GoFloat.formatG(v)) underflows int64"
+        case .scalarOverflowsInt64(let v):
+            return "Scalar value \(GoFloat.formatG(v)) overflows int64"
+        case .invalidLabelName(let s):
+            return "invalid label name \(s)"
         case .modifierNotSafeForFunction(let modifier, let permitted, let function):
             var s = "\(modifier) modifier can only be used with: "
             s += permitted.joined(separator: ", ")

@@ -748,6 +748,65 @@ func genPromQLExecRange(e *emitter) {
 		}
 	}
 
+	// --- The k-of-the-input aggregations over a RANGE query, which is the only way three things
+	// are visible: `advanceRemainingSeries` (a point left unconsumed at step N is read as step
+	// N+1's value), `limitk`'s early `break seriesLoop`, and the `seriess` accumulation that
+	// replaces the instant path's direct matrix append.
+	kRange := []memSeriesInJSON{
+		fs([]string{"__name__", "kr", "job", "a", "i", "1"},
+			[2]int64{0, 5}, [2]int64{60_000, 50}, [2]int64{120_000, 500}),
+		fs([]string{"__name__", "kr", "job", "a", "i", "2"},
+			[2]int64{0, 3}, [2]int64{60_000, 30}, [2]int64{120_000, 300}),
+		fs([]string{"__name__", "kr", "job", "b", "i", "1"},
+			[2]int64{0, 9}, [2]int64{60_000, 1}, [2]int64{120_000, 900}),
+		fs([]string{"__name__", "kr", "job", "b", "i", "2"},
+			[2]int64{0, 7}, [2]int64{60_000, 70}, [2]int64{120_000, 7}),
+	}
+	kRangeCases := []struct {
+		query            string
+		start, end, step int64
+	}{
+		// `k < 1` returns early from the WHOLE step, after advancing the remaining series — so
+		// the next step must not read their stale points. A `k` that crosses 1 mid-query is what
+		// separates advancing from not advancing.
+		{`topk(scalar(vector(time() / 60 - 1)), kr)`, 0, 120_000, minute},
+		{`limitk(scalar(vector(time() / 60 - 1)), kr)`, 0, 120_000, minute},
+		{`limit_ratio(scalar(vector(time() / 120)), kr)`, 0, 120_000, minute},
+		// A ratio series whose MAX is 0 while its min is negative, which is the only shape that
+		// separates `max == 0 && min == 0` from `max == 0`: the negative ratios still select the
+		// complement, so the query must NOT return early.
+		{`limit_ratio(scalar(vector(0 - time() / 120)), kr)`, 0, 120_000, minute},
+		{`limit_ratio(scalar(vector(time() / 120 - 1)), kr)`, 0, 120_000, minute},
+		// `limitk`'s early break, which fires once every group has its k — and then has to
+		// advance the rest.
+		{`limitk(1, kr)`, 0, 120_000, minute},
+		{`limitk by (job) (1, kr)`, 0, 120_000, minute},
+		{`limitk(2, kr)`, 0, 120_000, minute},
+		{`limitk(3, kr)`, 0, 120_000, minute},
+		// The `seriess` accumulation: a series that is in the top k at one step and not at
+		// another gets a ragged output row, which the instant path cannot show.
+		{`topk(1, kr)`, 0, 120_000, minute},
+		{`topk(2, kr)`, 0, 120_000, minute},
+		{`bottomk(1, kr)`, 0, 120_000, minute},
+		{`bottomk(2, kr)`, 0, 120_000, minute},
+		{`topk by (job) (1, kr)`, 0, 120_000, minute},
+		{`bottomk by (job) (1, kr)`, 0, 120_000, minute},
+		{`limit_ratio(0.5, kr)`, 0, 120_000, minute},
+		{`limit_ratio(-0.5, kr)`, 0, 120_000, minute},
+		// count_values across steps, where the value label changes per step.
+		{`sort_by_label(count_values("v", kr), "v")`, 0, 120_000, minute},
+		{`sort_by_label(count_values by (job) ("v", kr), "job", "v")`, 0, 120_000, minute},
+		// One-step range queries, so the instant shortcut is compared against its absence.
+		{`topk(2, kr)`, 60_000, 60_000, minute},
+		{`limitk(2, kr)`, 60_000, 60_000, minute},
+	}
+	for _, c := range kRangeCases {
+		emit(execRangeIn{
+			Query: c.query, Start: i64(c.start), End: i64(c.end), Step: i64(c.step),
+			Lookback: i64(5 * minute), Series: kRange,
+		})
+	}
+
 	// A NESTED aggregation under a limit, which is the only shape that can see the
 	// `ev.currentSamples = originalNumSamples + result.TotalSamples()` at the end of the
 	// `AggregateExpr` arm — the same mechanism as quirk 81's `rangeEval` tail.

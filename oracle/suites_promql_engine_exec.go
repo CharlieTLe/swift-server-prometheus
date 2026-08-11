@@ -906,6 +906,187 @@ func genPromQLExec(e *emitter) {
 		}
 	}
 
+	// --- topk / bottomk / limitk / limit_ratio / count_values. The four that return **k of the
+	// input** — so their output labels are the INPUT's, not the grouping's — and the one that
+	// returns a row per distinct value.
+	//
+	// The heap's internal order is observable: `limitk` and `limit_ratio` emit it unsorted, and
+	// `topk`/`bottomk` sort it with a comparator that is not a strict weak ordering, so the heap
+	// order is the sort's input. Ties and NaNs are therefore the interesting inputs, not just
+	// distinct values.
+	kSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "t", "job", "a", "i", "1"}, [2]int64{0, 5}),
+		fs([]string{"__name__", "t", "job", "a", "i", "2"}, [2]int64{0, 3}),
+		fs([]string{"__name__", "t", "job", "a", "i", "3"}, [2]int64{0, 9}),
+		fs([]string{"__name__", "t", "job", "b", "i", "1"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "t", "job", "b", "i", "2"}, [2]int64{0, 7}),
+		fs([]string{"__name__", "t", "job", "b", "i", "3"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "t", "job", "c", "i", "1"}, [2]int64{0, 4}),
+	}
+	// TIES, which is where the heap order decides the answer — with distinct values any correct
+	// heap gives the same top-k.
+	kTies := []memSeriesInJSON{
+		fs([]string{"__name__", "tt", "i", "1"}, [2]int64{0, 5}),
+		fs([]string{"__name__", "tt", "i", "2"}, [2]int64{0, 5}),
+		fs([]string{"__name__", "tt", "i", "3"}, [2]int64{0, 5}),
+		fs([]string{"__name__", "tt", "i", "4"}, [2]int64{0, 5}),
+		fs([]string{"__name__", "tt", "i", "5"}, [2]int64{0, 1}),
+	}
+	// NaNs, which both comparators sort FIRST — so `topk` needs its extra
+	// `IsNaN(heap[0]) && !IsNaN(s)` clause or a NaN root is never displaced.
+	kNaN := []memSeriesInJSON{
+		{Labels: []string{"__name__", "tn", "i", "1"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{"7ff8000000000001"}},
+		{Labels: []string{"__name__", "tn", "i", "2"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(3)}},
+		{Labels: []string{"__name__", "tn", "i", "3"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{fbits(7)}},
+		{Labels: []string{"__name__", "tn", "i", "4"}, T: []string{i64(0)}, ST: []string{i64(0)},
+			F: []string{"7ff8000000000001"}},
+	}
+	// Distinct and repeated VALUES, for count_values.
+	cvSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "cv", "job", "a", "i", "1"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "cv", "job", "a", "i", "2"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "cv", "job", "a", "i", "3"}, [2]int64{0, 2}),
+		fs([]string{"__name__", "cv", "job", "b", "i", "1"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "cv", "job", "b", "i", "2"}, [2]int64{0, 3}),
+	}
+
+	kCases := []struct {
+		query  string
+		series []memSeriesInJSON
+	}{
+		// k below, at and above the input size — `k` is CLAMPED to the input size, so
+		// `topk(100, t)` is every series and `topk(0, t)` is nothing.
+		{`topk(0, t)`, kSeries},
+		{`topk(1, t)`, kSeries},
+		{`topk(2, t)`, kSeries},
+		{`topk(3, t)`, kSeries},
+		{`topk(7, t)`, kSeries},
+		{`topk(100, t)`, kSeries},
+		{`topk(-1, t)`, kSeries},
+		{`bottomk(0, t)`, kSeries},
+		{`bottomk(1, t)`, kSeries},
+		{`bottomk(2, t)`, kSeries},
+		{`bottomk(3, t)`, kSeries},
+		{`bottomk(100, t)`, kSeries},
+		{`limitk(1, t)`, kSeries},
+		{`limitk(2, t)`, kSeries},
+		{`limitk(3, t)`, kSeries},
+		{`limitk(100, t)`, kSeries},
+		{`limitk(0, t)`, kSeries},
+		// Grouped, which is where `groupsRemaining` and the per-group heaps do work.
+		{`topk by (job) (1, t)`, kSeries},
+		{`topk by (job) (2, t)`, kSeries},
+		{`bottomk by (job) (1, t)`, kSeries},
+		{`bottomk by (job) (2, t)`, kSeries},
+		{`limitk by (job) (1, t)`, kSeries},
+		{`limitk by (job) (2, t)`, kSeries},
+		{`topk without (i) (2, t)`, kSeries},
+		{`topk by (i) (1, t)`, kSeries},
+		// TIES: the heap order is the answer.
+		{`topk(1, tt)`, kTies},
+		{`topk(2, tt)`, kTies},
+		{`topk(3, tt)`, kTies},
+		{`topk(4, tt)`, kTies},
+		{`bottomk(2, tt)`, kTies},
+		{`bottomk(3, tt)`, kTies},
+		{`bottomk(4, tt)`, kTies},
+		{`limitk(2, tt)`, kTies},
+		{`limitk(3, tt)`, kTies},
+		// NaNs, which sort first under BOTH comparators.
+		{`topk(1, tn)`, kNaN},
+		{`topk(2, tn)`, kNaN},
+		{`topk(3, tn)`, kNaN},
+		{`topk(4, tn)`, kNaN},
+		{`bottomk(1, tn)`, kNaN},
+		{`bottomk(2, tn)`, kNaN},
+		{`bottomk(3, tn)`, kNaN},
+		{`limitk(2, tn)`, kNaN},
+		// `limit_ratio`, whose membership is decided by `Labels.Hash` — deterministic, and the
+		// negative form takes the COMPLEMENT.
+		{`limit_ratio(0, t)`, kSeries},
+		{`limit_ratio(1, t)`, kSeries},
+		{`limit_ratio(-1, t)`, kSeries},
+		{`limit_ratio(0.5, t)`, kSeries},
+		{`limit_ratio(-0.5, t)`, kSeries},
+		{`limit_ratio(0.2, t)`, kSeries},
+		{`limit_ratio(2, t)`, kSeries},
+		{`limit_ratio(-2, t)`, kSeries},
+		{`limit_ratio by (job) (0.5, t)`, kSeries},
+		// A NaN k and a NaN ratio, each with its own error.
+		{`topk(NaN, t)`, kSeries},
+		{`bottomk(NaN, t)`, kSeries},
+		{`limitk(NaN, t)`, kSeries},
+		{`limit_ratio(NaN, t)`, kSeries},
+		// The Int64 guards, which use the largest Int64 exactly representable as a Double.
+		{`topk(1e19, t)`, kSeries},
+		{`topk(-1e19, t)`, kSeries},
+		{`topk(9223372036854774784, t)`, kSeries},
+		{`topk(9223372036854774783, t)`, kSeries},
+		{`limitk(1e19, t)`, kSeries},
+		// A k that is a SERIES rather than a literal — the min/max checks then span every step.
+		{`topk(scalar(t{job="c"}), t)`, kSeries},
+		{`limitk(scalar(t{job="c"}), t)`, kSeries},
+		// An empty input.
+		{`topk(3, nothing)`, kSeries},
+		{`limit_ratio(0.5, nothing)`, kSeries},
+		// count_values. A bare one is only deterministic where it yields ONE row, because Go
+		// ranges a map; `sort_by_label` makes the multi-row cases comparable.
+		{`count_values("v", cv{job="b", i="1"})`, cvSeries},
+		{`sort_by_label(count_values("v", cv), "v")`, cvSeries},
+		{`sort_by_label(count_values by (job) ("v", cv), "job", "v")`, cvSeries},
+		{`sort_by_label(count_values without (i) ("v", cv), "job", "v")`, cvSeries},
+		{`sort_by_label(count_values without (job, i) ("v", cv), "v")`, cvSeries},
+		{`sort_by_label(count_values("v", t), "v")`, kSeries},
+		// A value label that is not a valid label name, and one that collides with an existing
+		// label. `a.b` is valid under UTF8 validation and NOT under legacy, which is what says
+		// which scheme `count_values` uses.
+		{`count_values("", cv)`, cvSeries},
+		{`sort_by_label(count_values("a.b", cv), "a.b")`, cvSeries},
+		{`sort_by_label(count_values("é", cv), "é")`, cvSeries},
+		// `a b` is VALID under UTF8 validation — a space is fine — so this succeeds with three
+		// rows, and a bare `count_values` exposes the Go map's order. It has to be sorted, and two
+		// local reruns agreeing does not establish otherwise: with three entries Go's randomised
+		// map order repeats by chance often enough to fool a pair of runs. CI caught it.
+		{`sort_by_label(count_values("a b", cv), "a b")`, cvSeries},
+		// A value whose `'f'` and `'g'` renderings DIFFER — `1e-9` is `0.000000001` under `'f'`
+		// and `1e-09` under `'g'`. One output row, so the order is not in question.
+		{`count_values("v", ix{i="5"})`, aggInexact},
+		{`count_values("v", ix{i="3"})`, aggInexact},
+		{`sort_by_label(count_values("job", cv), "job")`, cvSeries},
+		{`sort_by_label(count_values("i", cv), "i")`, cvSeries},
+		// The float formatting of the value label is `'f'` with shortest precision, so a large
+		// value is a long integer string rather than an exponent.
+		{`sort_by_label(count_values("v", sp), "v")`, aggSpecial},
+		{`sort_by_label(count_values("v", inf), "v")`, aggInf},
+		// NOT `count_values` over `aggInexact`: `natsort.Compare` treats `0.1` and `0.000000001`
+		// as EQUAL (it compares the digit chunks numerically, and `1` == `000000001`), so
+		// `sort_by_label` leaves them in whatever order `count_values`' Go **map** produced.
+		// Sorting does not rescue a nondeterministic order when the sort key is ambiguous — the
+		// case was in the corpus and differed between regenerations. Exception 7's trap in a
+		// second disguise.
+		// An aggregation over the k operators, and vice versa.
+		{`sum(topk(2, t))`, kSeries},
+		{`topk(2, sum by (job) (t))`, kSeries},
+		{`count(limitk(3, t))`, kSeries},
+	}
+	for _, c := range kCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
+		})
+	}
+	for _, maxSamples := range []int{1, 2, 3, 4, 6, 8, 10} {
+		for _, q := range []string{`topk(3, t)`, `limitk(2, t)`, `count_values("v", cv)`} {
+			emit(execIn{
+				Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+				MaxSamples: maxSamples, Series: kSeries,
+			})
+		}
+	}
+
 	// A query that fails to build still comes back through Exec's Result, not as a panic.
 	for _, q := range []string{`1 +`, `foo[`, `sum(`} {
 		emit(execIn{Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute))})
