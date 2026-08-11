@@ -2301,6 +2301,33 @@ changing behaviour.
     downstream is real upstream code. This is the seam the rest of `tsdb/querier.go` needs, `blockQuerier
     .Select` included.
 
+162. **`Intervals.Add`'s two overflow guards are the COMMON path, not edge-case defence — and in Swift one of
+    them is the difference between a result and a crash.** `if n.Mint != math.MinInt64` and `if n.Maxt !=
+    math.MaxInt64` skip the binary search entirely, because `n.Mint-1` / `n.Maxt+1` would overflow. Those are
+    exactly the intervals `blockBaseSeriesSet.Next` adds when trimming a series to the requested range, so
+    every trimmed range query takes them. Go wraps on overflow; **Swift traps**, so a port that dropped the
+    guard would crash on the ordinary case rather than compute a wrong one.
+
+    Two more shapes in the same function: `Add` merges ADJACENT intervals, not merely overlapping ones
+    (`Maxt >= n.Mint-1`, `Mint > n.Maxt+1`), because the ranges are closed and time is discrete — so `[1,5]`
+    and `[6,9]` become `[1,9]`. And the second binary search is over the SUFFIX `in[mini:]`, so `maxi` is
+    relative and every use is `maxi + mini`; the `maxi == 0` early return is what makes it look absolute.
+    Reading it as absolute is the mistake the shape invites, and three separate controls catch it.
+
+    `IsSubrange` tests each interval SEPARATELY rather than their union, so a range spanning two adjacent
+    intervals is not a subrange. That is only sound because `Add` keeps the set merged — the adjacency rule
+    and the per-interval test are one mechanism.
+
+163. **A control that survives may not have run: check the patch applied before reasoning about why.** The
+    third failure mode of the sweeps, after quirk 159 (a survivor may be a corpus gap) and quirk 160 (a
+    survivor may be a tautology). `controls-tsintervals.sh` had a control whose `perl` expression did not
+    match the source, so it patched nothing, tested nothing, and reported SURVIVED — indistinguishable in the
+    output from a real equivalence.
+
+    The cheap defence is the one `controls-pfm.sh` already uses from the other direction: include a
+    deliberate no-op that MUST survive, so a sweep where everything breaks is distinguishable from a broken
+    build. The defence for this case is to diff the file after patching when a survivor is unexpected.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
