@@ -1620,9 +1620,38 @@ Two corpus gaps found by controls, both the same shape: the values were too smal
 afterwards, and the loser tree's `maxVal` only matters when a real ref approaches `UInt64.max` — every case
 had refs under 1000, so a `maxVal` of 1000 still dominated them all.
 
-**Next in Phase 6: `tsdb/chunks/chunks.go`** (799 lines, the chunk file format, exported `NewWriter`/
-`NewReader`) or **`tsdb/index/index.go`** (1874, the index file format). Both are file-format work and both
-are pinnable through their exported readers/writers. `MemPostings` waits for the Head.
+### 6e. `tsdb/chunks/chunks.go`'s pure half — LANDED and PINNED
+
+**46 differential cases across four fixture files.** `Sources/PromChunks/ChunkFormat.swift`: the two
+reference layouts, the per-chunk framing, the checksum, and `WriteChunks`' segment-batching arithmetic.
+
+**The file and segment I/O is deliberately NOT ported, and that is a decision rather than a gap.**
+`Writer`, `cut`, `cutSegmentFile` and `NewDirReader` are built on `os.File`, a directory handle,
+`fileutil.BufWriter` and mmap. Porting them needs a filesystem abstraction, and *choosing* one is an ADR:
+whether the port takes a protocol (testable, and what `MemStorage` would want), `FileManager` directly, or
+NIO's non-blocking file I/O changes every later TSDB slice. **Write that ADR before the next chunk-file
+slice**, not during it.
+
+What is here is everything about the format that is pure, and it is byte-exact without touching a disk:
+the framing bytes, the CRC input, the ref packing, and the batching. Quirks 126-128 record the three
+things a straight reading misses — the CRC covering the encoding and data but **not** the length prefix,
+`NewBlockChunkRef` having no bounds check where `NewHeadChunkRef` panics, and the batching using the
+**maximum** varint width so segments cut slightly early.
+
+The batching is pinned the way a caller sees it: which segment each chunk's reference decodes to, and at
+what offset. The oracle gets that by running the real `Writer` against a temporary directory; the port
+computes it from `chunkWriteBatches` plus the framing widths, which is what the writer does as it goes.
+So the arithmetic is pinned against a real file writer without the port needing one.
+
+Two wire notes worth carrying: sample values travel as **hex bit patterns**, because `encoding/json`
+panics outright on NaN — the louder cousin of the submatch corpus's silent U+FFFD substitution. And the
+corpus is **four files rather than one**, because `Fixtures.check` decodes every line of a file with a
+single `In`/`Out` pair; mixing shapes would need an id filter in shared test infrastructure, and four
+files is the cheaper seam.
+
+**Next in Phase 6:** `tsdb/index/index.go` (1874 lines, the index file format — symbol table, postings
+offsets, series records; its `Reader` works on a `ByteSlice` so much of it is pinnable without files), or
+the filesystem ADR that unblocks the writers. `MemPostings` waits for the Head in Phase 7.
 
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 

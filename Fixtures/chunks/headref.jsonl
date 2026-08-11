@@ -1,0 +1,14 @@
+{"id":"headref/0","in":{"seriesRef":0,"chunkID":0},"out":{"ref":0,"seriesRef":0,"chunkID":0,"panic":""}}
+{"id":"headref/1","in":{"seriesRef":1,"chunkID":0},"out":{"ref":16777216,"seriesRef":1,"chunkID":0,"panic":""}}
+{"id":"headref/2","in":{"seriesRef":0,"chunkID":1},"out":{"ref":1,"seriesRef":0,"chunkID":1,"panic":""}}
+{"id":"headref/3","in":{"seriesRef":1,"chunkID":1},"out":{"ref":16777217,"seriesRef":1,"chunkID":1,"panic":""}}
+{"id":"headref/4","in":{"seriesRef":7,"chunkID":12},"out":{"ref":117440524,"seriesRef":7,"chunkID":12,"panic":""}}
+{"id":"headref/5","in":{"seriesRef":123456,"chunkID":789},"out":{"ref":2071247979285,"seriesRef":123456,"chunkID":789,"panic":""}}
+{"id":"headref/6","in":{"seriesRef":1099511627775,"chunkID":16777215},"out":{"ref":18446744073709551615,"seriesRef":1099511627775,"chunkID":16777215,"panic":""}}
+{"id":"headref/7","in":{"seriesRef":1099511627775,"chunkID":0},"out":{"ref":18446744073692774400,"seriesRef":1099511627775,"chunkID":0,"panic":""}}
+{"id":"headref/8","in":{"seriesRef":0,"chunkID":16777215},"out":{"ref":16777215,"seriesRef":0,"chunkID":16777215,"panic":""}}
+{"id":"headref/9","in":{"seriesRef":1099511627776,"chunkID":0},"out":{"ref":0,"seriesRef":0,"chunkID":0,"panic":"series ID exceeds 5 bytes"}}
+{"id":"headref/10","in":{"seriesRef":0,"chunkID":16777216},"out":{"ref":0,"seriesRef":0,"chunkID":0,"panic":"chunk ID exceeds 3 bytes"}}
+{"id":"headref/11","in":{"seriesRef":18446744073709551615,"chunkID":0},"out":{"ref":0,"seriesRef":0,"chunkID":0,"panic":"series ID exceeds 5 bytes"}}
+{"id":"headref/12","in":{"seriesRef":0,"chunkID":18446744073709551615},"out":{"ref":0,"seriesRef":0,"chunkID":0,"panic":"chunk ID exceeds 3 bytes"}}
+{"id":"headref/13","in":{"seriesRef":549755813888,"chunkID":8388608},"out":{"ref":9223372036863164416,"seriesRef":549755813888,"chunkID":8388608,"panic":""}}

@@ -87,7 +87,11 @@ let package = Package(
         // Phase 5 ports only chunk.go's protocol surface; the concrete XOR,
         // XOR2 and histogram encodings arrive with Phases 6–7.
         .target(name: "PromChunkEnc", dependencies: ["PromHistogram", "PromModel", "GoCompat"]),
-        .target(name: "PromChunks", dependencies: ["PromChunkEnc", "PromHistogram"]),
+        .target(
+            name: "PromChunks",
+            // Phase 6 added `ChunkFormat.swift`, which needs the Castagnoli CRC and varints.
+            dependencies: ["PromChunkEnc", "PromHistogram", "PromHash", "GoCompat"]
+        ),
 
         // Phase 6: `tsdb/index`'s postings algebra. `MemPostings` is deliberately not here — that is
         // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
@@ -227,6 +231,12 @@ let package = Package(
             dependencies: [
                 "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "PromPosRange",
                 "PromStorage", "GoCompat", "GoOracleSupport",
+            ]
+        ),
+        .testTarget(
+            name: "PromChunksTests",
+            dependencies: [
+                "PromChunks", "PromChunkEnc", "PromHash", "GoOracleSupport", "GoCompat",
             ]
         ),
         .testTarget(

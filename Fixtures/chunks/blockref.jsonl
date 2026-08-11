@@ -1,0 +1,11 @@
+{"id":"blockref/0","in":{"fileIndex":0,"fileOffset":0},"out":{"ref":0,"segIndex":0,"chunkStart":0}}
+{"id":"blockref/1","in":{"fileIndex":1,"fileOffset":0},"out":{"ref":4294967296,"segIndex":1,"chunkStart":0}}
+{"id":"blockref/2","in":{"fileIndex":0,"fileOffset":1},"out":{"ref":1,"segIndex":0,"chunkStart":1}}
+{"id":"blockref/3","in":{"fileIndex":1,"fileOffset":1},"out":{"ref":4294967297,"segIndex":1,"chunkStart":1}}
+{"id":"blockref/4","in":{"fileIndex":5,"fileOffset":4096},"out":{"ref":21474840576,"segIndex":5,"chunkStart":4096}}
+{"id":"blockref/5","in":{"fileIndex":0,"fileOffset":4294967295},"out":{"ref":4294967295,"segIndex":0,"chunkStart":4294967295}}
+{"id":"blockref/6","in":{"fileIndex":4294967295,"fileOffset":0},"out":{"ref":18446744069414584320,"segIndex":4294967295,"chunkStart":0}}
+{"id":"blockref/7","in":{"fileIndex":4294967295,"fileOffset":4294967295},"out":{"ref":18446744073709551615,"segIndex":4294967295,"chunkStart":4294967295}}
+{"id":"blockref/8","in":{"fileIndex":4294967296,"fileOffset":0},"out":{"ref":0,"segIndex":0,"chunkStart":0}}
+{"id":"blockref/9","in":{"fileIndex":1,"fileOffset":4294967295},"out":{"ref":8589934591,"segIndex":1,"chunkStart":4294967295}}
+{"id":"blockref/10","in":{"fileIndex":8589934592,"fileOffset":7},"out":{"ref":7,"segIndex":0,"chunkStart":7}}
