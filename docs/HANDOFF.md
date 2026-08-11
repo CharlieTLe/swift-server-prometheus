@@ -2102,6 +2102,49 @@ returns `(encoding, bytes)`. The iterable half is the Head's concern (it is how 
 without copying), so a block-only port can return a nil iterable, but the SIGNATURE has to allow for it or
 Phase 7 will have to change every call site. Decide that before writing the iterators.
 
+### 6r. `DeletedIterator` — LANDED, and it is a cursor rather than a filter
+
+`Sources/PromBlock/DeletedIterator.swift`. Exported upstream, so the corpus drives it directly over a real XOR
+chunk iterator on both sides.
+
+**The behaviour is stateful in a way the name hides** (quirk 164): `it.Intervals = it.Intervals[1:]` — both
+`Next` and `Seek` drop intervals off the front once the timestamp has passed them. So a second pass over the
+same iterator deletes nothing, seeking backwards is unsupported rather than slow, and the whole thing is
+correct only because the intervals are sorted and non-overlapping (quirk 162's invariant). Handed an unsorted
+list it silently under-deletes, which the corpus records rather than avoids.
+
+The corpus is therefore a **script**, not a query: per case, a sequence of `Next`/`Seek` ops on ONE iterator,
+the interval list that survived, a second pass on that same iterator, and a fresh iterator drained fully. A
+filter-style port passes the first pass and fails the second; the fresh drain says whether deletion itself is
+also wrong. 41 cases.
+
+16 controls, 12 broke. What is worth carrying is how one two-character control was closed — **quirk 165, the
+complement to 159**:
+
+- `ts <= tr.Maxt` → `ts < tr.Maxt` survived the entire corpus.
+- The two differ only at `ts == tr.Maxt`, which (the test being reached only when `InBounds` failed) forces
+  `ts < tr.Mint` — an INVERTED interval whose `Maxt` lands on a sample.
+- Adding inverted intervals **was still not enough**: both spellings keep the sample, one by returning and one
+  by falling out of the loop with nothing left to check.
+- The distinguishing shape is an inverted interval whose `Maxt` is on a sample *followed by* an interval
+  containing that sample — `t=30, [{50,30}, {25,35}]`. Three such cases are in the corpus; the control now
+  breaks on all three.
+
+Random generation would not have found that. Quirk 159's brute-force search and quirk 165's derivation are
+both tools; pick by the shape of the perturbation.
+
+One survivor is left as a **declared corpus gap** rather than argued away: `Seek` checks the wrapped
+iterator's error first and `Next` does not, and no case here has an erroring wrapped iterator, because every
+chunk is appender-built and well-formed. Closing it needs raw chunk bytes in the fixture input (a chunk whose
+sample count exceeds its data), which is a corpus-shape change that belongs with `populateWithDel*` — whose
+own error wrapping needs erroring chunks anyway.
+
+**Next in Phase 6:** `blockBaseSeriesSet`, which now has everything it needs — `PostingsForMatchers` (§6n),
+the interval arithmetic (§6q) and `DeletedIterator` (§6r). Then the `populateWithDel*` iterators and
+`blockQuerier.Select`. The signature decision §6q flagged is still open and still needs making first:
+upstream's `ChunkReader.ChunkOrIterable` returns a `(Chunk, Iterable)` pair because one meta can name several
+chunks, while the port's `chunk` returns `(encoding, bytes)`.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.
