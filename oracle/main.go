@@ -66,6 +66,7 @@ var suites = map[string]func(*emitter){
 	"regex/match":                  genRegexMatch,
 	"regex/setmatches":             genRegexSetMatches,
 	"regex/quotemeta":              genQuoteMeta,
+	"regex/submatch":               genRegexSubmatch,
 	"histogram/bounds":             genHistogramBounds,
 	"histogram/integer":            genHistogramInteger,
 	"histogram/integer-compact":    genHistogramCompact,

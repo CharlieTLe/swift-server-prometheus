@@ -51,6 +51,7 @@ internal import GoCompat
 internal import PromAnnotations
 internal import PromLabels
 internal import PromQLParser
+internal import PromRegex
 internal import PromModel
 
 /// Go: `filterFloats` — histogram samples removed.
@@ -229,4 +230,71 @@ func evalLabelJoin(
     }
 
     return try ev.mergeSeriesWithSameLabelset(matrix)
+}
+
+/// Go: `evalLabelReplace` — the last of the three series-shaped functions.
+///
+/// Like `label_join` it rewrites the matrix in place and then merges label sets that collided, and like
+/// `label_join` writing `__name__` **resets** `DropName` while any other destination preserves it.
+///
+/// What is specific to it, and what kept it unported until `PromRegex` grew capture tracking:
+///
+///   * the regex is compiled `"^(?s:" + regexStr + ")$"`, so it is fully anchored and `.` matches a
+///     newline. A pattern that would match a substring does not match here;
+///   * the replacement is `Regexp.ExpandString`, whose `$1`/`${name}` language is Go's own — `$1x` is
+///     the name `1x`, a `$` before a non-name expands to nothing, and `$$` is the only escape;
+///   * **a series whose source label does not match is left completely alone** — not cleared, not
+///     given an empty destination. `if indexes != nil` guards the whole rewrite;
+///   * the two argument validations happen BEFORE the argument is evaluated, so a bad regex or a bad
+///     destination name is reported even when the inner expression would have failed too.
+func evalLabelReplace(
+    _ ev: Evaluator, _ ctx: GoContext, _ args: [any Expr], _ ws: inout Annotations
+) throws -> any Value {
+    let dst = stringFromArg(args[1])
+    let repl = Array(stringLiteralBytes(args[2]))
+    let src = stringFromArg(args[3])
+    let regexStr = stringFromArg(args[4])
+
+    guard let regex = try? CompiledRegex(anchoredForLabelReplace: regexStr) else {
+        throw EvaluationError.invalidRegularExpressionInLabelReplace(regexStr)
+    }
+    // The `[UInt8]` overload, for ADR-9's reason: decoding first substitutes U+FFFD and the check can
+    // then never fail. The same fix `count_values` needed.
+    guard ValidationScheme.utf8.isValidLabelName(stringLiteralBytes(args[1])) else {
+        throw EvaluationError.invalidDestinationLabelNameInLabelReplace(dst)
+    }
+
+    // **`evalNode`, not `eval`.** Go has two methods and the difference is exactly this: exported
+    // `Eval` runs `cleanupMetricLabels` and internal `eval` does not, and `evalLabelReplace` calls the
+    // internal one. Calling the outer one here applies the deferred `DropName` to the ARGUMENT, so two
+    // name-dropping series collapse to one label set and the duplicate check fires before
+    // `label_replace` ever gets to rename them — which is precisely what deferring the removal exists
+    // to prevent. `label_join` above already had this right.
+    let val = try ev.evalNode(ctx, args[0], &ws)
+    guard var matrix = val as? Matrix else {
+        throw EvaluationError.unknownValueType("label_replace: expected a matrix")
+    }
+
+    var lb = LabelsBuilder(Labels())
+    for i in matrix.series.indices {
+        let el = matrix.series[i]
+        let srcVal = Array(el.metric[src].utf8)
+        // Only replace when the regexp matches — otherwise the series passes through untouched.
+        guard let indexes = regex.findSubmatchIndex(srcVal) else { continue }
+        let res = regex.expand([], repl, srcVal, indexes)
+        lb.reset(el.metric)
+        lb.set(dst, String(decoding: res, as: UTF8.self))
+        matrix.series[i].metric = lb.labels()
+        matrix.series[i].dropName = dst == LabelName.metricName ? false : el.dropName
+    }
+
+    return try ev.mergeSeriesWithSameLabelset(matrix)
+}
+
+/// The raw bytes of a string-literal argument, for the surfaces where decoding first would be lossy.
+func stringLiteralBytes(_ e: any Expr) -> [UInt8] {
+    guard let literal = e as? StringLiteral else {
+        preconditionFailure("stringLiteralBytes: the argument is a string literal")
+    }
+    return literal.val
 }

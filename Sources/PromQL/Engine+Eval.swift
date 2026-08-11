@@ -197,6 +197,14 @@ final class Evaluator {
             // top, after the whole expression has been evaluated. That is the point of deferring
             // it: an intermediate result keeps its name, so a nested expression can still match on
             // it, and only the answer loses it.
+            //
+            // **So this function is Go's exported `Eval`, and `evalNode` is Go's internal `eval`.**
+            // Anything evaluating a SUBEXPRESSION must call `evalNode`; calling this one applies the
+            // removal to an intermediate result and defeats the whole mechanism. The three
+            // series-shaped functions (`label_join`, `label_replace`, `info`) are the only callers
+            // that have the choice, and two of the three got it wrong on the way in — the symptom was
+            // `label_replace(rate({env="1"}[10m]), …)` reporting a duplicate label set, because both
+            // input series had already lost the `__name__` that made them distinct.
             if enableDelayedNameRemoval {
                 v = try cleanupMetricLabels(v)
             }
@@ -519,13 +527,9 @@ final class Evaluator {
                 // `functionCalls` (quirk 62).
                 return try evalLabelJoin(self, ctx, e.args, &ws)
             case "label_replace":
-                // Blocked on `PromRegex`: `FindStringSubmatchIndex` + `ExpandString` need capture
-                // tracking, and the Pike VM is deliberately boolean-only
-                // (`RegexCompiler.swift`'s header says so). That is a PromRegex slice, not an
-                // evaluator one.
-                throw EvaluatorNotPorted(
-                    nodeType: "Call",
-                    detail: "label_replace needs Pike VM capture tracking in PromRegex")
+                // Works on SERIES, like `label_join` above. Needed `PromRegex`'s capture-tracking VM
+                // (`RegexCapture.swift`), which is why it was the last arm to land.
+                return try evalLabelReplace(self, ctx, e.args, &ws)
             case "info":
                 // Works on SERIES too, like `label_join` above. See `Engine+Info.swift`.
                 return try evalInfo(ctx, e.args, &ws)
@@ -914,6 +918,9 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     /// Go: `evalLabelJoin`'s two panics. `%s` on a bare Go `string`, so unquoted.
     case invalidSourceLabelNameInLabelJoin(String)
     case invalidDestinationLabelNameInLabelJoin(String)
+    /// Go: `evalLabelReplace`'s two panics. Both are `%s` on a bare Go `string`, so unquoted.
+    case invalidRegularExpressionInLabelReplace(String)
+    case invalidDestinationLabelNameInLabelReplace(String)
     /// Go: `combineWithInfoVector`'s `errors.New("info sample should be float")`. An info metric
     /// carries metadata in its labels, so a histogram value there is meaningless rather than merely
     /// unsupported.
@@ -979,6 +986,10 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
             return "invalid label name \(s)"
         case .invalidSourceLabelNameInLabelJoin(let s):
             return "invalid source label name in label_join(): \(s)"
+        case .invalidRegularExpressionInLabelReplace(let s):
+            return "invalid regular expression in label_replace(): \(s)"
+        case .invalidDestinationLabelNameInLabelReplace(let s):
+            return "invalid destination label name in label_replace(): \(s)"
         case .invalidDestinationLabelNameInLabelJoin(let s):
             return "invalid destination label name in label_join(): \(s)"
         case .modifierNotSafeForFunction(let modifier, let permitted, let function):

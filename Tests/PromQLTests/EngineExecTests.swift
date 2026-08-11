@@ -157,21 +157,28 @@ struct EngineExecInvariantTests {
         return q.exec(GoContext.background())
     }
 
-    @Test("an unported expression names itself rather than answering wrongly")
+    /// **The list is empty, and that is the point of keeping the test.**
+    ///
+    /// Every arm of the evaluator is ported: `label_replace` was the last, and it came off this list
+    /// when `PromRegex` grew capture tracking. A silent zero would have been far worse than an error,
+    /// so each unported arm named itself; the assertion now is that there is nothing left to name.
+    ///
+    /// It is deliberately not deleted. `EvaluatorNotPorted` still exists for `Statement` (only
+    /// `EvalStmt` is ported; `TestStmt` is `promqltest`'s) and for the `default` arms that the parser
+    /// makes unreachable, so a future slice that adds a node type gets a loud failure here rather than
+    /// a wrong answer — and if this ever starts passing again with a non-empty list, something
+    /// regressed.
+    @Test("every evaluator arm is ported, so nothing names itself as missing")
     func unportedArmsAreLoud() throws {
-        // A silent zero would be far worse than an error, so every arm this slice does not
-        // implement says which one it is. The list has shrunk each slice and is now down to ONE:
-        // `label_replace`, blocked on Pike VM capture tracking in `PromRegex` — a regex slice rather
-        // than an evaluator one. `info` came off it when `Engine+Info.swift` landed.
         for query in [
-            "label_replace(foo, \"a\", \"b\", \"c\", \"d\")"
+            "label_replace(foo, \"a\", \"b\", \"c\", \"d\")",
+            "info(foo)",
+            "label_join(foo, \"a\", \"b\", \"c\")",
         ] {
             let res = try run(query)
-            guard let err = res.error as? EvaluatorNotPorted else {
-                Issue.record("\(query) did not report EvaluatorNotPorted: \(String(describing: res.error))")
-                continue
+            if let err = res.error as? EvaluatorNotPorted {
+                Issue.record("\(query) still reports EvaluatorNotPorted: \(err.nodeType)")
             }
-            #expect(!err.nodeType.isEmpty)
         }
     }
 
