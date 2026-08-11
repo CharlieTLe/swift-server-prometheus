@@ -1779,6 +1779,31 @@ changing behaviour.
     AST — so `Statement()` after `Exec` renders a subquery argument as a nameless range selector,
     `rate([5m])` rather than `rate(foo[5m:1m])`. Upstream's, and pinned rather than tidied.
 
+99. **`smoothed` on a bare selector and `smoothed` on a range selector are different functions.**
+    `foo smoothed` goes through `smoothSeries`, which interpolates the selector's own samples onto
+    the step grid; `foo[5m] smoothed` widens a range window and lets `extendFloats` add boundary
+    points (quirk 97's neighbour). Same keyword, different code, different result.
+
+    `smoothSeries`' window is `[dataTS - lookback, dataTS + lookback]` — the only selector window in
+    the engine that reaches **forward**, which is what makes interpolation possible. Four cases per
+    step, chosen by `sort.Search`:
+
+    * an exact hit is copied and **re-stamped** with the step's timestamp (only observable with a
+      non-zero `offset`, since otherwise the two coincide);
+    * a point either side is interpolated;
+    * past the end of the data the last value is **carried forward**;
+    * before the data starts the step produces **nothing**. That asymmetry is deliberate.
+
+    A carried-forward histogram has its `CounterResetHint` reset to `UnknownCounterReset` — "the
+    hint describes the relationship between consecutive samples, not the value" — and the histogram
+    interpolation treats a pair as a **counter unless BOTH** carry the gauge hint, not unless
+    either. Floats and histograms in one window are refused with a warning rather than merged, and
+    that check comes before both branches.
+
+    The `>= dataTS` search boundary is *not* load-bearing: with `>` an exact hit falls into the
+    interpolation branch with `prev.T == dataTS`, which returns `prev.F`. Its control survives, and
+    that is why.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

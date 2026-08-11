@@ -86,6 +86,8 @@ func runExecCase(in execIn) execOut {
 			// `anchored` and `smoothed` on a range selector, which `matrixSelector`'s
 			// `extendFloats` path needs. Parser-only: the engine has no matching flag.
 			EnableExtendedRangeSelectors: true,
+			// `fill`/`fill_left`/`fill_right` on a binary operator.
+			EnableBinopFillModifiers: true,
 		}),
 	})
 	ts := time.UnixMilli(parseI64(in.Ts)).UTC()
@@ -1273,6 +1275,84 @@ func genPromQLExec(e *emitter) {
 	for _, q := range ljCases {
 		emit(execIn{
 			Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)), Series: ljSeries,
+		})
+	}
+
+	// --- `smoothed` on a BARE selector, and the binop FILL modifiers.
+	//
+	// `foo smoothed` is a different function from `foo[5m] smoothed`: it interpolates the
+	// selector's own samples onto the step grid, using a window that reaches FORWARD by a lookback
+	// delta — which is what no other selector window does.
+	//
+	// Off-grid samples are essential: on the grid every step is an exact hit and the interpolation,
+	// the carry-forward and the skip are all invisible.
+	smSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "sm"},
+			[2]int64{17_000, 1}, [2]int64{53_000, 5}, [2]int64{101_000, 13}),
+	}
+	// A gap wider than the lookback, so some steps have no window at all.
+	smGap := []memSeriesInJSON{
+		fs([]string{"__name__", "smg"}, [2]int64{0, 1}, [2]int64{900_000, 10}),
+	}
+	smCases := []struct {
+		query  string
+		series []memSeriesInJSON
+		ts     int64
+	}{
+		// An exact hit, an interpolation, a carry-forward past the end, and a skip before the
+		// start — the four cases of the binary search, chosen by where `ts` falls.
+		{`sm smoothed`, smSeries, 17_000},
+		{`sm smoothed`, smSeries, 35_000},
+		{`sm smoothed`, smSeries, 53_000},
+		{`sm smoothed`, smSeries, 77_000},
+		{`sm smoothed`, smSeries, 101_000},
+		{`sm smoothed`, smSeries, 120_000},
+		{`sm smoothed`, smSeries, 300_000},
+		{`sm smoothed`, smSeries, 400_001},
+		{`sm smoothed`, smSeries, 0},
+		{`sm smoothed`, smSeries, 16_999},
+		// `offset`, which shifts the data timestamp and therefore which pair is interpolated.
+		{`sm smoothed offset 1m`, smSeries, 95_000},
+		// An EXACT hit with a non-zero offset, which is the only shape where the re-stamping is
+		// visible: with no offset `evalTS == dataTS == sample.T`, so keeping the sample's own
+		// timestamp gives the same answer.
+		{`sm smoothed offset 1m`, smSeries, 113_000},
+		{`sm smoothed offset 1m`, smSeries, 77_000},
+		{`sm smoothed offset -1m`, smSeries, 41_000},
+		{`sum(sm smoothed offset 1m)`, smSeries, 113_000},
+		{`sm smoothed offset -1m`, smSeries, 0},
+		// A gap wider than the lookback: nothing at all.
+		{`smg smoothed`, smGap, 450_000},
+		{`smg smoothed`, smGap, 100_000},
+		// Through a function and an aggregation, so the interpolated matrix is consumed.
+		{`sm smoothed + 1`, smSeries, 35_000},
+		{`sum(sm smoothed)`, smSeries, 35_000},
+		{`abs(sm smoothed)`, smSeries, 35_000},
+
+		// --- The FILL modifiers. A match group only one side has still produces output, and the
+		// synthesised sample's metric is the JOIN LABELS ONLY.
+		{`left + fill_right (0) right`, binL, 0},
+		{`left + fill_right (100) right`, binL, 0},
+		{`left + fill_left (0) right`, binL, 0},
+		{`left + fill (0) right`, binL, 0},
+		{`left + on(job) fill_right (0) right`, binL, 0},
+		{`left + on(job) fill (7) right`, binL, 0},
+		{`left / fill (1) right`, binL, 0},
+		{`left - fill (0) right`, binL, 0},
+		// One side EMPTY, where the short-circuit would otherwise return nothing.
+		{`left + fill_right (0) nothing`, binL, 0},
+		{`nothing + fill_left (0) right`, binL, 0},
+		{`left + fill (0) nothing`, binL, 0},
+		{`nothing + fill (0) nothing`, binL, 0},
+		// A comparison with a fill, where `keep` decides whether the filled pair survives.
+		{`left > fill_right (0) right`, binL, 0},
+		{`left > bool fill_right (0) right`, binL, 0},
+		{`cl > fill (50) cr`, binCmp, 0},
+	}
+	for _, c := range smCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(c.ts), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
 		})
 	}
 

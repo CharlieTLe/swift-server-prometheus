@@ -225,10 +225,6 @@ extension Evaluator {
         guard matching.card != .manyToMany else {
             throw EvaluationError.manyToManyOnlyForSetOperators
         }
-        if matching.fillValues.lhs != nil || matching.fillValues.rhs != nil {
-            throw EvaluatorNotPorted(
-                nodeType: "BinaryExpr", detail: "the fill modifiers have their own slice")
-        }
         // Short-circuit: with both sides empty, or one side empty and no fill value, nothing
         // can match.
         if (lhsIn.isEmpty && rhsIn.isEmpty)
@@ -340,11 +336,37 @@ extension Evaluator {
 
         for (i, ls) in lhs.samples.enumerated() {
             let sigOrd = lhsh[i].sigOrdinal
-            guard rightSigsPresent[sigOrd] else {
-                // The fill-value fallback lives here; it is refused above, so nothing to do.
-                continue
+            let rs: Sample
+            if rightSigsPresent[sigOrd] {
+                rs = rightSigs[sigOrd]
+            } else {
+                // No match: fall back to the fill value, if there is one. The synthesised sample's
+                // metric is the JOIN LABELS ONLY — not the other side's full label set.
+                guard let fill = matching.fillValues.rhs else {
+                    continue
+                }
+                rs = Sample(
+                    f: fill, metric: ls.metric.matchLabels(on: matching.on, matching.matchingLabels)
+                )
             }
-            try doBinOp(ls, rightSigs[sigOrd], sigOrd)
+            try doBinOp(ls, rs, sigOrd)
+        }
+
+        // The right-hand groups the LEFT never had, filled from the left. Runs after the main
+        // loop, and skips any ordinal already matched — so it only fires for genuine misses.
+        if let fill = matching.fillValues.lhs {
+            for (i, rs) in rhs.samples.enumerated() {
+                let sigOrd = rhsh[i].sigOrdinal
+                if (matching.card == .oneToOne && matchedSigsPresent[sigOrd])
+                    || (matching.card != .oneToOne && !(matchedSigs[sigOrd]?.isEmpty ?? true))
+                {
+                    continue
+                }
+                let ls = Sample(
+                    f: fill, metric: rs.metric.matchLabels(on: matching.on, matching.matchingLabels)
+                )
+                try doBinOp(ls, rs, sigOrd)
+            }
         }
 
         return (out, lastErr)
