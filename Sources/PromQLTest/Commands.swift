@@ -360,7 +360,9 @@ extension PromQLTestRunner {
             // not an accident; upstream compares it only when the file set one.
             return compareNativeHistogram(wantH, gotH, counterResetHintSet: false)
                 ? nil
-                : .failed("\(loc): \(cmd.expr): \(s.metric): histogram mismatch: expected \(wantH), got \(gotH)")
+                : .failed(
+                    "\(loc): \(cmd.expr): \(s.metric): histogram mismatch:\n"
+                        + "      want \(hDetail(wantH))\n      got  \(hDetail(gotH))")
         }
         if let gotH = s.h {
             return .failed("\(loc): \(cmd.expr): \(s.metric): expected a float, got histogram \(gotH)")
@@ -522,4 +524,15 @@ extension PromQLTestRunner {
         }
         return nil
     }
+}
+
+
+/// The fields `FloatHistogram.String()` does not print, which is exactly where a mismatch with two
+/// identical renderings has to live.
+func hDetail(_ h: FloatHistogram) -> String {
+    var s = "schema=\(h.schema) zt=\(h.zeroThreshold) zc=\(h.zeroCount) hint=\(h.counterResetHint)"
+    s += " pSpans=\(h.positiveSpans.map { "(\($0.offset),\($0.length))" }.joined())"
+    s += " nSpans=\(h.negativeSpans.map { "(\($0.offset),\($0.length))" }.joined())"
+    s += " pB=\(h.positiveBuckets) nB=\(h.negativeBuckets) cv=\(h.customValues.map(String.init(describing:)) ?? "nil")"
+    return s
 }

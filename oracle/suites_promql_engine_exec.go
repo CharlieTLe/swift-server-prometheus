@@ -1187,7 +1187,11 @@ func genPromQLExec(e *emitter) {
 		{`sum_over_time(sum(sq)[2m:1m])`, sqSeries, 180_000},
 		{`max_over_time(sum by (job) (sq)[2m:1m])`, sqSeries, 180_000},
 		{`sum(sq)[2m:1m]`, sqSeries, 180_000},
-		{`sum_over_time((sq + sq)[2m:1m])`, sqSeries, 180_000},
+		// `sort_by_label`-wrapped: the subquery's inner expression is a BINOP, so it goes through
+		// `rangeEval`'s multi-step assembly, which ranges a Go map — the third instance of the risk
+		// HANDOFF §4 records, and it flapped in CI after passing locally. A subquery over a plain
+		// selector is safe (`evalSeries` is ordered); one over a binop or an aggregation is not.
+		{`sort_by_label(sum_over_time((sq + sq)[2m:1m]), "job")`, sqSeries, 180_000},
 		{`max_over_time(rate(sq[1m])[2m:1m])`, sqSeries, 180_000},
 		{`avg_over_time(topk(1, sq)[2m:1m])`, sqSeries, 180_000},
 		// A NESTED subquery, where the inner one's grid is derived from the outer one's.
