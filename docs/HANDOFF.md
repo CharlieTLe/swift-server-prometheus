@@ -1775,7 +1775,34 @@ Two places the port diverges from upstream's I/O, both deliberate and commented 
 no rename (the port copies and removes, since `PromFS` cannot crash between the two and the observable
 result is identical), and `finalizeTail`'s truncate is a no-op because ADR-15 declines pre-allocation.
 
-**Next in Phase 6:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
+### 6i. `index.Writer`'s meta, symbol and series stages — LANDED
+
+`Sources/PromIndex/IndexWriter.swift`, on `PromFS`. The postings sections are NOT here — they need
+`writePostingsToTmpFiles`' second file and a sort of every series — so the corpus does a **prefix
+comparison**: the port rebuilds each `index/reader.jsonl` case's input and the bytes up to the end of the
+series section are compared against Go's real file, along with the TOC offsets for the sections it wrote.
+Reusing the reader suite's fixtures means the two cannot drift apart.
+
+**This slice found the most dangerous bug of the session, and it is now ADR-10a.** ADR-10 says Go compares
+strings by byte and Swift by collation; it is usually cited for *ordering*. The same divergence applies to
+**equality and hashing**: `"e\u{301}" == "é"` is true in Swift and false in Go. `symbolCache` was
+`[String: UInt32]`, mapping each symbol to the ordinal a series record stores — and with both spellings of
+`é` in the table, one silently took the other's ordinal. **The file stayed structurally valid, every CRC
+passed, and it decoded to the wrong labels.**
+
+It would not have been found by review: every rendering of the failing input — the fixture's JSON, a
+`print`, this document — shows the two symbols as the same character. What showed it was Go writing seven
+symbols where the port wrote six. The same hazard first bit the *test harness* (a `Set<String>` collapsing
+the two) and only then the port, which is worth knowing: the harness is as exposed as the code.
+
+Rule going forward, per ADR-10a: **anywhere the port keys, de-duplicates or compares strings that
+originate as Go bytes, use `[UInt8]`.**
+
+**Next in Phase 6:** `index.Writer`'s postings sections (§6i's remainder — the tmp file, the series sort,
+`writePostingsOffsetTable`), then `RealFS` thinly and a `BlockReader` tying the chunk and index readers
+together. `MemPostings` waits for the Head in Phase 7.
+
+**Previously next, now done:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
 machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus
 already proves the port can read what Go writes, so a writer corpus closes the loop in both directions.
 Then `RealFS`, thinly, and a `BlockReader` that ties the chunk and index readers together. `MemPostings`

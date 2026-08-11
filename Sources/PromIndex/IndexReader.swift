@@ -97,6 +97,20 @@ public struct IndexTOC: Sendable, Equatable {
     public var postings: UInt64
     public var postingsTable: UInt64
 
+    /// A memberwise initialiser, for the WRITER — which fills the offsets in as each stage begins rather
+    /// than parsing them.
+    public init(
+        symbols: UInt64 = 0, series: UInt64 = 0, labelIndices: UInt64 = 0,
+        labelIndicesTable: UInt64 = 0, postings: UInt64 = 0, postingsTable: UInt64 = 0
+    ) {
+        self.symbols = symbols
+        self.series = series
+        self.labelIndices = labelIndices
+        self.labelIndicesTable = labelIndicesTable
+        self.postings = postings
+        self.postingsTable = postingsTable
+    }
+
     /// Go: `NewTOCFromByteSlice`.
     ///
     /// Reads from the END of the file. The CRC covers the six offsets and nothing else — not the file, not

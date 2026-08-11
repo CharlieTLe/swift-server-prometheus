@@ -103,7 +103,9 @@ let package = Package(
         // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
         .target(
             name: "PromIndex",
-            dependencies: ["PromStorage", "PromLabels", "PromEncoding", "PromHash", "GoCompat"]
+            dependencies: [
+                "PromStorage", "PromLabels", "PromEncoding", "PromHash", "PromFS", "GoCompat",
+            ]
         ),
         .target(
             name: "PromStorage",
@@ -255,7 +257,7 @@ let package = Package(
         .testTarget(
             name: "PromIndexTests",
             dependencies: [
-                "PromIndex", "PromStorage", "PromEncoding", "GoOracleSupport", "GoCompat",
+                "PromIndex", "PromStorage", "PromEncoding", "PromFS", "GoOracleSupport", "GoCompat",
             ]
         ),
         .testTarget(
