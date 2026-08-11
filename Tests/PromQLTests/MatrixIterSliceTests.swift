@@ -218,6 +218,59 @@ struct MatrixIterSliceTests {
                 == "anchored modifier is not supported with histograms")
     }
 
+    @Test("a histogram's counter reset hint survives the storage and the buffer")
+    func counterResetHintCarriage() throws {
+        // The hypothesis HANDOFF §5e records for the exit gate's two remaining warning failures:
+        // the collision warning needs one sample hinted `notCounterReset` and the next
+        // `counterReset`, and the hints may be lost between `MemStorage.load` and
+        // `matrixIterSlice`. The `storage/mem-select` corpus is float-only on purpose, so histogram
+        // HINT carriage has never been pinned anywhere — this is the drop-a-level test for it.
+        func h(_ hint: CounterResetHint, _ count: Double) -> FloatHistogram {
+            FloatHistogram(
+                counterResetHint: hint, schema: 0, count: count, sum: count,
+                positiveSpans: [Span(offset: 0, length: 1)], positiveBuckets: [count])
+        }
+        let store = MemStorage()
+        try store.load(
+            Labels(strings: ["__name__", "mixed"]),
+            [
+                FHSample(st: 0, t: 0, fh: h(.notCounterReset, 1)),
+                FHSample(st: 0, t: 60_000, fh: h(.counterReset, 2)),
+            ])
+
+        let ev = evaluator()
+        let querier = try store.querier(mint: 0, maxt: 60_000)
+        let set = querier.select(
+            GoContext.background(), sortSeries: true, hints: SelectHints(start: 0, end: 60_000),
+            matchers: [try Matcher(.equal, "__name__", "mixed")])
+        var series: [any PromStorage.Series] = []
+        while set.next() { series.append(try #require(set.at())) }
+        #expect(series.count == 1)
+
+        let it = newBuffer(delta: 60_000)
+        it.reset(series[0].iterator(nil))
+        var floats: [FPoint]? = nil
+        var hists: [HPoint]? = nil
+        var sts: StartTimestamps? = nil
+        try ev.matrixIterSlice(it, -1, 60_000, &floats, &hists, &sts)
+
+        #expect(hists?.count == 2)
+        #expect(
+            hists?.map(\.h.counterResetHint) == [.notCounterReset, .counterReset],
+            "the hints must survive: the collision warning is the only thing that reads them")
+
+        // They DO survive, which **refutes** the hypothesis HANDOFF §5e recorded — so the loss is
+        // in the one remaining link, `parseSeriesDesc`'s handling of `counter_reset_hint:`. And
+        // Phase 4's 1,685-case series-description corpus cannot see it: that fixture compares
+        // `String()`, and `FloatHistogram.String()` does not print the hint. Exactly the trap
+        // HANDOFF §3 records for `promql/histogram-stats`, in a corpus that predates the lesson.
+        let parsed = try Parser(options: Options()).parseSeriesDesc(
+            "mixed {{schema:0 count:1 sum:1 counter_reset_hint:reset buckets:[1]}}")
+        #expect(
+            parsed.values.first?.histogram?.counterResetHint == .counterReset,
+            "parseSeriesDesc must carry counter_reset_hint — String() cannot see it, so no fixture does")
+    }
+
     @Test("the sample limit is enforced per point, as the points are appended")
     func sampleLimitPerPoint() throws {
         // `currentSamples += 1` then `> maxSamples`, before the append — so a limit of exactly

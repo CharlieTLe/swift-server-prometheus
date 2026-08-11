@@ -118,17 +118,13 @@ struct PromQLTestTests {
 //      `native_histograms.test`'s `mixed` series is the shape that can. The documented blind spot,
 //      found.
 //
-//      NARROWED: the two `trackCounterReset` call sites in `Functions+OverTime.swift` match Go
-//      line for line, including the seed sample — and the test's own comment says the point is
-//      "if the conflict is detected between the FIRST TWO samples, too", which is that seed. The
-//      VALUES are right (`{} 21`), so the aggregation runs; only the hints fail to collide. And
-//      `parseSeriesDesc` does parse `counter_reset_hint:` — it even exposes
-//      `SequenceValue.counterResetHintSet`. So the hint is lost somewhere between
-//      `MemStorage.load` and `matrixIterSlice`, and HANDOFF §5 names the likely reason: the
-//      `storage/mem-select` corpus is float-only ON PURPOSE, so histogram *hint* carriage through
-//      the in-memory storage has never been pinned. Start there, with a Swift-side test that
-//      loads a two-sample series with `notCounterReset` then `counterReset` and asserts the hints
-//      survive a `matrixIterSlice`.
+//      NARROWED, and two hypotheses REFUTED — see HANDOFF §5e. Hint carriage through the storage,
+//      the buffer and `matrixIterSlice` is now pinned by
+//      `MatrixIterSliceTests.counterResetHintCarriage`, as is `parseSeriesDesc`'s handling of
+//      `counter_reset_hint:`; both survive. So the hints DO reach `trackCounterReset`, whose call
+//      sites match Go line for line, and the values are right. The remaining suspect is
+//      `funcSumOverTime`/`funcAvgOverTime`'s own annotation return path, plus whether the `[2m]`
+//      window at `11m` holds both samples. Five-line checks now the layers beneath are pinned.
 //   1  `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
 // While here: `SequenceValue.counterResetHintSet` already exists, so the gate's
 // `compareNativeHistogram` could pass it instead of hard-coding false — which would start
