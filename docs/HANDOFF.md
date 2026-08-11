@@ -5,9 +5,9 @@ Written at the end of the session that landed **range queries**, the **matrix se
 **aggregations**. So `rate(foo[5m])`, `sum by (job) (rate(foo[5m]))`,
 `foo + on(job) group_left bar`, `foo and bar` and `quantile(0.9, foo)` all evaluate, as
 instant *and* range queries, and all 82 ported `FunctionCalls` bodies are reachable. What is
-left in Phase 5 is the three series-shaped functions
-(`label_replace`/`label_join`/`info`), the binop **fill modifiers** and `smoothSeries` — then
-`promqltest`, which is the exit gate.
+left in Phase 5 is **`label_replace`** — blocked on Pike VM **capture tracking** in `PromRegex`,
+which is a `PromRegex` slice rather than an evaluator one — plus `info`, the binop **fill
+modifiers** and `smoothSeries`, then `promqltest`, which is the exit gate.
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -21,7 +21,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). Next: `label_replace`/`label_join`/`info`, the binop fill modifiers and `smoothSeries` — then `promqltest`, the exit gate |
+| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. Then `info`, the binop fill modifiers, `smoothSeries`, and `promqltest`, the exit gate |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started |
 
@@ -610,6 +610,19 @@ the first failure; corpora run to tens of thousands of cases.
 machine builds locally and fails on a clean clone. This broke CI once (#1). The same rule bites
 sooner than you expect when adding a *source* target: SwiftPM fails the manifest outright with
 "target X referenced in product X is empty", so add the target and its first file together.
+
+**An UNSORTED `Select` has no contractual order, and the `promql/exec*` suites are exposed to
+it.** PORTING.md exception 11 records the finding for `storage/mem-select`, whose corpus therefore
+selects sorted in every case. The evaluator does not have that option: `populateSeries` calls
+`Select(sortSeries: false, …)`, and `execEvalStmt`'s vector tail renders the matrix in whatever
+order came back. A head-only `tsdb.DB` returns **append order**, which is not a promise.
+
+In practice it has been stable for hundreds of regenerations — and then
+`sum_over_time(sq[2m:1m])` over a two-series selector flipped, months of green notwithstanding.
+The case is now wrapped in `sort_by_label`. **Every multi-series case in `promql/exec` and
+`promql/exec-range` carries the same latent risk**, so when one of them starts flapping, reach for
+`sort_by_label` (or a single-series selector) rather than assuming drift. And note the companion
+constraint from quirk 96: sorting only helps when the sort *key* is unambiguous.
 
 **A fixture whose own output is nondeterministic is worse than no fixture.** Two ways this nearly
 landed in Phase 5:
