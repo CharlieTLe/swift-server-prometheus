@@ -30,6 +30,7 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/index"
 )
 
@@ -41,6 +42,11 @@ type indexReaderIn struct {
 	Lookups []uint32 `json:"lookups"`
 	// Reverse lookups to perform.
 	Reverse []string `json:"reverse"`
+	// Series IDs to read back, which for format v2 are byte positions divided by 16.
+	SeriesIDs []uint64 `json:"seriesIDs"`
+	// Chunk metas to attach to each generated series, as (mint, maxt, ref) triples. The writer requires
+	// them ordered, so the generator sorts nothing and the cases supply them ordered.
+	ChunkMetas [][3]int64 `json:"chunkMetas"`
 	// Truncate the file to this many bytes before parsing; 0 means don't.
 	TruncateTo int `json:"truncateTo"`
 	// Flip one bit in the TOC's CRC, to reach the checksum path.
@@ -69,6 +75,10 @@ type indexReaderOut struct {
 	LookupErrs  []string `json:"lookupErrs"`
 	Reversed    []uint32 `json:"reversed"`
 	ReverseErrs []string `json:"reverseErrs"`
+	// Per requested series ID: its labels as name/value pairs, its chunk metas, and any error.
+	SeriesLabels [][]string `json:"seriesLabels"`
+	SeriesChunks [][][3]int64 `json:"seriesChunks"`
+	SeriesErrs   []string   `json:"seriesErrs"`
 }
 
 // `realByteSlice` is unexported, but `index.ByteSlice` is an exported interface with two methods — so the
@@ -84,6 +94,7 @@ func genIndexReader(e *emitter) {
 		out := indexReaderOut{
 			AllSymbols: []string{}, LookedUp: []string{}, LookupErrs: []string{},
 			Reversed: []uint32{}, ReverseErrs: []string{},
+			SeriesLabels: [][]string{}, SeriesChunks: [][][3]int64{}, SeriesErrs: []string{},
 		}
 
 		dir, err := os.MkdirTemp("", "index")
@@ -135,8 +146,19 @@ func genIndexReader(e *emitter) {
 					seriesVals = append(seriesVals, s)
 				}
 			}
+			// **Chunk references must increase GLOBALLY, across series, not just within one** — they are
+			// byte offsets into chunk segments, so the writer rejects "unsorted chunk reference: 1,
+			// previous: 2" when a second series restarts them. Hence the per-series offset. The time
+			// ranges, by contrast, are checked per series.
 			for i, s := range seriesVals {
-				if err := w.AddSeries(storage.SeriesRef(i+1), labels.FromStrings("l", s)); err != nil {
+				metas := []chunks.Meta{}
+				for _, m := range in.ChunkMetas {
+					metas = append(metas, chunks.Meta{
+						MinTime: m[0], MaxTime: m[1],
+						Ref: chunks.ChunkRef(m[2] + int64(i)*1_000_000),
+					})
+				}
+				if err := w.AddSeries(storage.SeriesRef(i+1), labels.FromStrings("l", s), metas...); err != nil {
 					out.TOCErr = err.Error()
 					break
 				}
@@ -220,8 +242,100 @@ func genIndexReader(e *emitter) {
 			}
 		}
 
+		// Series records, read back through the reader so the symbol lookups and chunk-meta
+		// double-delta decoding are both exercised.
+		if len(in.SeriesIDs) > 0 {
+			r, rerr := index.NewReader(bs, index.DecodePostingsRaw)
+			if rerr != nil {
+				out.SeriesErrs = append(out.SeriesErrs, rerr.Error())
+			} else {
+				for _, id := range in.SeriesIDs {
+					var b labels.ScratchBuilder
+					var chks []chunks.Meta
+					err := r.Series(storage.SeriesRef(id), &b, &chks)
+					if err != nil {
+						out.SeriesLabels = append(out.SeriesLabels, []string{})
+						out.SeriesChunks = append(out.SeriesChunks, [][3]int64{})
+						out.SeriesErrs = append(out.SeriesErrs, err.Error())
+						continue
+					}
+					pairs := []string{}
+					b.Labels().Range(func(l labels.Label) {
+						pairs = append(pairs, l.Name, l.Value)
+					})
+					cm := [][3]int64{}
+					for _, c := range chks {
+						cm = append(cm, [3]int64{c.MinTime, c.MaxTime, int64(c.Ref)})
+					}
+					out.SeriesLabels = append(out.SeriesLabels, pairs)
+					out.SeriesChunks = append(out.SeriesChunks, cm)
+					out.SeriesErrs = append(out.SeriesErrs, "")
+				}
+				_ = r.Close()
+			}
+		}
+
 		e.emit(fmt.Sprintf("indexreader/%d", n), in, out)
 		n++
+	}
+
+	// --- Series records, with chunk metas whose double-delta encoding is the interesting part.
+	//
+	// The first chunk is framed differently from the rest (signed mint, unsigned maxt delta, unsigned
+	// ref) and every later one uses deltas — including a SIGNED reference delta, so a reference can move
+	// backwards between chunks. Cases below make it do so.
+	emit(indexReaderIn{
+		Symbols: []string{"a", "b"}, SeriesIDs: []uint64{1, 2, 3},
+		ChunkMetas: [][3]int64{{0, 100, 500}},
+	})
+	// The writer enforces `mint > prev.maxt` STRICTLY ("chunk minT 100 is not higher than previous chunk
+	// maxT 100"), so the ranges below never touch.
+	emit(indexReaderIn{
+		Symbols: []string{"a"}, SeriesIDs: []uint64{1},
+		ChunkMetas: [][3]int64{{0, 100, 500}, {101, 200, 700}, {201, 300, 900}},
+	})
+	// **The writer also enforces INCREASING references** ("unsorted chunk reference: 500, previous:
+	// 9000") — even though `Decoder.Series` decodes the reference delta as a SIGNED varint, which could
+	// represent a decrease. So the signed delta is defensive: no file the writer produces exercises it.
+	// A case with a backwards reference is therefore unwritable, and that asymmetry is the finding.
+	emit(indexReaderIn{
+		Symbols: []string{"a"}, SeriesIDs: []uint64{1},
+		ChunkMetas: [][3]int64{{0, 100, 500}, {101, 200, 9000}, {201, 300, 20000}},
+	})
+	// Negative and zero timestamps.
+	emit(indexReaderIn{
+		Symbols: []string{"a"}, SeriesIDs: []uint64{1},
+		ChunkMetas: [][3]int64{{-1000, -500, 1}, {-499, -400, 2}, {-399, 0, 3}},
+	})
+	emit(indexReaderIn{
+		Symbols: []string{"a"}, SeriesIDs: []uint64{1},
+		ChunkMetas: [][3]int64{{0, 0, 0}},
+	})
+	// Large values, so the varints are wide.
+	emit(indexReaderIn{
+		Symbols: []string{"a"}, SeriesIDs: []uint64{1},
+		ChunkMetas: [][3]int64{{1 << 40, 1 << 41, 1 << 42}, {(1 << 41) + 1, 1 << 42, (1 << 42) + 7}},
+	})
+	// No chunks at all, which takes the `k == 0` early return.
+	emit(indexReaderIn{Symbols: []string{"a", "b"}, SeriesIDs: []uint64{1, 2}})
+	// An out-of-range series ID.
+	emit(indexReaderIn{
+		Symbols: []string{"a"}, SeriesIDs: []uint64{0, 99999},
+		ChunkMetas: [][3]int64{{0, 1, 1}},
+	})
+	// Many series, so the IDs are spread across the padded records.
+	{
+		syms := []string{}
+		for i := range 40 {
+			syms = append(syms, fmt.Sprintf("s%03d", i))
+		}
+		ids := []uint64{}
+		for i := 1; i <= 40; i++ {
+			ids = append(ids, uint64(i))
+		}
+		emit(indexReaderIn{
+			Symbols: syms, SeriesIDs: ids, ChunkMetas: [][3]int64{{0, 10, 1}, {11, 20, 2}},
+		})
 	}
 
 	// A handful of symbols: one sparse offset only.

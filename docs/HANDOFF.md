@@ -1679,10 +1679,29 @@ One corpus-generation flaw worth the note: a case with a duplicated symbol made 
 error the port could never produce. The generator de-duplicates the SERIES list now, while still feeding
 the duplicates to `AddSymbol` so the symbol table case survives.
 
-**Next in Phase 6:** the rest of the index reader — the postings offset table, series records (which carry
-chunk metas, so §6e's work feeds in) and label indices, all on the same `ByteSlice` seam and all reachable
-with the corpus generator that now exists. Then `PromFS` from ADR-15, which unblocks the writers.
-`MemPostings` waits for the Head in Phase 7.
+**Series records and the raw postings decoder are now in too** — 23 cases, same generator. Quirks 131-133
+record what they cost:
+
+* the chunk metas are **double-delta** encoded and the FIRST one is framed differently from the rest, so
+  reading either with the other's framing decodes plausible nonsense rather than failing;
+* the reference delta is **signed** — and `Writer.AddSeries` refuses to produce a decrease
+  (`unsorted chunk reference`). So the signed delta is defensive, no written file exercises it, and the
+  corpus case attempting one was *unwritable*. That asymmetry is the finding, and it is the sort of thing
+  only trying to generate the case reveals;
+* in format v2 a series ID is the byte position **divided by 16**, the same v1/v2 split as quirk 130 on a
+  different field.
+
+Two writer constraints came out of the same experiment and are worth having written down before the next
+generator: chunk ranges must satisfy `mint > prev.maxt` **strictly**, and chunk references must increase
+**globally across series**, not just within one.
+
+**Next in Phase 6:** the postings OFFSET TABLE and label indices (the remaining `ByteSlice` readers, and
+`Reader.Postings`/`LabelValues`/`LabelNames` on top of them), then `PromFS` from ADR-15 to unblock the
+writers. `MemPostings` waits for the Head in Phase 7.
+
+A note for whoever writes the next generator: put anything the port cannot compute in the fixture's
+**input**, not its output. The file bytes were on the output side first, which had the port comparing
+against itself; `writtenRefs` repeated the mistake one commit later and was dropped rather than moved.
 
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 

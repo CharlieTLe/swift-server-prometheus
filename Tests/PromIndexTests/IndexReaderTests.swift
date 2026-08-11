@@ -21,6 +21,8 @@ struct IndexReaderIn: Codable, Sendable {
     var reverse: [String]?
     var truncateTo: Int
     var corruptTOCCRC: Bool
+    var seriesIDs: [UInt64]?
+    var chunkMetas: [[Int64]]?
     /// The generated file's bytes. INPUT, because the port has no index writer — the oracle writes the
     /// file with Go's own `index.Writer` and hands the bytes over. On the output side this would be the
     /// port comparing against itself.
@@ -47,6 +49,9 @@ struct IndexReaderOut: Decodable, Equatable, Sendable {
     var lookupErrs: [String]
     var reversed: [UInt32]
     var reverseErrs: [String]
+    var seriesLabels: [[String]]
+    var seriesChunks: [[[Int64]]]
+    var seriesErrs: [String]
 }
 
 private func unhex(_ s: String) -> [UInt8] {
@@ -72,7 +77,8 @@ struct IndexReaderTests {
                     symbols: 0, series: 0, labelIndices: 0, labelIndicesTable: 0, postings: 0,
                     postingsTable: 0),
                 tocErr: "", symbolCount: 0, symbolSize: 0, allSymbols: [], symbolsErr: "",
-                lookedUp: [], lookupErrs: [], reversed: [], reverseErrs: [])
+                lookedUp: [], lookupErrs: [], reversed: [], reverseErrs: [], seriesLabels: [],
+                seriesChunks: [], seriesErrs: [])
 
             // The oracle already wrote the file and handed it over, so the port never writes one — which
             // is the whole point of this seam.
@@ -121,6 +127,28 @@ struct IndexReaderTests {
                         // Go returns `("", err)`, so an empty string accompanies every error.
                         out.lookedUp.append("")
                         out.lookupErrs.append(String(describing: error))
+                    }
+                }
+                // The series records. `readSeries` resolves the ID through the v2 byte alignment and the
+                // symbol table, then decodes the chunk metas' double-delta encoding.
+                for id in input.seriesIDs ?? [] {
+                    do {
+                        let series = try readSeries(
+                            bs, id: id, version: indexFormatV2,
+                            lookupSymbol: { try sy.lookup($0) })
+                        var pairs: [String] = []
+                        for l in series.labels {
+                            pairs.append(l.name)
+                            pairs.append(l.value)
+                        }
+                        out.seriesLabels.append(pairs)
+                        out.seriesChunks.append(
+                            series.chunks.map { [$0.minTime, $0.maxTime, Int64(bitPattern: $0.ref)] })
+                        out.seriesErrs.append("")
+                    } catch {
+                        out.seriesLabels.append([])
+                        out.seriesChunks.append([])
+                        out.seriesErrs.append(String(describing: error))
                     }
                 }
                 for s in input.reverse ?? [] {
