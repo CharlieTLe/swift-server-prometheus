@@ -1987,6 +1987,38 @@ changing behaviour.
     agree on every bit the reader consumes. What the copy prevents is a data race, which has no defined
     value to compare against — pinning it needs a concurrent appender and querier, which is Phase 7.
 
+121. **`Postings.Seek` is idempotent and may not advance.** `Seek(v)` positions at the first value
+    `>= v`, and every implementation opens with a variant of `if cur >= x { return true }` — returning
+    true *without moving*. That is not a shortcut: `intersectPostings.Seek` calls `Seek` on the same
+    iterator repeatedly with a target that may not have changed, so an implementation that always
+    advances silently skips values.
+
+    The neighbouring detail: `listPostings.Next` sets `cur = 0` on exhaustion, which is observable only
+    through a **backwards** seek afterwards. Without it, an exhausted iterator's stale `cur` satisfies
+    `cur >= x` and reports a value it has already yielded.
+
+122. **`EmptyPostings()` is a SENTINEL compared by identity.** `IsEmptyPostingsType` asks whether the
+    value *is* the package singleton, and upstream's comment is explicit that false does not mean
+    non-empty — an empty intersection of two non-empty lists answers false. `Intersect` and `Without`
+    test for it to take short-circuits, so returning a fresh empty iterator is correct but defeats them.
+
+123. **`intersectPostings.Next` advances every input before seeking, and keeps scanning past a
+    mismatch.** Not "seek to the max": advancing all of them first lets a *later* iterator contribute a
+    higher target than the first, so one pass replaces several rounds of seeking. The continue-after-
+    mismatch is what buys that, and dropping it turns `Next` into a slower `Seek` loop.
+
+124. **`removedPostings.Seek` recurses through its own `Next`.** It positions both sides and then calls
+    `Next`, which is what applies the removal at the new position. A `Seek` that merely positioned
+    `full` returns a value that is in `drop`.
+
+125. **A loser tree's tie-breaking is part of the merge order.** `playGame` and `replayGames` both use
+    strict `<`, so on equal values the *left* node loses. `Merge` de-duplicates afterwards, which hides
+    it for postings — but the tree is `GoCompat` now and the next user may not de-duplicate.
+
+    `maxVal` must exceed every real value: an exhausted sequence is given it so it always loses, and
+    `Merge` passes `SeriesRef(UInt64.max)` with upstream's comment saying so. A real ref that large
+    would sort as exhausted and vanish.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

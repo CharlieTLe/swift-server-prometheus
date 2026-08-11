@@ -1587,6 +1587,43 @@ puts it in the small buckets. Three controls survived on that alone.
 
 The scoping that made it work is kept below, unchanged.
 
+### 6d. `tsdb/index`'s postings algebra — LANDED and PINNED
+
+**68 differential cases, and the first Phase 6 slice pinnable on its own** — `Intersect`, `Merge`,
+`Without`, `ListPostings`, `BigEndianPostings` and the sentinels are all exported upstream, so the oracle
+calls them directly. No container, no "pinned only via X" caveat. `Sources/PromIndex/Postings.swift`, plus
+the loser tree in `GoCompat/GoLoserTree.swift` beside `GoHeap` and `GoSort`, for the same reason those are
+there: the order it produces is observable.
+
+**`MemPostings` is deliberately NOT in this slice.** That is the Head's in-memory index — locking,
+`EnsureOrder`, `Delete`, `Stats` — and it belongs with the Head in Phase 7.
+
+The corpus drives **scripts of iterator operations**, not just expansion, and that is the design decision
+that mattered: `Seek` is idempotent, may not advance, and is called repeatedly with unchanged targets by
+`Intersect`, so the contract lives in interleaved `next`/`seek` sequences. Expanding alone would have
+pinned almost none of quirks 121-125.
+
+`Scripts/controls-postings.sh` has 21 controls; 17 break. Four survive by proof, recorded beside them:
+`Without`'s empty-drop short-circuit, and three that are equivalent-but-slower (`merge.seek` via
+`tree.next` instead of `Fix`, `Without` stepping the drop side instead of seeking, and the tree's
+tie-breaking, which `Merge`'s de-duplication hides).
+
+**The harness itself needed fixing, and the lesson generalises.** A perturbation can make an iterator
+NON-TERMINATING rather than wrong — `intersectPostings.Seek` loops until its target settles, so accepting
+an equal value means it never does. With no timeout that hung the whole sweep for half an hour at
+`=== Intersect ===` and reported nothing. The runner now backgrounds each test with a 120-second budget
+and reports `broke (hung)`; three controls land there. **Every other `controls-*.sh` in this repo has the
+same hole** — worth fixing the next time one is touched.
+
+Two corpus gaps found by controls, both the same shape: the values were too small to distinguish anything.
+`listPostings.Next` resetting `cur` to 0 on exhaustion is observable only through a *backwards* seek
+afterwards, and the loser tree's `maxVal` only matters when a real ref approaches `UInt64.max` — every case
+had refs under 1000, so a `maxVal` of 1000 still dominated them all.
+
+**Next in Phase 6: `tsdb/chunks/chunks.go`** (799 lines, the chunk file format, exported `NewWriter`/
+`NewReader`) or **`tsdb/index/index.go`** (1874, the index file format). Both are file-format work and both
+are pinnable through their exported readers/writers. `MemPostings` waits for the Head.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.

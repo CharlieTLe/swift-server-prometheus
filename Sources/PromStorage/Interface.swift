@@ -81,9 +81,14 @@ public enum Exemplar: Sendable {
 
 /// Go: `SeriesRef` — a `HeadSeriesRef` or `BlockSeriesRef`, or whatever an
 /// out-of-tree implementation uses. 0 means "no reference; do not cache".
-public struct SeriesRef: RawRepresentable, Sendable, Hashable {
+/// `Comparable` because Go's `SeriesRef` is a `uint64` and the postings algebra orders it directly —
+/// `p.At() > target`, `nodes[left].value < nodes[right].value`. Ordering is part of the contract, not a
+/// convenience: `Postings` is documented as "iterative access over an ORDERED list of SeriesRef".
+public struct SeriesRef: RawRepresentable, Sendable, Hashable, Comparable {
     public var rawValue: UInt64
     public init(rawValue: UInt64) { self.rawValue = rawValue }
+
+    public static func < (a: SeriesRef, b: SeriesRef) -> Bool { a.rawValue < b.rawValue }
 }
 
 // MARK: - Queryables
