@@ -1952,6 +1952,41 @@ changing behaviour.
     anchored pattern, and `label_replace`'s own `mergeSeriesWithSameLabelset` is redundant because
     `cleanupMetricLabels` merges every matrix unconditionally one level up.
 
+116. **`(uint64(1) << 64) - 1` is Go's idiom for an all-ones mask, and Swift traps on it.**
+    `bstreamReader.readBitsFast` computes `(1 << nbits) - 1`; with `nbits == 64` the shift yields 0 in
+    both languages, and Go's `0 - 1` wraps to all-ones — which is the mask that was wanted — while
+    Swift's `-` traps on the underflow. The port needs `&- 1`.
+
+    `nbits == 64` is not exotic: `loadNextBuffer`'s fast path sets `valid = 64`, and the XOR decoder's
+    very first read is `readBits(64)` for the raw sample value. **This was the first bug the XOR corpus
+    found, and it could not have been found earlier** — `Bstream.swift` had no caller and no fixture,
+    which is exactly what its own header warned about. The crash was in the DECODER while the encoder
+    wrote 200 samples happily, because encoding never needs a 64-bit mask.
+
+117. **`bitRange` is asymmetric.** `-((1<<(n-1))-1) <= x && x <= 1<<(n-1)` — the upper bound is
+    `1<<(n-1)` and the lower is one *less* in magnitude, so for 14 bits the range is `-8191...8192`.
+    A symmetric two's-complement reading picks a different delta-of-delta bucket at the boundary and
+    writes a different byte string. The decoder's matching asymmetry is `if bits > (1 << (sz-1))`,
+    strictly greater, so the value `1<<(sz-1)` stays positive on the way back.
+
+118. **A recoded chunk's sample count is STORED, not derived.** The two header bytes are a big-endian
+    `uint16` that `Append` rewrites in place after each sample, and `NumSamples`, the iterator's
+    `numTotal` and `Appender`'s empty-chunk test all read those bytes rather than parsing the stream.
+    So an iterator captures the count at creation and never sees samples appended after it.
+
+119. **Getting an `Appender` for a non-empty XOR chunk REPLAYS the whole chunk.** The encoder state —
+    last timestamp, last value, last delta, and the leading/trailing zero window — is not stored
+    anywhere, so `Appender()` iterates to the end and lifts the state off the iterator. The appender is
+    therefore *defined* by the decoder's final state, which is why the two must agree bit for bit.
+
+120. **`bstream`'s copy of the final byte is race avoidance, not value behaviour.** `newBReader` copies
+    `stream[len-1]`, and `loadNextBuffer`'s fast path requires `+8 <` rather than `+8 <=` so it can
+    never touch that byte. Both controls survive even against 23 append-while-reading cases, and the
+    reason is structural: an iterator's `numTotal` is fixed at creation, so it never reads the appended
+    samples, and an append only fills the FREE low bits of the final partial byte. Copy and live byte
+    agree on every bit the reader consumes. What the copy prevents is a data race, which has no defined
+    value to compare against — pinning it needs a concurrent appender and querier, which is Phase 7.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

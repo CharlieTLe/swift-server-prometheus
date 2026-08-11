@@ -1499,9 +1499,9 @@ unported list is EMPTY rather than iterating it.
 
 Remaining phases, from `docs/ROADMAP.md`, none of them started beyond §5e(c)'s chunkenc metadata:
 
-* **6 — TSDB read.** `chunkenc`'s metadata half is merged (§5e(c)); the ENCODER is next, starting at
-  `tsdb/chunkenc/xor.go` on top of the unmerged `wip/phase6-bstream`. `EncXOR2` is what the gate's last
-  23 skips wait on, so it is the piece that closes Phase 5 too.
+* **6 — TSDB read.** `chunkenc`'s metadata half is merged (§5e(c)), and **`bstream.go` + `xor.go` are
+  now ported and PINNED** (§6a below). `EncXOR2` is what the gate's last 23 skips wait on, so it is the
+  next piece and it closes Phase 5 too.
 * **7 — TSDB write.** Head, WAL, compaction.
 * **8 — ingest.** Scrape loop, relabelling, `convertnhcb` on the scrape path (which is where its
   `validate()` call finally earns its keep).
@@ -1510,6 +1510,39 @@ Remaining phases, from `docs/ROADMAP.md`, none of them started beyond §5e(c)'s 
 
 That is roughly 50k lines of Go and it is the bulk of the project; Phase 5 was ~15k. Nothing in 6-10 is
 blocked by Phase 5.
+
+### 6a. `bstream.go` + `xor.go` — LANDED and PINNED, and §5d's problem is solved
+
+**`Bstream.swift` finally has a corpus.** It sat unmerged on `wip/phase6-bstream` for several sessions
+because `bstream`, `bstreamReader` and `newBReader` are unexported, so the oracle could not call them —
+§5d recorded that as an open problem. The answer is the one §5e(c) found for `appendable`: **pin the
+exported behaviour the private code decides.** `NewXORChunk`/`Appender`/`Bytes`/`Iterator` are exported,
+and an appended sample sequence has exactly one correct byte string, so comparing the bytes checks every
+bit the stream wrote and iterating them back checks every bit it reads. 70 cases in
+`Fixtures/chunkenc/xor.jsonl`.
+
+**It found a real bug in `Bstream.swift` immediately** (quirk 116). `readBitsFast` computes
+`(1 << nbits) - 1`; at `nbits == 64` Go's `0 - 1` wraps to the all-ones mask that was wanted and
+Swift's traps. The decoder crashed on the 200-sample case while the encoder had written all 200
+happily, because encoding never needs a 64-bit mask. A file with no caller and no fixture is a file with
+unknown correctness, and this one said so in its own header.
+
+Two more things worth knowing before touching XOR (quirks 117-119): `bitRange` is **asymmetric**
+(`-8191...8192` for 14 bits, with a matching strictly-greater test on the way back), the sample count is
+**stored** in two header bytes rather than derived, and `Appender()` on a non-empty chunk **replays the
+whole chunk** to recover the encoder state — so the appender is defined by the decoder's final state.
+
+`Scripts/controls-xor.sh` has 23 controls over both files; 21 break. The two survivors are `bstream`'s
+copy of the final byte and `loadNextBuffer`'s `+8 <` boundary, and 23 append-while-reading cases were
+added specifically to kill them and did not. That is the finding rather than a gap: an iterator's
+`numTotal` is fixed at creation so it never reads the appended samples, and an append only fills the
+free low bits of the final partial byte — so copy and live byte agree on every bit the reader consumes.
+The copy prevents a **data race**, which has no defined value to compare against. Pinning it needs a
+concurrent appender and querier, which is Phase 7's Head (quirk 120).
+
+**Next: `EncXOR2`** — the start-timestamp-aware encoding, whose control-prefix readers were deliberately
+left out of `Bstream.swift` because they are XOR2's grammar rather than the stream's. It is what the
+exit gate's last 23 skips wait on.
 
 * ~~`histogram_quantile`'s monotonicity info does not fire~~ — **FIXED, and it was the RUNNER.** The
   info fired all along, with text matching to the character. The line scanner split on the first `#`
