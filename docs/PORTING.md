@@ -2328,6 +2328,41 @@ changing behaviour.
     deliberate no-op that MUST survive, so a sweep where everything breaks is distinguishable from a broken
     build. The defence for this case is to diff the file after patching when a survivor is unexpected.
 
+164. **`DeletedIterator` CONSUMES its interval list as it advances — the list is a cursor, not a filter.**
+    Both `Next` and `Seek` do `it.Intervals = it.Intervals[1:]` once the current timestamp has passed an
+    interval. Three consequences, none suggested by the name:
+
+    1. **Iterating twice gives different answers.** After a full pass the list is empty, so a second pass
+       deletes nothing. Upstream relies on this never happening — each iterator is reset before reuse, and
+       `populateWithDelGenericSeriesIterator.next` rebuilds `bufIter.Intervals` from scratch per chunk.
+    2. **Seeking backwards is unsupported**, not merely slow: the dropped intervals are gone, so a sample the
+       first pass deleted can come back.
+    3. It is correct only because the intervals are sorted and non-overlapping (quirk 162's invariant). Handed
+       an unsorted list it silently under-deletes, which the corpus records rather than avoids.
+
+    So a filter-style port passes a single pass and fails a second. `block/deletediter.jsonl` records, per
+    case, a scripted sequence of `Next`/`Seek`, the interval list that survived it, a second pass on the same
+    iterator, and a fresh iterator drained fully — the last two together say which property broke.
+
+    `Next`'s second test is `ts <= tr.Maxt`, reached only when `InBounds` was false. `Seek` checks the wrapped
+    iterator's error FIRST and `Next` does not; that asymmetry is reproduced.
+
+165. **Finding a distinguishing input sometimes needs reasoning, not more random cases.** The complement to
+    quirk 159's brute-force search, from the same sweep.
+
+    Changing `ts <= tr.Maxt` to `ts < tr.Maxt` in `DeletedIterator.Next` survived the whole corpus. The two
+    differ only at `ts == tr.Maxt`, which — since the test is reached only when `InBounds` failed — forces
+    `ts < tr.Mint`, i.e. an **inverted** interval whose `Maxt` lands exactly on a sample. Adding inverted
+    intervals was still not enough: both spellings keep the sample, one by returning and one by falling out of
+    the loop. The distinguishing shape is an inverted interval whose `Maxt` is on a sample **followed by** an
+    interval containing that sample:
+
+        t=30, intervals [{50,30}, {25,35}]
+          `<=` keeps 30;  `<` drops {50,30}, then {25,35} deletes 30
+
+    Random generation would not have found that; deriving the condition under which the two predicates differ,
+    and then constructing it, did. Use whichever the shape of the perturbation calls for.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
