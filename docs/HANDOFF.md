@@ -1553,6 +1553,8 @@ are unexported, so both are pinnable only through the same seam §6a used —
 `float_histogram.go` need, so porting it here pays for the histogram chunks later.
 
 Order: `varbit.go` first (it has no dependencies beyond `Bstream`), then `xor2.go` on top.
+**`varbit.go` is now ported** — `Sources/PromChunkEnc/Varbit.swift`. Its verification status is honest
+and partial, and §6c below says exactly what is and is not established.
 
 #### The grammar, copied from the source comment so it is not re-derived
 
@@ -1620,6 +1622,29 @@ read back, and the append-while-reading behaviour. Add on top of that:
 `varbit.go` gets its own corpus through the same chunk seam: its buckets are exercised by ST deltas, so
 a case per bucket edge (`val == 0`, then `bitRange(val, 3)`, and each widening branch) belongs in the
 XOR2 corpus rather than in a separate one, since that is the only way to reach it.
+
+#### 6c. `varbit.go`'s verification status, stated rather than implied
+
+`Varbit.swift` is ported and **self-consistent, not yet differential**. All five functions are
+unexported upstream, so the oracle cannot call them; they get pinned against Go through the first chunk
+encoding that uses them, which is XOR2. `VarbitTests` is what can honestly be checked meanwhile, and it
+is three different things with three different strengths:
+
+1. **round-trip** over every bucket edge for both predicates — catches an encoder/decoder disagreement,
+   says nothing about matching Go;
+2. **`putVarbitInt` versus `putVarbitIntFast`**, bit for bit. This one has teeth: they are two
+   independent implementations of one encoding, and the fast path folds prefix and payload into a single
+   masked write, so a wrong mask or width shows up with no Go involved;
+3. **encoded bit-LENGTH per bucket**, asserted against the widths Go's own case labels document (1, 5,
+   9, 13, 17, 24, 32, 64, 72). A bucket edge off by one moves a value to the neighbouring bucket and
+   changes its length, so this catches the signed/unsigned predicate confusion — `bitRange` is
+   asymmetric (`-3...4` for the 3-bit bucket) where `bitRangeUint` is a plain fit (`0...7`). Sharing one
+   predicate between them is wrong at every edge.
+
+**What none of it catches** is a systematically wrong bucket table: if every prefix were a bit too long,
+all three checks still pass. Only the XOR2 corpus can catch that, which is why §6b's plan calls for a
+case per bucket edge. §6a is the precedent for taking this seriously — `Bstream.swift` was "transcribed
+and reviewed line by line" and had a crashing bug the moment a corpus reached it.
 
 #### What §6a already proved that applies here
 
