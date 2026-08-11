@@ -106,6 +106,7 @@ var suites = map[string]func(*emitter){
 	"chunkenc/valuetype":        genChunkEncValueType,
 	"chunkenc/compatible":       genChunkEncCompatible,
 	"chunkenc/xor":              genChunkEncXOR,
+	"chunkenc/xor2":             genChunkEncXOR2,
 	"gocompat/time-rfc3339":     genGoTimeRFC3339,
 	"gocompat/time-unixmilli":   genGoTimeUnixMilli,
 	"storage/buffer":            genStorageBuffer,

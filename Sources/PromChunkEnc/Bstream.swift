@@ -316,3 +316,128 @@ public struct BstreamReader: Sendable {
         return true
     }
 }
+
+// MARK: - XOR2's grammar
+//
+// The file header said these were left out because they are XOR2's grammar rather than the stream's.
+// XOR2 has arrived, so here they are — and the header's judgement holds: nothing else reads a
+// variable-length joint control prefix, and putting them here rather than in `XOR2Chunk.swift` is only
+// because they need `buffer`/`valid` directly, the way upstream's do.
+
+extension Bstream {
+    /// `xor2Appender.Appender()` restores the write position from the READER's unread-bit count:
+    /// `c.b.count = it.br.valid`.
+    ///
+    /// Two quantities with the same units and different meanings — `count` is free bits in the last
+    /// byte, `valid` is unread bits in the reader's buffer — and XOR2 relies on their coinciding at
+    /// end-of-stream. XOR's appender needs no such line because its writes are always bit-aligned from
+    /// a known state; XOR2's fused writes are not. Named rather than exposing `count`'s setter, for the
+    /// reason `putBigEndianUInt16(at:)` is named.
+    public mutating func restoreBitPosition(_ valid: UInt8) {
+        count = valid
+    }
+
+    /// Go writes into the header through the slice `bytes()` returns: `b[0] = 0x80`.
+    mutating func setByte(at i: Int, _ v: UInt8) {
+        stream[i] = v
+    }
+
+    /// Go: `b[0] |= uint8(...)`.
+    mutating func orByte(at i: Int, _ v: UInt8) {
+        stream[i] |= v
+    }
+}
+
+extension BstreamReader {
+    /// Go: `readXOR2ControlFast` — the four-bit lookahead, returning `nil` where Go returns `ok=false`.
+    ///
+    /// Deliberately gives up on `1111`: distinguishing cases 4 and 5 needs a fifth bit, and this
+    /// function only promises to be fast. The caller falls back to `readXOR2Control`.
+    mutating func readXOR2ControlFast() -> UInt8? {
+        if valid < 4 {
+            return nil
+        }
+        let top4 = UInt8((buffer >> (UInt64(valid) - 4)) & 0xF)
+        if top4 < 8 {  // `0xxx`: dod=0, value unchanged.
+            valid -= 1
+            return 0
+        }
+        if top4 < 12 {  // `10xx`: dod=0, value changed.
+            valid -= 2
+            return 1
+        }
+        if top4 < 14 {  // `110x`: 13-bit dod.
+            valid -= 3
+            return 2
+        }
+        if top4 == 14 {  // `1110`: 20-bit dod.
+            valid -= 4
+            return 3
+        }
+        return nil
+    }
+
+    /// Go: `readXOR2Control` — the joint control prefix, mapped to 0...5.
+    ///
+    /// ```
+    /// 0 -> `0`      dod=0, value unchanged      (1 bit)
+    /// 1 -> `10`     dod=0, value changed        (2 bits)
+    /// 2 -> `110`    13-bit signed dod           (3 bits)
+    /// 3 -> `1110`   20-bit signed dod           (4 bits)
+    /// 4 -> `11110`  64-bit dod escape           (5 bits)
+    /// 5 -> `11111`  dod=0, stale NaN            (5 bits)
+    /// ```
+    ///
+    /// Three paths, and the middle one is the subtle one: with four bits buffered but not five, the
+    /// prefix is `1111` and the deciding fifth bit straddles the buffer. Go consumes the four known
+    /// bits and then calls `readBit`, which refills — so the straddle is handled by *splitting the
+    /// read*, not by refusing it.
+    mutating func readXOR2Control() throws -> UInt8 {
+        if valid >= 4 {
+            let top4 = UInt8((buffer >> (UInt64(valid) - 4)) & 0xF)
+            if top4 < 8 {
+                valid -= 1
+                return 0
+            }
+            if top4 < 12 {
+                valid -= 2
+                return 1
+            }
+            if top4 < 14 {
+                valid -= 3
+                return 2
+            }
+            if top4 == 14 {
+                valid -= 4
+                return 3
+            }
+            // `1111`: the fifth bit decides between 4 and 5.
+            if valid >= 5 {
+                let bit4 = UInt8((buffer >> (UInt64(valid) - 5)) & 1)
+                valid -= 5
+                return 4 + bit4
+            }
+            valid -= 4
+            return try readBit() ? 5 : 4
+        }
+
+        // Fewer than four bits buffered: one at a time, each refilling as needed.
+        if try !readBit() { return 0 }
+        if try !readBit() { return 1 }
+        if try !readBit() { return 2 }
+        if try !readBit() { return 3 }
+        return try readBit() ? 5 : 4
+    }
+
+    /// Go: `bstreamReader.readUvarint` — a method rather than `binary.ReadUvarint`, whose
+    /// `io.ByteReader` dispatch made the receiver escape to the heap. Same encoding, so the port shares
+    /// `readUvarintFromBstream`.
+    mutating func readUvarint() throws -> UInt64 {
+        try readUvarintFromBstream(&self)
+    }
+
+    /// Go: `bstreamReader.readVarint`.
+    mutating func readVarint() throws -> Int64 {
+        try readVarintFromBstream(&self)
+    }
+}

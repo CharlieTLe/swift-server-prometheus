@@ -1540,7 +1540,32 @@ free low bits of the final partial byte — so copy and live byte agree on every
 The copy prevents a **data race**, which has no defined value to compare against. Pinning it needs a
 concurrent appender and querier, which is Phase 7's Head (quirk 120).
 
-### 6b. `EncXOR2`, scoped from the pinned source
+### 6b. `EncXOR2` — LANDED and PINNED
+
+**183 differential cases, all matching byte for byte on the first run**, which is what the scoping below
+bought: reading `Append`'s three fast paths and the ST header before writing anything meant no debug
+cycles on a 991-line encoder with fused bit writes. `Sources/PromChunkEnc/XOR2Chunk.swift`, plus the XOR2
+control-prefix readers that `Bstream.swift` deliberately deferred, plus `varbit.go` from §6c — **which
+this corpus finally pins**, since ST deltas are its only route to one.
+
+`Scripts/controls-xor2.sh` has 30 controls; 25 break. All five survivors have proofs recorded next to
+them: the `0x7F` header guard is unreachable because `Append` forces the write at index 127 (and the
+control for that forcing *does* break), `readSTHeader`'s `0x80` fast path returns what the general path
+returns, `readDod`'s `w < 64` guard is a no-op because `1 << 64` is 0 in both languages,
+set-versus-accumulate on the first ST delta is identical because `stDiff` is 0 there, and
+`readXOR2ControlFast` only ever declines more often than it must.
+
+**Two rounds of corpus gaps, both instructive.** First, the active-ST fast path needs ST to change at
+sample **1** specifically — a change later goes through the slow path first, and every early case did
+that. Second, and the better lesson: even with ST changing at sample 1, the fused ST buckets stayed
+unreached because my cases stepped `st` by a constant while `t` stepped by 1000, so
+`newStDiff = prevT - st` moved by ~1000 every sample and `deltaStDiff` never landed in an inlined bucket.
+**The buckets need `st` to TRACK `t`** — `st = t - k` makes `deltaStDiff` exactly zero, and drifting `k`
+puts it in the small buckets. Three controls survived on that alone.
+
+The scoping that made it work is kept below, unchanged.
+
+### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.
 **This is the slice that closes Phase 5's last 23 skips**, since `@st` lines in the `.test` files need
