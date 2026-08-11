@@ -1087,6 +1087,112 @@ func genPromQLExec(e *emitter) {
 		}
 	}
 
+	// --- SUBQUERIES. `foo[5m:1m]` is `foo` sampled on the subquery's OWN step grid and handed
+	// back as a range vector, so the alignment arithmetic is the whole subject.
+	//
+	// The grid is snapped UP — `subqInterval * (target / subqInterval)` then `+= subqInterval`
+	// when it landed at or below the target — which makes the window half-open at the bottom,
+	// matching a range selector. The parent's end is snapped DOWN to the parent's own step grid
+	// first, so a subquery cannot run past the last step that could read it.
+	sqSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "sq", "job", "a"},
+			[2]int64{0, 1}, [2]int64{30_000, 2}, [2]int64{60_000, 4}, [2]int64{90_000, 8},
+			[2]int64{120_000, 16}, [2]int64{150_000, 32}, [2]int64{180_000, 64}),
+		fs([]string{"__name__", "sq", "job", "b"},
+			[2]int64{0, 100}, [2]int64{60_000, 200}, [2]int64{120_000, 300}),
+	}
+	// Samples OFF the grid, so the snap-up boundary is not sitting on a real sample.
+	sqOff := []memSeriesInJSON{
+		fs([]string{"__name__", "sqo"},
+			[2]int64{7_000, 1}, [2]int64{43_000, 3}, [2]int64{79_000, 7}, [2]int64{131_000, 15}),
+	}
+
+	sqCases := []struct {
+		query  string
+		series []memSeriesInJSON
+		ts     int64
+	}{
+		// A bare subquery, at several resolutions. The step decides how many points come back and
+		// the snap-up decides where the first one is.
+		{`sq[2m:1m]`, sqSeries, 180_000},
+		{`sq[2m:30s]`, sqSeries, 180_000},
+		{`sq[2m:10s]`, sqSeries, 180_000},
+		{`sq[1m:1m]`, sqSeries, 180_000},
+		{`sq[3m:1m]`, sqSeries, 180_000},
+		{`sq[2m:1m]`, sqSeries, 120_000},
+		{`sq[2m:1m]`, sqSeries, 90_000},
+		// A step the range does not divide, so the snap-up lands mid-window.
+		{`sq[2m:45s]`, sqSeries, 180_000},
+		{`sq[100s:35s]`, sqSeries, 180_000},
+		// No step at all: `noStepSubqueryIntervalFn` supplies one — a minute, here.
+		{`sq[5m:]`, sqSeries, 180_000},
+		{`sq[2m:]`, sqSeries, 180_000},
+		// Off-grid samples, where the boundary is not a real sample.
+		{`sqo[2m:1m]`, sqOff, 131_000},
+		{`sqo[2m:30s]`, sqOff, 131_000},
+		{`sqo[2m:1m]`, sqOff, 120_000},
+		// `offset` on the subquery, which shifts both ends of its grid.
+		{`sq[2m:1m] offset 1m`, sqSeries, 180_000},
+		{`sq[2m:1m] offset -1m`, sqSeries, 120_000},
+		// `@` on the subquery, which pins the grid — and the synthetic selector's `Offset` has to
+		// be recomputed for it, or the outer read lands on the wrong window.
+		{`sq[2m:1m] @ 120`, sqSeries, 1_000_000},
+		{`sq[2m:1m] @ 60`, sqSeries, 0},
+		{`rate(sq[2m:1m] @ 120)`, sqSeries, 1_000_000},
+		// `@` on the INNER selector, which `setOffsetForAtModifier` has to re-rewrite against the
+		// subquery's own start.
+		{`sq @ 60 [2m:1m]`, sqSeries, 180_000},
+		{`rate(sq @ 60 [2m:1m])`, sqSeries, 180_000},
+		// A function over a subquery, which is the `Call` arm's AST replacement — and the
+		// rewritten statement renders as a NAMELESS range selector.
+		{`rate(sq[2m:1m])`, sqSeries, 180_000},
+		{`increase(sq[2m:1m])`, sqSeries, 180_000},
+		{`max_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`min_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`avg_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`count_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`sum_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`last_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`quantile_over_time(0.5, sq[2m:1m])`, sqSeries, 180_000},
+		{`absent_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		{`absent_over_time(nothing[2m:1m])`, sqSeries, 180_000},
+		{`resets(sq[2m:1m])`, sqSeries, 180_000},
+		{`changes(sq[2m:1m])`, sqSeries, 180_000},
+		{`deriv(sq[2m:1m])`, sqSeries, 180_000},
+		{`predict_linear(sq[2m:1m], 60)`, sqSeries, 180_000},
+		// A subquery over an AGGREGATION and over a binop, which is the shape that needs the
+		// inner expression to be more than a selector.
+		{`sum_over_time(sum(sq)[2m:1m])`, sqSeries, 180_000},
+		{`max_over_time(sum by (job) (sq)[2m:1m])`, sqSeries, 180_000},
+		{`sum(sq)[2m:1m]`, sqSeries, 180_000},
+		{`sum_over_time((sq + sq)[2m:1m])`, sqSeries, 180_000},
+		{`max_over_time(rate(sq[1m])[2m:1m])`, sqSeries, 180_000},
+		{`avg_over_time(topk(1, sq)[2m:1m])`, sqSeries, 180_000},
+		// A NESTED subquery, where the inner one's grid is derived from the outer one's.
+		{`max_over_time(max_over_time(sq[1m:30s])[2m:1m])`, sqSeries, 180_000},
+		{`sum_over_time(sum_over_time(sq[1m:30s])[2m:1m])`, sqSeries, 180_000},
+		// An aggregation over a subquery, and a binop.
+		{`sum(rate(sq[2m:1m]))`, sqSeries, 180_000},
+		{`rate(sq[2m:1m]) + rate(sq[2m:1m])`, sqSeries, 180_000},
+		{`topk(1, rate(sq[2m:1m]))`, sqSeries, 180_000},
+	}
+	for _, c := range sqCases {
+		emit(execIn{
+			Query: c.query, Ts: i64(c.ts), Lookback: i64(int64(5 * time.Minute)),
+			Series: c.series,
+		})
+	}
+	// The sample limit against a subquery, where the child's samples are counted and then
+	// RELEASED when the outer call returns — so the peak is the child plus the outer result.
+	for _, maxSamples := range []int{1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20} {
+		for _, q := range []string{`sq[2m:1m]`, `rate(sq[2m:1m])`, `sum(rate(sq[2m:1m]))`} {
+			emit(execIn{
+				Query: q, Ts: i64(180_000), Lookback: i64(int64(5 * time.Minute)),
+				MaxSamples: maxSamples, Series: sqSeries,
+			})
+		}
+	}
+
 	// A query that fails to build still comes back through Exec's Result, not as a panic.
 	for _, q := range []string{`1 +`, `foo[`, `sum(`} {
 		emit(execIn{Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute))})

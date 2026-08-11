@@ -1746,6 +1746,39 @@ changing behaviour.
     Exception 7's trap in a second disguise: **a sort only rescues a nondeterministic order when
     the sort key is unambiguous.**
 
+97. **A subquery's grid is snapped UP and its parent's end is snapped DOWN, and only the first is
+    semantic.** `subqStart = subqInterval * ((start - offset - range) / subqInterval)`, then
+    `+= subqInterval` if that landed at or **below** the target — integer division truncates toward
+    zero, so the multiply lands at or below and the `<=` bumps it to the first grid point *strictly
+    after*. That is what makes the subquery's window half-open at the bottom, matching a range
+    selector's `(mint, maxt]`, and `<` instead of `<=` admits a sample exactly on the boundary.
+
+    `parentEnd = start + ((end - start) / interval) * interval` snaps the parent's end down to its
+    own step grid before the subquery offset is applied. Upstream frames this as correctness — "so
+    the subquery does not evaluate past the parent's last actual evaluation point" — and it is
+    provably an **optimisation**: the largest `maxt` any outer window can ask for is
+    `lastStep - offset`, the last step *is* `parentEnd`, so the points the un-snapped version adds
+    lie beyond every window. Its negative control survives, and that is the reason.
+
+    `setOffsetForAtModifier` runs **again** against the subquery's start, because the `@` rewrite is
+    measured from the evaluator's start time (quirk 76) and the subquery has a different one.
+    Dropping the call breaks; the `subqStart != ev.startTimestamp` guard around it does not,
+    because the rewrite recomputes `Offset` from `originalOffset` and is idempotent at a fixed
+    start.
+
+98. **A subquery's counter reset hints are DELIBERATELY erased, and the reasoning is upstream's.**
+    Every `NotCounterReset` and `CounterReset` in the materialised matrix becomes
+    `UnknownCounterReset`. A subquery may skip the sample where a reset happened, or return it
+    several times at a high resolution, so an explicit hint is more likely to be wrong than absent.
+    Upstream's twelve-line comment says it "intentionally does not attempt to be clever", and a
+    port that preserved the hints would give `rate` over a subquery a claim the underlying data
+    does not support.
+
+    `evalSubquery` then hands the caller a synthetic `MatrixSelector` over `StorageSeries` with
+    **no name and no matchers**, and the `Call` arm writes it back over the `SubqueryExpr` in the
+    AST — so `Statement()` after `Exec` renders a subquery argument as a nameless range selector,
+    `rate([5m])` rather than `rate(foo[5m:1m])`. Upstream's, and pinned rather than tidied.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
