@@ -8,6 +8,7 @@
     "chunkenc/encoding.jsonl": { "sha256": "c97b97d5bbde77bcd681bdf3cbdd4ec7724dca35476379ee71b3d458147462d6", "lines": 10 },
     "chunkenc/valuetype.jsonl": { "sha256": "cc70b980e039bfbfaf8ef7a132673d7418d388b5556833360c25fe60bc1afddb", "lines": 7 },
     "chunkenc/xor.jsonl": { "sha256": "023e77d4eab1330254c4d03b8f7c608b4a5e015042e21fdab1fda4b5ba47b83b", "lines": 70 },
+    "chunkenc/xor2.jsonl": { "sha256": "bb08795b0c941b6d0f3ff727461284a36ab7fe63a1295f264fec9d7c8caf6736", "lines": 183 },
     "encoding/encbuf.jsonl": { "sha256": "37644158026ca51cc85e7c53d6f0292fe8f536af5a68df957301cb7372c66dfb", "lines": 2000 },
     "gocompat/acos.jsonl": { "sha256": "99b39c3b35499eca2908c6e146af08ca42799df32d83395497eee53b13b9c81a", "lines": 5861 },
     "gocompat/acosh.jsonl": { "sha256": "cc488189f0b675fb74494b40ef3a0c0e4d7ae00c3d312fd621dd2348ab15df3a", "lines": 10204 },
