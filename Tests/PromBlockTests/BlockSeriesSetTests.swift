@@ -54,6 +54,8 @@ struct SeriesSetOut: Decodable, Equatable, Sendable {
     var chunkRanges: [[[[Int64]]]]
     /// Per query, per series: the sample timestamps the flat sample iterator yielded.
     var sampleTimes: [[[Int64]]]
+    /// Per query, per series: the result of a fixed SEEK script over the flat sample iterator.
+    var seekTimes: [[[Int64]]]
     var errs: [String]
     var openErr: String
 }
@@ -152,7 +154,8 @@ struct BlockSeriesSetTests {
         try Fixtures.check("block/seriesset.jsonl", FixtureCase<SeriesSetIn, SeriesSetOut>.self) {
             input in
             var out = SeriesSetOut(
-                labelSets: [], chunkRanges: [], sampleTimes: [], errs: [], openErr: "")
+                labelSets: [], chunkRanges: [], sampleTimes: [], seekTimes: [], errs: [],
+                openErr: "")
             let ix = try SeriesSetFileIndex(unhexSS(input.indexHex))
             // The chunk segments, in the sorted order that defines the reference index space (quirk 142).
             let source = try SegmentChunkSource(segmentHexes: input.segHexes ?? [])
@@ -174,6 +177,7 @@ struct BlockSeriesSetTests {
                     var sets: [String] = []
                     var ranges: [[[Int64]]] = []
                     var times: [[Int64]] = []
+                    var seeks: [[Int64]] = []
                     while ss.next() {
                         guard let cur = ss.current else { continue }
                         sets.append(
@@ -207,15 +211,39 @@ struct BlockSeriesSetTests {
                         var ts: [Int64] = []
                         while flat.next() != .none { ts.append(flat.atT()) }
                         times.append(ts)
+
+                        // The SEEK script, on a fresh iterator — the one above is exhausted. Fixed rather
+                        // than input-driven, matching the oracle: next, then seeks landing before, inside
+                        // and after the current position, each followed by a next.
+                        let sk = PopulateWithDelSeriesIterator(
+                            blockID: "", source: source, metas: cur.chunks,
+                            intervals: cur.intervals)
+                        var res: [Int64] = []
+                        let mid = q.mint + (q.maxt - q.mint) / 2
+                        func record(_ vt: ValueType) {
+                            res.append(vt == .none ? -(1 << 62) : sk.atT())
+                        }
+                        record(sk.next())
+                        record(sk.seek(q.mint))
+                        record(sk.next())
+                        record(sk.seek(mid))
+                        record(sk.next())
+                        record(sk.seek(q.maxt))
+                        record(sk.next())
+                        record(sk.seek(q.maxt + 1))
+                        record(sk.next())
+                        seeks.append(res)
                     }
                     out.labelSets.append(sets)
                     out.chunkRanges.append(ranges)
                     out.sampleTimes.append(times)
+                    out.seekTimes.append(seeks)
                     out.errs.append(ss.err().map { String(describing: $0) } ?? "")
                 } catch {
                     out.labelSets.append([])
                     out.chunkRanges.append([])
                     out.sampleTimes.append([])
+                    out.seekTimes.append([])
                     out.errs.append(String(describing: error))
                 }
             }

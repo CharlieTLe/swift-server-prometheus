@@ -79,8 +79,14 @@ type seriesSetOut struct {
 	// Per query, per series: the SAMPLE timestamps a flat sample iterator yielded — the other half, and what
 	// says the trimming intervals are applied to samples rather than only recorded.
 	SampleTimes [][][]int64 `json:"sampleTimes"`
-	Errs        []string    `json:"errs"`
-	OpenErr     string      `json:"openErr"`
+	// Per query, per series: the result of a SEEK script over the flat sample iterator, as timestamps (or
+	// the exhaustion sentinel). A fixed script derived from the query's own range rather than a per-query
+	// input, because what has to be exercised is structural — resume-before-advance, a seek landing inside
+	// the current chunk, one landing in a LATER chunk, and one past the end — and those are all reachable
+	// from `mint`/`maxt` without new plumbing. `block/deletediter.jsonl` carries the free-form op scripts.
+	SeekTimes [][][]int64 `json:"seekTimes"`
+	Errs      []string    `json:"errs"`
+	OpenErr   string      `json:"openErr"`
 }
 
 func genBlockSeriesSet(e *emitter) {
@@ -133,6 +139,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.LabelSets = append(out.LabelSets, []string{})
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
+				out.SeekTimes = append(out.SeekTimes, [][]int64{})
 				out.Errs = append(out.Errs, ierr.Error())
 				continue
 			}
@@ -142,6 +149,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.LabelSets = append(out.LabelSets, []string{})
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
+				out.SeekTimes = append(out.SeekTimes, [][]int64{})
 				out.Errs = append(out.Errs, cerr.Error())
 				continue
 			}
@@ -152,6 +160,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.LabelSets = append(out.LabelSets, []string{})
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
+				out.SeekTimes = append(out.SeekTimes, [][]int64{})
 				out.Errs = append(out.Errs, terr.Error())
 				continue
 			}
@@ -187,6 +196,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.LabelSets = append(out.LabelSets, []string{})
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
+				out.SeekTimes = append(out.SeekTimes, [][]int64{})
 				out.Errs = append(out.Errs, bad)
 			}
 			ir.Close()
@@ -366,6 +376,7 @@ func runSeriesSet(
 	// `SelectHints` is what carries `DisableTrimming` through the exported API, so this reaches the same
 	// switch the chunk set above does. `Func` is left empty: "series" would substitute a nop chunk reader.
 	times := [][]int64{}
+	seeks := [][]int64{}
 	if bq, qerr := tsdb.NewBlockQuerier(b, q.Mint, q.Maxt); qerr == nil {
 		ms := selectMatchers(q)
 		hints := &storage.SelectHints{
@@ -383,7 +394,42 @@ func runSeriesSet(
 		}
 		bq.Close()
 	}
+	// The SEEK script, on a fresh querier because the set above is exhausted.
+	if bq, qerr := tsdb.NewBlockQuerier(b, q.Mint, q.Maxt); qerr == nil {
+		ms := selectMatchers(q)
+		hints := &storage.SelectHints{
+			Start: q.Mint, End: q.Maxt, DisableTrimming: q.DisableTrimming,
+		}
+		sset := bq.Select(context.Background(), false, hints, ms...)
+		mid := q.Mint + (q.Maxt-q.Mint)/2
+		for sset.Next() {
+			s := sset.At()
+			it := s.Iterator(nil)
+			res := []int64{}
+			// next, then seeks that land before / inside / after the current position, then a next after
+			// each — so resume-before-advance and cross-chunk seeking are both reached.
+			record := func(vt chunkenc.ValueType) {
+				if vt == chunkenc.ValNone {
+					res = append(res, -1<<62)
+				} else {
+					res = append(res, it.AtT())
+				}
+			}
+			record(it.Next())
+			record(it.Seek(q.Mint))
+			record(it.Next())
+			record(it.Seek(mid))
+			record(it.Next())
+			record(it.Seek(q.Maxt))
+			record(it.Next())
+			record(it.Seek(q.Maxt + 1))
+			record(it.Next())
+			seeks = append(seeks, res)
+		}
+		bq.Close()
+	}
 	out.SampleTimes = append(out.SampleTimes, times)
+	out.SeekTimes = append(out.SeekTimes, seeks)
 	if ss.Err() != nil {
 		out.Errs = append(out.Errs, ss.Err().Error())
 	} else {
