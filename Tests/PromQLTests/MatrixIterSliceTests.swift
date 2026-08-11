@@ -269,6 +269,31 @@ struct MatrixIterSliceTests {
         #expect(
             parsed.values.first?.histogram?.counterResetHint == .counterReset,
             "parseSeriesDesc must carry counter_reset_hint — String() cannot see it, so no fixture does")
+
+        // The step HANDOFF §5e localises the collision finding to: the hints on `+`/`x`-EXPANDED
+        // histogram samples. This is the FINDING, and it is asserted as the current behaviour with
+        // the bug named, because a test that fails cannot land:
+        //
+        // every expanded sample comes back `unknownCounterReset`, and Go's do not. Go's
+        // `histogramsSeries` builds each step with `combine(cur.Copy(), inc)` — which for `+` is
+        // `FloatHistogram.Add`, and **`Add` calls `adjustCounterReset`**, so upstream's hints are
+        // *derived by the arithmetic* rather than parsed. The port's expansion does not go through
+        // `add`, or discards what it sets.
+        //
+        // That is the whole of the exit gate's remaining collision-warning failure, and the fix is
+        // in `Parser`'s histogram expansion, not in `Functions+OverTime.swift`. When it lands,
+        // change this expectation to the derived hints and the gate's ratchet drops by 2.
+        let expanded = try Parser(options: Options()).parseSeriesDesc(
+            "mixed {{schema:0 count:5 sum:6 buckets:[2 2 1]}}"
+                + "+{{schema:0 count:3 sum:2 buckets:[1 1 1]}}x2"
+                + " {{schema:0 count:4 sum:4 buckets:[1 2 1]}}")
+        let hints = expanded.values.map { $0.histogram?.counterResetHint }
+        #expect(
+            hints == [
+                .unknownCounterReset, .unknownCounterReset, .unknownCounterReset,
+                .unknownCounterReset,
+            ],
+            "expansion hints: \(hints.map { $0.map(String.init(describing:)) ?? "nil" })")
     }
 
     @Test("the sample limit is enforced per point, as the points are appended")

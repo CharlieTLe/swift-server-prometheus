@@ -1245,10 +1245,20 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   remaining suspect**, and `counterResetHintCarriage` only pinned an *explicit* literal's hint. A
   wider window happens to include a differently-hinted sample and passes by luck.
 
-  First step, and it is small: extend `counterResetHintCarriage` to parse
-  `mixed {{count:5 …}}+{{count:3 …}}x2 {{count:4 …}}` and assert the hint on each expanded sample
-  against Go. Four hypotheses now: three refuted with tests left behind, one localised to a single
-  parser behaviour.
+  **FOUND, and the mechanism is the interesting part.** Every `+`/`x`-expanded sample comes back
+  `unknownCounterReset` in the port, and Go's do not — because Go's `histogramsSeries` builds each
+  step with `combine(cur.Copy(), inc)`, which for `+` is `FloatHistogram.Add`, and **`Add` calls
+  `adjustCounterReset`**. Upstream's hints on an expanded series are *derived by the arithmetic*,
+  not parsed. The port's expansion either does not go through `add` or discards what it sets.
+
+  So the fix is in **`Parser`'s histogram expansion**, not in `Functions+OverTime.swift` where the
+  symptom appeared — and `MatrixIterSliceTests.counterResetHintCarriage` now asserts the current
+  (wrong) hints with the bug named, so the next session has a failing-in-spirit test to invert.
+  When it lands the gate's ratchet drops by 2.
+
+  Four hypotheses: three refuted with permanent tests left behind, the fourth confirmed and its
+  mechanism traced to one line of Go. **The symptom was three layers away from the cause**, which is
+  the reason for testing each layer rather than reading the one that failed.
 
   The lesson worth keeping regardless: **the two refuted hypotheses left two permanent tests
   behind.** Neither link had ever been pinned, both were plausible, and finding out cost less than
