@@ -2059,6 +2059,28 @@ changing behaviour.
     binary-searching it with Swift's collation searches a differently-ordered array. `Fixtures/index/
     reader.jsonl` includes symbols where the two orders disagree.
 
+131. **A series record's chunk metas are DOUBLE-DELTA encoded and the first one is framed differently.**
+    The first stores `mint` as a signed varint, `maxt` as an unsigned delta from it, and the reference as
+    an unsigned varint. Every later one stores `mint` as an unsigned delta from the **previous chunk's
+    `maxt`**, `maxt` as an unsigned delta from its own `mint`, and the reference as a **signed** delta.
+    Reading the first with the general framing, or the general ones with the first's, decodes
+    plausible-looking nonsense rather than failing.
+
+132. **The reference delta is signed, but the writer will not produce a decrease.** `Decoder.Series`
+    decodes it with `Varint64`, so a backwards reference is representable — and `Writer.AddSeries` rejects
+    one outright with `unsorted chunk reference: %d, previous: %d`. So the signed delta is defensive: no
+    file upstream writes exercises it, and a corpus case trying to was unwritable. Worth knowing before
+    "simplifying" it to unsigned.
+
+    Two more writer constraints the same experiment surfaced: chunk time ranges must satisfy
+    `mint > prev.maxt` **strictly** (`chunk minT 100 is not higher than previous chunk maxT 100`), and
+    chunk references must increase **globally across series**, not merely within one — they are byte
+    offsets into chunk segments.
+
+133. **In format v2 a series ID is the byte position divided by 16.** Records are padded to
+    `seriesByteAlign`, so `Reader.Series` multiplies the ID back up; in v1 the ID *is* the position. The
+    same split as quirk 130, on a different field.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

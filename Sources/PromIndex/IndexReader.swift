@@ -267,3 +267,167 @@ func goStringLess(_ a: String, _ b: String) -> Bool {
 func goStringGreater(_ a: String, _ b: String) -> Bool {
     goStringLess(b, a)
 }
+
+// MARK: - Series records and postings
+
+/// Go: `seriesByteAlign` — in format v2 a series ID is the byte position **divided by 16**.
+let seriesByteAlign = 16
+
+/// Go: `Decoder.Series`' errors, each wrapping the decoder's own.
+public enum SeriesDecodeError: Error, CustomStringConvertible, Equatable, Sendable {
+    case readSeriesLabelOffsets(String)
+    case lookupLabelName(String)
+    case lookupLabelValue(String)
+    case readMetaForChunk(Int, String)
+    /// Go: `fmt.Errorf("read series: %w", err)` — `Reader.Series` wraps whatever `Decoder.Series` returns.
+    case readSeries(String)
+    /// Go: `unexpected postings length, should be %d bytes for %d postings, got %d bytes`.
+    case unexpectedPostingsLength(expectedBytes: Int, postings: Int, gotBytes: Int)
+
+    public var description: String {
+        switch self {
+        case .readSeriesLabelOffsets(let e): return "read series label offsets: \(e)"
+        case .lookupLabelName(let e): return "lookup label name: \(e)"
+        case .lookupLabelValue(let e): return "lookup label value: \(e)"
+        case .readMetaForChunk(let i, let e): return "read meta for chunk \(i): \(e)"
+        case .readSeries(let e): return "read series: \(e)"
+        case .unexpectedPostingsLength(let exp, let n, let got):
+            return
+                "unexpected postings length, should be \(exp) bytes for \(n) postings, got \(got) bytes"
+        }
+    }
+}
+
+/// One decoded series: its labels, and the metadata of its chunks.
+public struct DecodedSeries: Sendable, Equatable {
+    public var labels: [(name: String, value: String)]
+    public var chunks: [DecodedChunkMeta]
+
+    public static func == (a: DecodedSeries, b: DecodedSeries) -> Bool {
+        a.chunks == b.chunks && a.labels.count == b.labels.count
+            && zip(a.labels, b.labels).allSatisfy { $0.name == $1.name && $0.value == $1.value }
+    }
+}
+
+/// Go: the `chunks.Meta` fields a series record carries. Only the reference and the time range are
+/// stored; the data lives in a chunk segment.
+public struct DecodedChunkMeta: Sendable, Equatable {
+    public var ref: UInt64
+    public var minTime: Int64
+    public var maxTime: Int64
+}
+
+/// Go: `Decoder.Series` — the series record's payload.
+///
+/// ## The chunk metas are DOUBLE-DELTA encoded, and the first one is framed differently
+///
+/// The first chunk stores `mint` as a signed varint, `maxt` as an unsigned delta from it, and the
+/// reference as an unsigned varint. Every chunk after that stores `mint` as an unsigned delta from the
+/// PREVIOUS chunk's `maxt`, `maxt` as an unsigned delta from its own `mint`, and the reference as a
+/// **signed** delta — references can move backwards between chunks because a later chunk may live in an
+/// earlier segment.
+///
+/// So `t0` tracks the previous `maxt` and `ref0` accumulates. Reading the first chunk with the general
+/// framing, or the general ones with the first's, decodes plausible-looking nonsense rather than failing.
+///
+/// ## The label pairs are symbol-table OFFSETS, not strings
+///
+/// Each pair is two uvarints resolved through `lookupSymbol`. In format v2 those are ordinals; in v1 they
+/// are byte offsets (quirk 130), so the same record decodes differently depending on the file's version.
+public func decodeSeries(
+    _ b: ByteSlice, lookupSymbol: (UInt32) throws -> String, decodeChunks: Bool = true
+) throws -> DecodedSeries {
+    var d = Decbuf(b)
+    var out = DecodedSeries(labels: [], chunks: [])
+
+    let k = d.uvarint()
+    for _ in 0..<k {
+        let lno = UInt32(truncatingIfNeeded: d.uvarint())
+        let lvo = UInt32(truncatingIfNeeded: d.uvarint())
+        if let e = d.err {
+            throw SeriesDecodeError.readSeriesLabelOffsets(String(describing: e))
+        }
+        let ln: String
+        do {
+            ln = try lookupSymbol(lno)
+        } catch {
+            throw SeriesDecodeError.lookupLabelName(String(describing: error))
+        }
+        let lv: String
+        do {
+            lv = try lookupSymbol(lvo)
+        } catch {
+            throw SeriesDecodeError.lookupLabelValue(String(describing: error))
+        }
+        out.labels.append((ln, lv))
+    }
+
+    // Go: `if chks == nil` — the caller can ask for labels only, and then the chunk metas are not even
+    // parsed.
+    if !decodeChunks {
+        if let e = d.err { throw e }
+        return out
+    }
+
+    let kChunks = d.uvarint()
+    if kChunks == 0 {
+        if let e = d.err { throw e }
+        return out
+    }
+
+    // The FIRST chunk: signed mint, unsigned maxt delta, unsigned ref.
+    var t0 = d.varint64()
+    var maxt = Int64(bitPattern: d.uvarint64()) &+ t0
+    var ref0 = Int64(bitPattern: d.uvarint64())
+    out.chunks.append(DecodedChunkMeta(ref: UInt64(bitPattern: ref0), minTime: t0, maxTime: maxt))
+    t0 = maxt
+
+    for i in 1..<kChunks {
+        let mint = Int64(bitPattern: d.uvarint64()) &+ t0
+        maxt = Int64(bitPattern: d.uvarint64()) &+ mint
+        // SIGNED: a later chunk can live in an earlier segment.
+        ref0 &+= d.varint64()
+        t0 = maxt
+        if let e = d.err {
+            throw SeriesDecodeError.readMetaForChunk(i, String(describing: e))
+        }
+        out.chunks.append(
+            DecodedChunkMeta(ref: UInt64(bitPattern: ref0), minTime: mint, maxTime: maxt))
+    }
+    if let e = d.err { throw e }
+    return out
+}
+
+/// Go: `Reader.Series` — resolve a series ID to its record and decode it.
+///
+/// **In format v2 the ID is the byte position divided by 16.** Series records are padded to
+/// `seriesByteAlign`, so the ID multiplies back up; in v1 it is the position itself.
+public func readSeries(
+    _ bs: ByteSlice, id: UInt64, version: Int, lookupSymbol: (UInt32) throws -> String,
+    decodeChunks: Bool = true
+) throws -> DecodedSeries {
+    let offset = version == indexFormatV1 ? id : id * UInt64(seriesByteAlign)
+    let d = Decbuf.uvarintAt(bs, Int(offset))
+    if let e = d.err { throw e }
+    do {
+        return try decodeSeries(d.b, lookupSymbol: lookupSymbol, decodeChunks: decodeChunks)
+    } catch {
+        throw SeriesDecodeError.readSeries(String(describing: error))
+    }
+}
+
+/// Go: `DecodePostingsRaw` — a big-endian count then that many big-endian `uint32`s.
+///
+/// The length check is exact: `4*n` bytes for `n` postings, and a mismatch is an error rather than a
+/// truncated read.
+public func decodePostingsRaw(_ d: Decbuf) throws -> (count: Int, postings: any Postings) {
+    var d = d
+    let n = d.be32int()
+    let l = d.b
+    if let e = d.err { throw e }
+    if l.count != 4 * n {
+        throw SeriesDecodeError.unexpectedPostingsLength(
+            expectedBytes: 4 * n, postings: n, gotBytes: l.count)
+    }
+    return (n, BigEndianPostings(Array(l.rawBuffer)))
+}
