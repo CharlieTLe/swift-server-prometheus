@@ -44,6 +44,8 @@ type indexReaderIn struct {
 	Reverse []string `json:"reverse"`
 	// Series IDs to read back, which for format v2 are byte positions divided by 16.
 	SeriesIDs []uint64 `json:"seriesIDs"`
+	// `Postings(name, values...)` queries to run, each a name followed by its values.
+	PostingsQueries [][]string `json:"postingsQueries"`
 	// Chunk metas to attach to each generated series, as (mint, maxt, ref) triples. The writer requires
 	// them ordered, so the generator sorts nothing and the cases supply them ordered.
 	ChunkMetas [][3]int64 `json:"chunkMetas"`
@@ -79,6 +81,15 @@ type indexReaderOut struct {
 	SeriesLabels [][]string `json:"seriesLabels"`
 	SeriesChunks [][][3]int64 `json:"seriesChunks"`
 	SeriesErrs   []string   `json:"seriesErrs"`
+	// Every entry of the postings offset table, in order: name, value, offset, entry position.
+	TableNames   []string `json:"tableNames"`
+	TableValues  []string `json:"tableValues"`
+	TableOffs    []uint64 `json:"tableOffs"`
+	TableEntryAt []int    `json:"tableEntryAt"`
+	TableErr     string   `json:"tableErr"`
+	// Per query, the expanded postings and any error.
+	QueryResults [][]uint64 `json:"queryResults"`
+	QueryErrs    []string   `json:"queryErrs"`
 }
 
 // `realByteSlice` is unexported, but `index.ByteSlice` is an exported interface with two methods — so the
@@ -95,6 +106,8 @@ func genIndexReader(e *emitter) {
 			AllSymbols: []string{}, LookedUp: []string{}, LookupErrs: []string{},
 			Reversed: []uint32{}, ReverseErrs: []string{},
 			SeriesLabels: [][]string{}, SeriesChunks: [][][3]int64{}, SeriesErrs: []string{},
+			TableNames: []string{}, TableValues: []string{}, TableOffs: []uint64{},
+			TableEntryAt: []int{}, QueryResults: [][]uint64{}, QueryErrs: []string{},
 		}
 
 		dir, err := os.MkdirTemp("", "index")
@@ -275,8 +288,96 @@ func genIndexReader(e *emitter) {
 			}
 		}
 
+		// The postings offset table, every entry.
+		if terr := index.ReadPostingsOffsetTable(bs, toc.PostingsTable,
+			func(name, value []byte, o uint64, entryAt int) error {
+				out.TableNames = append(out.TableNames, string(name))
+				out.TableValues = append(out.TableValues, string(value))
+				out.TableOffs = append(out.TableOffs, o)
+				out.TableEntryAt = append(out.TableEntryAt, entryAt)
+				return nil
+			}); terr != nil {
+			out.TableErr = terr.Error()
+		}
+
+		// `Postings(name, values...)` through the real reader, so the sparse index, the traversal and the
+		// raw postings decoder are all exercised together.
+		if len(in.PostingsQueries) > 0 {
+			r2, rerr := index.NewReader(bs, index.DecodePostingsRaw)
+			if rerr != nil {
+				out.QueryErrs = append(out.QueryErrs, rerr.Error())
+			} else {
+				for _, q := range in.PostingsQueries {
+					if len(q) == 0 {
+						continue
+					}
+					p, perr := r2.Postings(context.Background(), q[0], q[1:]...)
+					if perr != nil {
+						out.QueryResults = append(out.QueryResults, []uint64{})
+						out.QueryErrs = append(out.QueryErrs, perr.Error())
+						continue
+					}
+					refs, eerr := index.ExpandPostings(p)
+					vals := []uint64{}
+					for _, rf := range refs {
+						vals = append(vals, uint64(rf))
+					}
+					out.QueryResults = append(out.QueryResults, vals)
+					if eerr != nil {
+						out.QueryErrs = append(out.QueryErrs, eerr.Error())
+					} else {
+						out.QueryErrs = append(out.QueryErrs, "")
+					}
+				}
+				_ = r2.Close()
+			}
+		}
+
 		e.emit(fmt.Sprintf("indexreader/%d", n), in, out)
 		n++
+	}
+
+	// --- The postings offset table and `Postings()` queries.
+	//
+	// The sparse index keeps every label NAME but only every 32nd VALUE, plus the first and last of each
+	// name — so a name needs more than 32 values before the sparse structure matters, and the "plus the
+	// last" rule needs a query for a name's LARGEST value.
+	emit(indexReaderIn{
+		Symbols: []string{"a", "b", "c"},
+		PostingsQueries: [][]string{
+			{"l", "a"}, {"l", "b"}, {"l", "a", "c"}, {"l", "a", "b", "c"},
+			{"l"}, {"l", "zz"}, {"nosuch", "a"}, {"", ""},
+		},
+	})
+	{
+		// 100 values of one label, so the sparse index has several entries and the last-value rule bites.
+		syms := []string{}
+		for i := range 100 {
+			syms = append(syms, fmt.Sprintf("v%03d", i))
+		}
+		emit(indexReaderIn{
+			Symbols: syms,
+			PostingsQueries: [][]string{
+				{"l", "v000"}, {"l", "v031"}, {"l", "v032"}, {"l", "v063"}, {"l", "v099"},
+				{"l", "v000", "v099"}, {"l", "v031", "v032", "v033"},
+				{"l", "v050", "v051", "v052", "v053"},
+				// Values below the first and above the last, which take the discard and break paths.
+				{"l", "aaa"}, {"l", "zzz"}, {"l", "aaa", "v050", "zzz"},
+				// Unsorted input, which `Postings` sorts itself.
+				{"l", "v099", "v000", "v050"},
+			},
+		})
+	}
+	{
+		// Exactly 33 values: one past the sparse factor.
+		syms := []string{}
+		for i := range 33 {
+			syms = append(syms, fmt.Sprintf("w%02d", i))
+		}
+		emit(indexReaderIn{
+			Symbols:         syms,
+			PostingsQueries: [][]string{{"l", "w00"}, {"l", "w31"}, {"l", "w32"}, {"l", "w00", "w32"}},
+		})
 	}
 
 	// --- Series records, with chunk metas whose double-delta encoding is the interesting part.

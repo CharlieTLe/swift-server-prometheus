@@ -23,6 +23,7 @@ struct IndexReaderIn: Codable, Sendable {
     var corruptTOCCRC: Bool
     var seriesIDs: [UInt64]?
     var chunkMetas: [[Int64]]?
+    var postingsQueries: [[String]]?
     /// The generated file's bytes. INPUT, because the port has no index writer — the oracle writes the
     /// file with Go's own `index.Writer` and hands the bytes over. On the output side this would be the
     /// port comparing against itself.
@@ -52,6 +53,13 @@ struct IndexReaderOut: Decodable, Equatable, Sendable {
     var seriesLabels: [[String]]
     var seriesChunks: [[[Int64]]]
     var seriesErrs: [String]
+    var tableNames: [String]
+    var tableValues: [String]
+    var tableOffs: [UInt64]
+    var tableEntryAt: [Int]
+    var tableErr: String
+    var queryResults: [[UInt64]]
+    var queryErrs: [String]
 }
 
 private func unhex(_ s: String) -> [UInt8] {
@@ -78,7 +86,8 @@ struct IndexReaderTests {
                     postingsTable: 0),
                 tocErr: "", symbolCount: 0, symbolSize: 0, allSymbols: [], symbolsErr: "",
                 lookedUp: [], lookupErrs: [], reversed: [], reverseErrs: [], seriesLabels: [],
-                seriesChunks: [], seriesErrs: [])
+                seriesChunks: [], seriesErrs: [], tableNames: [], tableValues: [], tableOffs: [],
+                tableEntryAt: [], tableErr: "", queryResults: [], queryErrs: [])
 
             // The oracle already wrote the file and handed it over, so the port never writes one — which
             // is the whole point of this seam.
@@ -151,6 +160,39 @@ struct IndexReaderTests {
                         out.seriesErrs.append(String(describing: error))
                     }
                 }
+                // The postings offset table, every entry.
+                do {
+                    try readPostingsOffsetTable(bs, off: toc.postingsTable) {
+                        name, value, o, entryAt in
+                        out.tableNames.append(name)
+                        out.tableValues.append(value)
+                        out.tableOffs.append(o)
+                        out.tableEntryAt.append(entryAt)
+                    }
+                } catch {
+                    out.tableErr = String(describing: error)
+                }
+
+                // `Postings(name, values...)`, which exercises the sparse index, the traversal with its
+                // name-width skip, and the raw postings decoder together.
+                if let queries = input.postingsQueries, !queries.isEmpty {
+                    let sparse = (try? buildPostingsOffsetIndex(bs, postingsTable: toc.postingsTable))
+                        ?? [:]
+                    for q in queries where !q.isEmpty {
+                        do {
+                            let lists = try indexPostings(
+                                bs, postingsTable: toc.postingsTable, sparse: sparse, name: q[0],
+                                values: Array(q.dropFirst()))
+                            let refs = try expandPostings(merge(lists))
+                            out.queryResults.append(refs.map(\.rawValue))
+                            out.queryErrs.append("")
+                        } catch {
+                            out.queryResults.append([])
+                            out.queryErrs.append(String(describing: error))
+                        }
+                    }
+                }
+
                 for s in input.reverse ?? [] {
                     do {
                         out.reversed.append(try sy.reverseLookup(s))

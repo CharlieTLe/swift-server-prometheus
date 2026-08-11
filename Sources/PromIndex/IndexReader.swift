@@ -431,3 +431,229 @@ public func decodePostingsRaw(_ d: Decbuf) throws -> (count: Int, postings: any 
     }
     return (n, BigEndianPostings(Array(l.rawBuffer)))
 }
+
+// MARK: - The postings offset table
+
+/// Go: `postingOffset` — one entry of the in-memory sparse index over the postings offset table.
+public struct PostingOffset: Sendable, Equatable {
+    public var value: String
+    /// A byte offset **relative to the start of the table's contents**, not to the file.
+    public var off: Int
+}
+
+/// Go: the postings-offset-table errors.
+public enum PostingsTableError: Error, CustomStringConvertible, Equatable, Sendable {
+    /// Go: `unexpected number of keys for postings offset table %d`.
+    case unexpectedKeyCount(Int)
+    /// Go: `fmt.Errorf("get postings offset entry: %w", err)`.
+    case getPostingsOffsetEntry(String)
+
+    public var description: String {
+        switch self {
+        case .unexpectedKeyCount(let k):
+            return "unexpected number of keys for postings offset table \(k)"
+        case .getPostingsOffsetEntry(let e): return "get postings offset entry: \(e)"
+        }
+    }
+}
+
+/// Go: `ReadPostingsOffsetTable` — every entry, in order.
+///
+/// An entry is `<uvarint key count, always 2> <uvarint-prefixed name> <uvarint-prefixed value>
+/// <uvarint postings offset>`, and the table opens with a big-endian count. The callback also receives
+/// the entry's byte position **relative to the table's contents**, which is what the sparse index stores.
+///
+/// The loop's guard is `d.Err() == nil && d.Len() > 0 && cnt > 0` — all three, so a truncated table stops
+/// quietly rather than erroring, and a count larger than the data does too.
+public func readPostingsOffsetTable(
+    _ bs: ByteSlice, off: UInt64,
+    _ f: (_ name: String, _ value: String, _ postingsOffset: UInt64, _ labelOffset: Int) throws ->
+        Void
+) throws {
+    var d = Decbuf.at(bs, Int(off), verifyChecksum: true)
+    if let e = d.err { throw e }
+    let startLen = d.count
+    var cnt = d.be32()
+
+    while d.err == nil && d.count > 0 && cnt > 0 {
+        let offsetPos = startLen - d.count
+        let keyCount = d.uvarint()
+        if keyCount != 2 {
+            throw PostingsTableError.unexpectedKeyCount(keyCount)
+        }
+        let name = d.uvarintStr()
+        let value = d.uvarintStr()
+        let o = d.uvarint64()
+        if d.err != nil { break }
+        try f(name, value, o, offsetPos)
+        cnt -= 1
+    }
+    if let e = d.err { throw e }
+}
+
+/// Go: the sparse postings index `newReader` builds — every label NAME, but only every 32nd label
+/// VALUE, plus the first and last of each name.
+///
+/// **The "plus the last" part is the subtle half.** A name's final value is appended when the NEXT name
+/// begins, using `lastName`/`lastValue`/`lastOff` carried forward — and again after the loop for the
+/// final name. Without it a lookup for a name's largest value has no entry at or before it and the
+/// binary search in `postings(name:values:)` walks from the wrong place.
+///
+/// `lastName` is cleared whenever a value IS recorded, so a value that lands exactly on the sparse
+/// boundary is not also appended as a "last".
+public func buildPostingsOffsetIndex(_ bs: ByteSlice, postingsTable off: UInt64) throws
+    -> [String: [PostingOffset]]
+{
+    var postings: [String: [PostingOffset]] = [:]
+    var order: [String] = []
+    var lastName: String? = nil
+    var lastValue = ""
+    var lastOff = 0
+    var valueCount = 0
+
+    try readPostingsOffsetTable(bs, off: off) { name, value, _, entryOff in
+        if postings[name] == nil {
+            // A new label name begins.
+            postings[name] = []
+            order.append(name)
+            if let ln = lastName {
+                // Always include the previous name's LAST value.
+                postings[ln]!.append(PostingOffset(value: lastValue, off: lastOff))
+            }
+            valueCount = 0
+        }
+        if valueCount % symbolFactor == 0 {
+            postings[name]!.append(PostingOffset(value: value, off: entryOff))
+            lastName = nil
+        } else {
+            lastName = name
+            lastValue = value
+            lastOff = entryOff
+        }
+        valueCount += 1
+    }
+    if let ln = lastName {
+        postings[ln]!.append(PostingOffset(value: lastValue, off: lastOff))
+    }
+    return postings
+}
+
+/// Go: `Reader.traversePostingOffsets` — walk the table from a byte offset, calling back per entry until
+/// the callback says stop.
+///
+/// **Two things here are load-bearing.**
+///
+/// The decoder is built with a **nil** checksum table — upstream's comment: "Don't Crc32 the entire
+/// postings offset table, this is very slow so hope any issues were caught at startup." So this read is
+/// deliberately unverified, unlike every other `NewDecbufAt` in the file.
+///
+/// And the `skip` optimisation assumes **the label name does not change**: it measures the bytes the
+/// first entry's key-count-plus-name occupies and then skips exactly that many for every later entry.
+/// That is only valid within one name's run, which is why the callback's `false` return — driven by the
+/// caller comparing against the *next* sparse entry's value — is what keeps it correct rather than an
+/// optimisation detail.
+public func traversePostingOffsets(
+    _ bs: ByteSlice, postingsTable tableOff: UInt64, from off: Int,
+    _ cb: (_ value: String, _ postingsOffset: UInt64) throws -> Bool
+) throws {
+    // Note: no checksum verification, deliberately.
+    var d = Decbuf.at(bs, Int(tableOff), verifyChecksum: false)
+    d.skip(off)
+    var skip = 0
+    while d.err == nil {
+        if skip == 0 {
+            // Measure the key count plus label name once; they are the same width for every entry of
+            // this name.
+            skip = d.count
+            _ = d.uvarint()  // Key count.
+            _ = d.uvarintBytes()  // Label name.
+            skip -= d.count
+        } else {
+            d.skip(skip)
+        }
+        let v = d.uvarintStr()  // Label value.
+        let postingsOff = d.uvarint64()
+        if d.err != nil { break }
+        if !(try cb(v, postingsOff)) {
+            break
+        }
+    }
+    if let e = d.err {
+        throw PostingsTableError.getPostingsOffsetEntry(String(describing: e))
+    }
+}
+
+/// Go: `Reader.Postings` for format v2 — the postings lists for a set of values of one label.
+///
+/// The value list is **sorted first**, because the algorithm steps forward through an on-disk table and
+/// cannot go back. Then for each value it binary-searches the sparse index, steps back one entry when the
+/// hit is not exact (`if i > 0 && e[i].value != value { i-- }`), and traverses from there — consuming as
+/// many of the requested values as that run covers before moving to a later sparse entry.
+///
+/// The leading `for valueIndex < len(values) && values[valueIndex] < e[0].value` loop discards requested
+/// values below the table's first entry; without it the first binary search would land at 0 and the
+/// step-back would be skipped, traversing from the right place by luck rather than by construction.
+public func indexPostings(
+    _ bs: ByteSlice, postingsTable tableOff: UInt64,
+    sparse: [String: [PostingOffset]], name: String, values: [String]
+) throws -> [any Postings] {
+    guard let e = sparse[name], !values.isEmpty else {
+        return []
+    }
+    // Go: `slices.Sort(values)` — Go's byte ordering (ADR-10), matching the table's own sort.
+    let values = values.sorted { goStringLess($0, $1) }
+    var res: [any Postings] = []
+    var valueIndex = 0
+    while valueIndex < values.count && goStringLess(values[valueIndex], e[0].value) {
+        valueIndex += 1
+    }
+    while valueIndex < values.count {
+        var value = values[valueIndex]
+
+        // The first sparse entry whose value is >= the wanted one.
+        var i = 0
+        var lo = 0
+        var hi = e.count
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            if goStringLess(e[mid].value, value) {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
+        }
+        i = lo
+        if i == e.count {
+            // Past the end.
+            break
+        }
+        if i > 0 && e[i].value != value {
+            // The hit is not exact, so the run containing it starts at the previous entry.
+            i -= 1
+        }
+
+        let entryIndex = i
+        try traversePostingOffsets(bs, postingsTable: tableOff, from: e[entryIndex].off) {
+            val, postingsOff in
+            while !goStringLess(val, value) {
+                if val == value {
+                    var d2 = Decbuf.at(bs, Int(postingsOff), verifyChecksum: true)
+                    if let err = d2.err { throw err }
+                    let (_, p) = try decodePostingsRaw(d2)
+                    res.append(p)
+                }
+                valueIndex += 1
+                if valueIndex == values.count { break }
+                value = values[valueIndex]
+            }
+            if entryIndex + 1 == e.count || !goStringLess(value, e[entryIndex + 1].value)
+                || valueIndex == values.count
+            {
+                // Move to a later sparse entry, if there is one.
+                return false
+            }
+            return true
+        }
+    }
+    return res
+}
