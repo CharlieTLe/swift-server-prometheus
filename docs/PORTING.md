@@ -227,6 +227,49 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     "accepted and ignored". Porting `tombstones` is a prerequisite for `Delete()`, not for reading,
     and it belongs with whichever phase adds deletion.
 
+17. **The WAL's label codec cannot carry invalid UTF-8, because `Labels` holds Swift `String`s.**
+    `record.EncodeLabels` writes label names and values as `PutUvarintStr` — a byte length then the
+    bytes, verbatim, with no validation — and `DecodeLabels` reads them back with `yoloString`, a
+    reinterpretation rather than a decode. So upstream round-trips arbitrary bytes through a Series,
+    Metadata or Exemplars record, invalid UTF-8 included.
+
+    `PromLabels.Labels` stores `String`, so `String(decoding:as: UTF8.self)` substitutes U+FFFD and
+    re-encoding produces different bytes. This is ADR-9's open question about `Labels` (HANDOFF §6)
+    surfacing on a *compatibility* surface rather than an internal one, which raises its priority: a
+    WAL written by Prometheus with a non-UTF-8 label is one the port rewrites incorrectly on
+    checkpoint. Everything valid is byte-exact and pinned by `Fixtures/record/encode.jsonl`, whose
+    label cases include multi-byte UTF-8, empty values and an empty name.
+
+    Scope: this is the codec, not the WAL. Nothing reads or writes a WAL yet, so nothing is corrupt
+    today. Closing it means making `Labels` byte-backed, which is a `PromLabels` change and is where
+    it should be recorded as the cost of ADR-9.
+
+18. **`Decoder.samplesV1`/`samplesV2`'s capacity heuristic is not reproduced, so the port never
+    discards the caller's accumulator.** Both begin
+
+    ```go
+    if minSize := dec.Len() / (1 + 1 + 8); cap(samples) < minSize {
+        samples = make([]RefSample, 0, minSize)
+    }
+    ```
+
+    which looks like a pre-allocation and is not: it **throws away every sample the caller
+    accumulated** whenever the passed slice's *capacity* is below the record's rough sample count.
+    Two callers pass a non-empty slice — `wlog/checkpoint.go:204` accumulates across records, and
+    `head_wal.go:853` passes a pooled `[:0]` — so the branch taken depends on an allocation history,
+    not on the data.
+
+    It also decides *which* of two bugs `samplesV2` exhibits, because the reset sets `len(samples)`
+    to 0 and `samplesV2` uses `len(samples) == 0` to recognise the record's first entry (quirk 168).
+    Reset: the record parses correctly and the accumulator is silently lost. No reset: the
+    accumulator survives and the record misparses.
+
+    Swift's `Array` has no `make(len, cap)`, and `reserveCapacity` plus `append`-driven growth does
+    not follow Go's curve — so a port that consulted `Array.capacity` would agree with Go at some
+    sizes and not others, which is worse than a stated divergence. The port always keeps the
+    accumulator. `oracle/suites_record_encode.go` gives its seeds a generous capacity so the corpus
+    pins that branch, and says so at the site.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -2396,6 +2439,91 @@ changing behaviour.
     entirely before the chunk is consumed by `Next`'s `ts > tr.Maxt` branch, one entirely after keeps the
     sample via `ts <= tr.Maxt`, and since the list is rebuilt per chunk the consumption cannot leak. The
     filter avoids the work, not a wrong answer.
+
+168. **`Decoder.samplesV2` decides an entry is the record's first by measuring the CALLER's slice, so a
+    non-empty accumulator misparses the record.** The loop body is
+
+    ```go
+    if len(samples) == 0 {
+        ref = dec.Varint64(); firstT = dec.Varint64(); t = firstT; st = dec.Varint64(); firstST = st
+    } else {
+        prev = samples[len(samples)-1]
+        ref = int64(prev.Ref) + dec.Varint64()
+        t = firstT + dec.Varint64()
+        st = readSTMarker(dec, prev.ST, firstST)
+    }
+    ```
+
+    and `len(samples)` counts whatever the caller passed in. With a pre-seeded slice the first entry is
+    read with the *second*-entry framing: `prev` comes from the previous record, the timestamp delta is
+    added to a `firstT` that is still 0 (it is declared outside the loop and assigned only in the branch
+    that did not run), and an ST **marker byte** is read where the encoder wrote a raw varint. The result
+    is a misalignment, so what usually comes out is `decode error after N samples: invalid size` rather
+    than wrong-but-plausible numbers.
+
+    `wlog/checkpoint.go:204` does exactly this, so a checkpoint over `SamplesV2` records is wrong from the
+    second record on — modulo exception 18's capacity heuristic, which masks it whenever it fires.
+    `head_wal.go:853` passes `pool.Get()[:0]` and is unaffected. Nothing produces V2 records at this pin
+    (`db.go:247` says `EnableSTStorage` "is currently noop", quirk 36), which is presumably why it has not
+    been noticed.
+
+    **`histogramSamplesV2` and `floatHistogramSamplesV2` have the same shape and NOT the bug**, because
+    they track a local `hasPrev` instead. Three implementations of one idea, one of them
+    accumulator-sensitive: the port keeps all three as they are, and `Fixtures/record/encode.jsonl` carries
+    the seeded case for each so the asymmetry is pinned rather than assumed. A port that factored them
+    together would either fix the bug or spread it, and both are divergences.
+
+169. **`Encoder.histogramSamplesV1` can return ZERO bytes, and writes a delta base from a histogram it
+    then skips.** It writes `histograms[0]`'s ref and timestamp as the base pair *before* the loop, and the
+    loop `continue`s past every custom-buckets histogram — so the base can come from a histogram that is
+    not in the record. If they are *all* custom-buckets it calls `buf.Reset()`, which is `e.B = e.B[:0]`,
+    and `Get()` returns an empty slice: not a one-byte record, no type byte at all. `head_append.go` checks
+    the length before logging it, so nothing writes it; a port that returned `[HistogramSamples]` instead
+    would emit a record Prometheus reads as an empty batch, which is a different thing from no record.
+
+    `Reset` truncating the caller's buffer as well as the encoder's output is the reason dropping Go's
+    `b []byte` parameter needed checking rather than assuming — see `RecordEncoder.swift`'s header.
+
+170. **`readSTMarker`'s `default` accepts every byte that is not 0 or 1.** The marker is documented as a
+    three-valued `iota` (`noST`, `sameST`, `explicitST`), but the read is a `switch` whose default arm is
+    `explicitST` — so a marker of 3, 47 or 255 is followed by a varint delta and decoded as an explicit
+    start timestamp, with no error. `Fixtures/record/decode.jsonl` pins 3, 47 and 255 producing the same
+    result as 2.
+
+    The companion asymmetry is on the write side: `writeSTMarker`'s `switch st { case 0: … case prevST: … }`
+    tests **0 first**, so `st == 0` is always `noST` even when `prevST` is also 0. The two encodings differ
+    in length, so this is a byte-level contract and not a normalisation the port may make.
+
+171. **`Decoder.Samples` and `Decoder.HistogramSamples` report a wrong type byte two different ways.**
+    `Samples` writes `switch typ := dec.Byte(); Type(typ)` and its error is
+    `fmt.Errorf("invalid record type %v, expected Samples(2) or SamplesV2(11)", typ)` — `typ` is a `byte`,
+    so `%v` prints a **number**. `HistogramSamples` writes `switch typ := Type(dec.Byte()); typ` and its
+    error is `fmt.Errorf("invalid record type %v", typ)` — `typ` is a `Type`, which has a `String()`, so
+    `%v` prints a **name**. An empty record therefore yields `invalid record type 0, expected Samples(2) or
+    SamplesV2(11)` from one and `invalid record type unknown` from the other.
+
+    Series, Metadata, Tombstones, Exemplars and MmapMarkers use a third form — a bare
+    `errors.New("invalid record type")` with no value at all. Three spellings of one condition in one file,
+    all three surfaced by `head_wal.go` into `Head.Init`'s failure text, so all three are contract.
+
+172. **`Decoder.DecodeLabels` never sorts, so a record with out-of-order labels decodes to an out-of-order
+    `Labels`.** It is `builder.Reset()`, then `Add` per pair, then `builder.Labels()` — and
+    `ScratchBuilder.Labels()`' own doc comment says "if you want them sorted, call Sort() first", which the
+    decoder does not. Order is guaranteed by the *encoder*, which ranges an already-sorted `labels.Labels`.
+
+    So a hand-built or corrupted record produces a `Labels` that violates its own invariant, and every
+    comparison downstream (`Labels.Compare`, `Hash`) is then meaningless. The port reproduces it —
+    `ScratchBuilder.labels()` returns `Labels(sortedUnchecked:)` — and `Fixtures/record/decode.jsonl`'s
+    `labels-unsorted`, `labels-duplicate` and `labels-empty-name` cases pin all three violations.
+
+173. **`DecodeHistogram` reads a span or bucket array of the OLD length when the wire count is 0.** Each
+    field is `l := buf.Uvarint(); if l > 0 { h.X = make([]T, l) }` followed by `for i := range h.X`. With
+    `l == 0` the slice is left as it was, and the loop then reads *that many* values out of the buffer. Every
+    caller inside `record` passes a freshly-zeroed histogram so it never fires, but `DecodeHistogram` is
+    exported — a caller that reuses a histogram to avoid allocating gets a silent misparse. The same applies
+    to `CustomValues`, which is read only for the custom-buckets schema and so survives a reuse across
+    schemas. The port keeps the shape; the control that "fixes" it is an argued survivor for exactly this
+    reason.
 
 ## Not ported
 

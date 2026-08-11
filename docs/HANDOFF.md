@@ -1,19 +1,23 @@
 # Handoff
 
-Written at the end of the session that closed **Phase 6's read path**.
+Written at the end of the session that opened **Phase 7 with `tsdb/record`**.
 
-Phase 5's exit gate passes **2,183 of 2,183 assertions, zero failures and zero skips**. Phase 6 now has
+Phase 5's exit gate passes **2,183 of 2,183 assertions, zero failures and zero skips**. Phase 6 has
 twenty-three pinned slices and a complete READ path: a block Prometheus wrote can be opened, matched,
 selected, trimmed and read as samples or chunks, with every layer pinned against upstream on real files
-(§6m-§6w). **The write path is not started** — nothing in Phase 6 touches `head.go`, `db.go`, `compact.go` or
-the WAL, so the port cannot produce a block outside a test. That is Phase 7, and it is also what unblocks the
-two read-path gaps §6w records.
+(§6m-§6w). **Phase 7 has started**: §7a lands `tsdb/record` in full — the WAL's wire format, both directions.
+Nothing yet touches `wlog`, `head.go`, `db.go` or `compact.go`, so the port still cannot produce a block
+outside a test, and the two read-path gaps §6w records stay open.
 
-**Four things to read before adding a slice**, because each cost a session to learn:
+**Five things to read before adding a slice**, because each cost a session to learn:
 
 - **quirks 159, 160, 163, 166** — the four reasons a negative control can SURVIVE (a corpus gap, a tautology,
   a patch that never applied, genuine redundancy upstream) and how to tell them apart. A survivor is a
   hypothesis, not a proof.
+- **exception 18** — the newest instance of the oldest mistake in this repo: a comment in the port said a
+  block of Go was "allocation strategy and has no observable effect", and it was a `cap()` that a conditional
+  reads, which discards the caller's data. *"This is only allocation" is a claim about observability.* The
+  fixture found it on the first run; nothing in the diff would have.
 - **§6w's harness lesson** — three bugs in three commits, all the same shape: the corpus exercised a behaviour
   through a path the port had not been made to mirror. Drive tests through the REAL entry points; assembling
   the pieces by hand in the test hides this class entirely.
@@ -36,16 +40,18 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 4 — `PromQLParser` | done |
 | 5 — engine + storage protocols | **DONE. 2,183 of 2,183 assertions pass — zero failures, zero skips.** Every evaluator arm, every runner directive, and every start-timestamp assertion. The gate has nothing left to measure. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). and **`chunkenc`'s metadata half** — `appendable`, the chunk-cut/header rules and the position-based hint derivation, wired into `MemStorage`, which took the gate to zero failures (§5e(c)). and **`info`** — `promql/info.go` plus `regexp.QuoteMeta`, 41 of `info.test`'s 42 (§5e(d)). and **`label_replace`**, on a new capture-tracking Pike VM in `PromRegex` (§5e(e)) — the last unported arm. and the last 11 **runner directives** (§5e(f)). Nothing in Phase 5 is outstanding. Next: **Phase 6's chunk ENCODER** — `tsdb/chunkenc/xor.go` on top of `wip/phase6-bstream` — which is also what the gate's last 23 skips wait on |
 | 6 — TSDB | **The READ path is closed.** Twenty-three pinned slices. `chunkenc` in full (metadata half, `bstream`, `xor.go`, `xor2.go`, `varbit.go`), the postings algebra and loser tree, `FindIntersectingPostings`, the index READER and WRITER (byte-identical files), `PromFS` (ADR-15), `chunks.Writer`/`Reader`, `meta.json` + `ULID`, `BlockReader`, `PostingsForMatchers`, the label queries with matchers, the deletion-interval arithmetic, `DeletedIterator`, `blockBaseSeriesSet`, both `populateWithDel*` iterators, and both queriers (§6m-§6w). A block Prometheus wrote can be opened, matched, selected, trimmed and read as samples or chunks, every layer pinned against upstream on real files. **The WRITE path is NOT started**: nothing here touches `compact.go`, `head.go`, `db.go` or the WAL, so the port cannot produce a block outside a test. Two read-path gaps stay open by construction and are Phase 7's (`Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes). Deliberately unported: `tombstones`' file reader (exception 16), `ShardedPostings`, `populateChunksFromIterable` — all three need the Head |
-| 7–10 | not started, and the ordering below is a reading of `docs/ROADMAP.md` rather than new work. **7** the TSDB write path (`head.go`, `db.go`, `compact.go`, the WAL) — this is what makes the port able to WRITE a block, and it is the phase that unblocks the two read-path gaps above; **8** ingest (scrape pool, target discovery, relabelling); **9** the server (HTTP API, the query endpoints, the prebuilt UI bundle per PORTING.md's "Not ported"); **10** remote read/write, exemplars, the OOO head, agent mode, perf. Nothing in 7–10 is blocked by Phase 6 beyond what is stated there. **Scale, so it is not rediscovered:** these four phases are roughly 95k lines of Go against ~4.5k ported per session at this fidelity bar (an oracle suite plus an argued control sweep per slice). That bar is what caught ADR-10a, the file-index-vs-filename bug and the four survivor-diagnosis modes; lowering it for 7–10 would be a legitimate decision but must be recorded in PORTING.md as a departure, not taken silently |
+| 7 — TSDB write | **STARTED. §7a is landed: `tsdb/record` in full** — the WAL's wire format, both directions, 469 differential cases. The type table, `MetricType`'s two conversions, and `Encoder`/`Decoder` for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers and the integer/float histogram records in V1, V2 and custom-buckets flavours. Two new targets mirroring Go's package boundaries: `PromRecord` (`tsdb/record`) and `PromTombstones` (`tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, plus `Stone`). Six quirks recorded, **two of them upstream bugs**: `samplesV2` measures the caller's accumulator to find the record's first entry (quirk 168, which `wlog/checkpoint.go` walks into), and the `minSize` capacity heuristic *discards* that accumulator (exception 18, the one declared divergence — Swift has no `make(len, cap)`). `Decbuf`'s varint reads were quadratic and are not any more. **Not started: `wlog`, `ChunkDiskMapper`, `head.go`, `head_append.go`, `head_wal.go`, `compact.go`** — so the port still cannot produce a block outside a test, and §6w's two read-path gaps stay open. §7a's tail has the ordering |
+| 8–10 | not started, and the ordering below is a reading of `docs/ROADMAP.md` rather than new work. **8** ingest (scrape pool, target discovery, relabelling); **9** the server (HTTP API, the query endpoints, the prebuilt UI bundle per PORTING.md's "Not ported"); **10** remote read/write, exemplars, the OOO head, agent mode, perf. **Scale, so it is not rediscovered:** these are roughly 95k lines of Go against ~4.5k ported per session at this fidelity bar (an oracle suite plus an argued control sweep per slice). That bar is what caught ADR-10a, the file-index-vs-filename bug, the four survivor-diagnosis modes and — this session — a capacity heuristic that a comment had already dismissed as unobservable; lowering it for 8–10 would be a legitimate decision but must be recorded in PORTING.md as a departure, not taken silently |
 
-Green as of this commit: **338,951 committed fixture lines, 560 tests**, on both Swift 6.4
-(Xcode 27) and the Swift 6.1 floor. The case count is `wc -l` over `Fixtures/**/*.jsonl` — the
-previous figure in this line was computed some other way and had drifted, so the method is stated
-here to make it reproducible rather than folkloric.
+Green as of this commit: **339,573 committed fixture lines, 569 tests** across 22 test targets, on both
+Swift 6.4 (Xcode 27) and the Swift 6.1 floor. The case count is `wc -l` over `Fixtures/**/*.jsonl` and the
+test count is the sum of the `Test run with N tests` lines — the figures in this line have drifted twice
+because they were computed some other way, so both methods are stated to make them reproducible rather than
+folkloric.
 
 ```
 Sources/            src     generated
-  GoCompat          5,329       193
+  GoCompat          5,359       193
   PromHash            216         –
   PromMath             91         –
   PromModel           432         –
@@ -58,18 +64,25 @@ Sources/            src     generated
   PromAnnotations     623         –
   PromConvertNHCB     348         –
   PromChunkEnc      2,700         –
-  PromChunks          692         –
-  PromIndex         1,771         –
+  PromChunks          704         –
+  PromIndex         1,993         –
   PromFS              505         –
-  PromBlock           510         –
+  PromTombstones      164         –
+  PromBlock         1,990         –
+  PromRecord        1,577         –
   PromStorage       1,740         –
   PromTestStorage     522         –
   PromQLParser      5,995       550
   PromQL           12,833         –
   PromQLTest        1,255         –
-Tests             16,051
-oracle (Go)       22,802
+Tests             17,561
+oracle (Go)       26,452
 ```
+
+Every figure above is plain `wc -l` over `Sources/<target>/**/*.swift`, split by whether the file is under
+`Generated/`. The previous version of this table had drifted badly for the Phase 6 targets — `PromBlock` read
+510 against an actual 1,990 — so the method is stated here for the same reason it is stated for the fixture
+count: a number nobody can reproduce stops being checked.
 
 ### Verify everything in one go
 
@@ -113,8 +126,9 @@ mistaken for a failing test, and it requires the `"Test run with"` line, so a `-
 nothing cannot masquerade as green (§4). Copy one for the next slice rather than perturbing by
 hand; a patch string that no longer matches reports `SKIP`, which is loud. Current scores:
 range queries **12 of 15**, matrix selector **24 of 25**, the Call arm's matrix half **22 of
-31**, the vector binops **29 of 34**, the aggregations **27 of 39**, `aggregationK` **23 of 31**, subqueries **13 of 22**, with
-every survivor's argument written into the source next to the code it concerns.
+31**, the vector binops **29 of 34**, the aggregations **27 of 39**, `aggregationK` **23 of 31**, subqueries **13 of 22**,
+`tsdb/record` **53 of 55**, with every survivor's argument written into the source next to the code it
+concerns.
 
 **Never format a float with Swift's defaults.** `Double.description`, `"\(x)"` and
 `String(describing:)` do not match Go. Use `GoFloat.format`. This is ADR-4 and it is the single
@@ -2353,7 +2367,123 @@ remaining declared gaps (`currDelIter` nil-ness, `Err` ordering, the undecodable
 erroring-chunk gap at the same time, since all four need malformed or non-XOR chunk bytes in a fixture input.
 Then `blockQuerier.Select`, and Phase 6's read path is closed.
 
-### 6b (scoping, retained). `EncXOR2` from the pinned source
+### 7a. `tsdb/record` — LANDED and PINNED. Phase 7's first slice, and the WAL's wire format.
+
+**The whole file, both directions**: the type table, `MetricType`'s two conversions, and `Encoder`/`Decoder`
+for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers, and the integer and float
+histogram records in V1, V2 and custom-buckets flavours. 469 differential cases in
+`Fixtures/record/{types,encode,decode}.jsonl`.
+
+**Why this one first, before `head.go` or `wlog`:** it is byte-exact, **exported**, and **stateless**. Every
+other piece of the write path needs a running Head to observe, and this needs nothing — `record.Encoder` and
+`record.Decoder` can be driven directly from the oracle, and an appended batch has exactly one correct byte
+string. It is also the strongest compatibility surface in the project after the block format: a WAL the port
+writes has to be readable by Prometheus and vice versa.
+
+**Two new targets, both mirroring a Go package boundary.** `PromRecord` is `tsdb/record`.
+`PromTombstones` is `tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, which is where
+it had been parked, plus the `Stone` type the Tombstones record carries. Go's edge is
+`record -> tombstones`, and `tombstones` is a leaf; keeping the Swift graph the same shape is what stops
+`PromRecord` from having to depend on all of `PromBlock`. `ChunkDiskMapperRef` was added to `PromChunks` as
+**the type only** — `Unpack` and the two comparisons arrive with `head_chunks.go`, which is the first thing
+with a caller for them.
+
+#### Six quirks, and the two that are upstream bugs
+
+Recorded as PORTING.md quirks 168-173 and exceptions 17-18. The two that matter most:
+
+- **`samplesV2` decides an entry is the record's first by measuring the CALLER's slice** (quirk 168), so a
+  pre-seeded accumulator makes it read the first entry with second-entry framing — `prev` from the previous
+  record, the timestamp delta added to a `firstT` that is still 0, and an ST *marker byte* where the encoder
+  wrote a raw varint. It misaligns, so the usual outcome is `decode error after 3 samples: invalid size`
+  rather than plausible numbers. `wlog/checkpoint.go:204` does exactly this.
+  **`histogramSamplesV2` and `floatHistogramSamplesV2` have the same shape and not the bug**, because they
+  track a local `hasPrev`. Three implementations of one idea, one accumulator-sensitive — the corpus carries
+  the seeded case for each, because a port that factored them together would either fix the bug or spread
+  it, and both are divergences.
+- **`samplesV1`/`samplesV2` open with a capacity heuristic that DISCARDS the accumulator** (exception 18):
+  `if minSize := dec.Len() / (1+1+8); cap(samples) < minSize { samples = make(...) }`. This is the session's
+  sharpest lesson and it was found by the fixture, not by reading: the first corpus run showed the seeded
+  case losing its seed, and the comment in the port at the time said the block was "allocation strategy
+  and has no observable effect". It is not — and worse, **it decides which of two bugs `samplesV2` shows**,
+  because the reset makes `len(samples)` 0 and the first entry then parses correctly. Which branch a caller
+  gets depends on an allocation history, not on the data.
+
+  Swift's `Array` has no `make(len, cap)` and its growth curve is not Go's, so the port cannot reproduce it
+  and says so. The corpus gives its Go-side seeds a generous capacity, which pins the branch every real
+  caller takes. **The transferable part: "this is only allocation" is a claim about observability, and a
+  capacity that a conditional reads is not allocation.**
+
+The other four are format contract rather than bugs, and each is a place a reasonable port diverges silently:
+`histogramSamplesV1` can return **zero bytes** (`buf.Reset()` when every histogram uses custom buckets) and
+writes a delta base from a histogram it then skips (169); `readSTMarker`'s `default` accepts **any** byte
+above 1 as `explicitST` while `writeSTMarker` tests `case 0` **before** `case prevST`, so `st == 0` is never
+`sameST` (170); the same wrong-type condition has **three** different error texts — bare, numeric and
+*named* — depending on whether the method bound the byte or the `Type` (171); and `DecodeLabels` **never
+sorts**, so a corrupt record yields a `Labels` that violates its own invariant (172).
+
+#### What the corpus is shaped like, and why it is three files
+
+`record/encode` is a **round trip**: it commits the encoder's bytes *and* the decoder's reading of those same
+bytes, so neither side can be wrong in a way the other hides. `record/decode` takes raw hex, because half of
+this file's behaviour is only reachable from bytes an encoder will not write — every truncation of a real
+record, trailing bytes, a wrong type byte through each of the eight decoders, an out-of-range ST marker,
+out-of-order and duplicate labels, a `numFields` that disagrees with the bytes, an unknown histogram schema
+(skipped, with the log line captured), and a reserved schema above 8 (silently **resolution-reduced**, so the
+histogram that comes out is not the one the bytes describe). `record/types` is the byte table over all 256
+values plus both `MetricType` directions.
+
+The decoded side is rendered as **strings** rather than typed structs, which is what lets all ten record
+kinds share one `Out` shape (§4: one fixture file, one shape). Every float in those renderings is a
+16-hex-digit bit pattern and the counter reset hint is its own field — quirk 56's lesson, applied
+pre-emptively rather than after a control passed that should not have.
+
+#### One thing fixed on the way: `Decbuf`'s varint reads were quadratic
+
+`Decbuf.uvarint64`/`varint64` did `GoVarint.uvarint(Array(b.rawBuffer))` — copying **the whole remaining
+buffer** on every varint. A WAL record with 10,000 samples has ~20,000 varint reads over ~120 KB, so
+decoding one record was moving gigabytes. `GoVarint.uvarint` now has a `(base:count:)` pointer overload that
+the array version funnels into, and `Decbuf` reads through it. The `gocompat/varint` corpus plus every
+index and block fixture cover the change; nothing moved.
+
+#### Negative controls
+
+`Scripts/controls-record.sh`, **55 controls, 53 of them breaking**. The sweep is built around the
+observation that this file's failure mode is *a field written the way its neighbour writes it* — so most
+controls swap one primitive for the plausible alternative at the same position (a BE64 for a varint, a
+uvarint for a varint, one delta base for the other) rather than deleting anything.
+
+Two of the 55 are deliberate non-breaking entries, both labelled as probes rather than left to look like
+gaps. "V2 decode measures the RECORD, not the accumulator" reports **COMPILE**, because fixing quirk 168
+needs a variable the port does not have; it stands as the marker for exception 18. "A zero bucket count
+CLEARS rather than keeps" is an argued **survivor** — every caller of `decodeHistogram` passes a
+freshly-defaulted histogram, so quirk 173's reuse behaviour is unobservable today, and the shape is kept for
+the exported-function caller that does not exist yet.
+
+**A third survived on the first run and was a real gap, and finding it is the best argument for the sweep.**
+The control on `error reducing resolution of histogram #N`'s index passed, because nothing in the corpus
+could make `ReduceResolution` fail: its own three guards — custom buckets in, custom buckets out, target not
+smaller — are *every one of them* excluded by the caller's `schema > 8 && schema <= 52` test. The failure has
+to come from `reduceResolution`'s two INNER errors instead, a non-first span with a negative offset and spans
+needing more buckets than exist. Five `reduce-fails-*` cases now cover it, two with a good histogram in front
+so the index is pinned as **one-based** rather than merely present, and the control breaks on all five. The
+generalisable bit: when a guarded call's error is unreachable through the guard, look for errors *below* the
+call rather than concluding the branch is dead.
+
+#### Next in Phase 7, in this order
+
+1. **`tsdb/wlog/wlog.go`'s reader and writer** — the segment framing around these records: the 32 KB pages,
+   the record-type-and-length header, the CRC, the compression flag, and `Reader`/`LiveReader`. Byte-exact
+   and driveable from the oracle the same way, since `wlog.NewSize`/`Log`/`NewReader` are exported. This is
+   what makes a WAL rather than a record.
+2. **`tsdb/chunks`' `ChunkDiskMapper`** — the m-mapped head chunks, and the rest of `ChunkDiskMapperRef`.
+3. **`head.go` + `head_append.go`** — the in-memory index (`MemPostings`, deliberately deferred from §6d),
+   `memSeries`, the appender, and `appendable`'s ordering rules, which §5e(c) already ported the metadata
+   half of.
+4. **`head_wal.go`** — replay, which is the first consumer of everything above and of §7a.
+5. **`compact.go` + `blockwriter.go`** — Head to block, which closes §6w's two declared gaps because it is
+   the first thing that can put a non-XOR or malformed chunk in a fixture input.
+
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.
 **This is the slice that closes Phase 5's last 23 skips**, since `@st` lines in the `.test` files need

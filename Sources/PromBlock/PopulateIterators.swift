@@ -49,6 +49,7 @@
 public import PromChunkEnc
 public import PromHistogram
 public import PromIndex
+public import PromTombstones
 
 /// Go: what `ChunkReader.ChunkOrIterable` returns — see ADR-16 for why both halves exist here when a block
 /// only ever fills one.

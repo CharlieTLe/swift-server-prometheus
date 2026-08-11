@@ -15,6 +15,7 @@
 import Foundation
 import GoOracleSupport
 import PromBlock
+import PromTombstones
 import Testing
 
 struct IntervalsIn: Codable, Sendable {

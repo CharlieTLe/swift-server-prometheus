@@ -49,6 +49,7 @@
 
 public import PromIndex
 public import PromStorage
+public import PromTombstones
 
 /// Go: `seriesData` — what `blockBaseSeriesSet` produces for one series.
 public struct SeriesData: Sendable {

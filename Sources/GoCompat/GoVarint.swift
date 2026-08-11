@@ -46,14 +46,27 @@ public enum GoVarint: Sendable {
     /// `n == 0` means the buffer was too small, and `n < 0` means the value
     /// overflows a `UInt64` (`-n` bytes were read).
     public static func uvarint(_ buf: [UInt8], _ start: Int = 0) -> (UInt64, Int) {
+        guard start < buf.count else { return (0, 0) }
+        return buf.withUnsafeBytes { raw in
+            uvarint(base: raw.baseAddress! + start, count: buf.count - start)
+        }
+    }
+
+    /// Go: `binary.Uvarint`, over borrowed memory.
+    ///
+    /// The one algorithm; ``uvarint(_:_:)`` funnels into it. It exists as a pointer overload because
+    /// `Decbuf` reads varints out of a non-owning `ByteSlice`, and copying the remaining bytes into an
+    /// `Array` per read makes decoding a WAL record quadratic in its sample count.
+    @inlinable
+    public static func uvarint(base: UnsafeRawPointer, count: Int) -> (UInt64, Int) {
         var x: UInt64 = 0
         var s: UInt64 = 0
         var i = 0
-        while start + i < buf.count {
+        while i < count {
             if i == maxVarintLen64 {
                 return (0, -(i + 1))  // overflow
             }
-            let b = buf[start + i]
+            let b = base.load(fromByteOffset: i, as: UInt8.self)
             if b < 0x80 {
                 if i == maxVarintLen64 - 1 && b > 1 {
                     return (0, -(i + 1))  // overflow
