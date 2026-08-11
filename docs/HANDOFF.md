@@ -1854,9 +1854,29 @@ Also: `encoding/json` HTML-escapes `<`, `>` and `&` where `strconv.Quote` does n
 `GoStrconv.quote` is the wrong tool for JSON (quirk 151); and a ULID's first character can never exceed `7`,
 because 26 base32 characters hold 130 bits for a 128-bit value (quirk 152).
 
-**Next in Phase 6:** the `BlockReader` itself — open a directory, read `meta.json`, and resolve a series'
-chunk refs through the segment files, tying §6d-§6j together. Everything it needs is now ported and pinned,
-so it is composition rather than new format work. `MemPostings` waits for the Head in Phase 7.
+### 6l. `chunks.Reader` — LANDED
+
+`Sources/PromChunks/ChunkReader.swift`. The last reader piece: a `BlockChunkRef` to a chunk's encoding and
+bytes.
+
+**Its corpus is `chunks/batch.jsonl`, which already holds Go's real segment files AND the refs Go's writer
+assigned.** So the reader is checked against Go's files and Go's refs rather than against the port's own
+writer — a writer bug and a reader bug cannot cancel out. The write-then-read path is checked separately,
+because that is what a block actually does, but only after the against-Go direction passes.
+
+Three details from the file header worth carrying: the segment list's **sorted order is the reference index
+space** (quirk 142 from the reading side, and lexicographic order agrees with numeric only because the names
+are zero-padded to six digits); there are **two bounds checks with different messages**, the first quoting the
+MAXIMUM varint width because the real one is not yet known; and the CRC covers the encoding byte through the
+data, **not** the length prefix (quirk 126 again).
+
+One test-authoring note: the round-trip test first asserted a multi-segment layout it had not created — four
+small chunks fit inside a 512-byte segment. A test that asserts a precondition it did not establish passes
+for the wrong reason, and here it failed loudly instead, which is the better outcome.
+
+**Next in Phase 6:** the `BlockReader` itself — open a directory, read `meta.json`, and join the index reader
+to the chunk reader so a series resolves to its samples. Every piece it needs is now ported and pinned, so it
+is composition rather than new format work. `MemPostings` waits for the Head in Phase 7.
 
 **Previously next, now done:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
 machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus
