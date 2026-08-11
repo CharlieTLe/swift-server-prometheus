@@ -1219,10 +1219,19 @@ ratchet. Three of them are **real engine findings** and worth naming here:
      **Refuted** by an assertion in the same test.
 
   So the hints reach `trackCounterReset`, whose two call sites match Go line for line including the
-  seed sample, and the *values* are right (`{} 21`), so the aggregation runs. **The remaining suspect
-  is `funcSumOverTime`/`funcAvgOverTime`'s own annotation return path** — whether the `annos` the
-  collision is added to is the one returned, and whether the `[2m]` window at `11m` actually holds
-  both samples. Both are five-line checks now that the layers beneath are pinned.
+  seed sample, and the *values* are right (`{} 21`), so the aggregation runs.
+
+  The annotation return path was then checked and is also correct: `Annotations.add` is `mutating`,
+  the collision is added to the same `annos` the histogram branch returns, and the `failed` arm that
+  replaces it cannot be taken here. **So the only thing left is the window contents** — whether the
+  `[2m]` window at `11m` holds the two samples whose hints conflict. The test's own comment says the
+  point is the conflict "between the first two samples", and the first two samples of the *series*
+  are at 0m and 1m, which a window of `(9m, 11m]` does not contain. **Read the `mixed` load in
+  `native_histograms.test` first**: the likely answer is that the port's window is off by one sample
+  at the bottom, or that `mixed`'s hints are not where this reading assumes.
+
+  Three hypotheses, two refuted with tests left behind, one narrowed to a single question. That is
+  the state to start from.
 
   The lesson worth keeping regardless: **the two refuted hypotheses left two permanent tests
   behind.** Neither link had ever been pinned, both were plausible, and finding out cost less than
