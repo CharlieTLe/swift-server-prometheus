@@ -56,6 +56,8 @@ struct SeriesSetOut: Decodable, Equatable, Sendable {
     var sampleTimes: [[[Int64]]]
     /// Per query, per series: the result of a fixed SEEK script over the flat sample iterator.
     var seekTimes: [[[Int64]]]
+    /// Per query, per series: each chunk's BYTES, hex — pass-through or re-encoded. See §6u.
+    var chunkBytes: [[[String]]]
     var errs: [String]
     var openErr: String
 }
@@ -154,8 +156,8 @@ struct BlockSeriesSetTests {
         try Fixtures.check("block/seriesset.jsonl", FixtureCase<SeriesSetIn, SeriesSetOut>.self) {
             input in
             var out = SeriesSetOut(
-                labelSets: [], chunkRanges: [], sampleTimes: [], seekTimes: [], errs: [],
-                openErr: "")
+                labelSets: [], chunkRanges: [], sampleTimes: [], seekTimes: [], chunkBytes: [],
+                errs: [], openErr: "")
             let ix = try SeriesSetFileIndex(unhexSS(input.indexHex))
             // The chunk segments, in the sorted order that defines the reference index space (quirk 142).
             let source = try SegmentChunkSource(segmentHexes: input.segHexes ?? [])
@@ -178,6 +180,7 @@ struct BlockSeriesSetTests {
                     var ranges: [[[Int64]]] = []
                     var times: [[Int64]] = []
                     var seeks: [[Int64]] = []
+                    var allBytes: [[String]] = []
                     while ss.next() {
                         guard let cur = ss.current else { continue }
                         sets.append(
@@ -188,15 +191,18 @@ struct BlockSeriesSetTests {
                         // nil-ness observable: an undeleted chunk passes its ORIGINAL bytes through, a
                         // deleted one is re-encoded, and the meta's bounds come from the surviving samples.
                         var rs: [[Int64]] = []
+                        var bs: [String] = []
                         let chunkIt = PopulateWithDelChunkSeriesIterator(
                             blockID: "", source: source, metas: cur.chunks,
                             intervals: cur.intervals)
                         while chunkIt.next() {
                             guard let c = chunkIt.current else { continue }
                             rs.append([c.meta.minTime, c.meta.maxTime])
+                            bs.append(c.bytes.map { String(format: "%02x", $0) }.joined())
                         }
                         if let e = chunkIt.err() { throw e }
                         ranges.append(rs)
+                        allBytes.append(bs)
 
                         // The SAMPLE view, over all of the series' chunks at once.
                         let flat = PopulateWithDelSeriesIterator(
@@ -232,12 +238,14 @@ struct BlockSeriesSetTests {
                     out.chunkRanges.append(ranges)
                     out.sampleTimes.append(times)
                     out.seekTimes.append(seeks)
+                    out.chunkBytes.append(allBytes)
                     out.errs.append(ss.err().map { String(describing: $0) } ?? "")
                 } catch {
                     out.labelSets.append([])
                     out.chunkRanges.append([])
                     out.sampleTimes.append([])
                     out.seekTimes.append([])
+                    out.chunkBytes.append([])
                     out.errs.append(String(describing: error))
                 }
             }
