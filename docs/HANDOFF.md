@@ -21,7 +21,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **2,133 of 2,188 assertions pass (97%) with ZERO failures**; `native_histograms.test`, the largest file at 522, passes all 522 with no skips. The 55 remaining skips are all named: 21 `label_replace`, 23 `@st` (Phases 6-7), 10 runner directives. **`label_replace` is the only unported evaluator arm left.** Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). and **`chunkenc`'s metadata half** — `appendable`, the chunk-cut/header rules and the position-based hint derivation, wired into `MemStorage`, which took the gate to zero failures (§5e(c)). and **`info`** — `promql/info.go` plus `regexp.QuoteMeta`, 41 of `info.test`'s 42 (§5e(d)). Next: **`label_replace`** (21 assertions), which is a `PromRegex` slice — Pike VM capture tracking — and the last unported arm |
+| 5 — engine + storage protocols | **in progress, exit gate green and EVERY EVALUATOR ARM PORTED** — `promqltest` runs and **2,154 of 2,188 assertions pass (98%) with ZERO failures**; `native_histograms.test`, the largest file at 522, passes all 522 with no skips. The 34 remaining skips are all named: 23 `@st` (Phases 6-7) and 11 runner directives. Nothing in the evaluator is unported. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). and **`chunkenc`'s metadata half** — `appendable`, the chunk-cut/header rules and the position-based hint derivation, wired into `MemStorage`, which took the gate to zero failures (§5e(c)). and **`info`** — `promql/info.go` plus `regexp.QuoteMeta`, 41 of `info.test`'s 42 (§5e(d)). and **`label_replace`**, on a new capture-tracking Pike VM in `PromRegex` (§5e(e)) — the last unported arm. Next: the 11 runner directives (`fail regex:`, `expect string`, `expect range vector`), then Phase 6 |
 | 6 — TSDB | **started, and the metadata half of `chunkenc` is MERGED** — `histogram_meta.go`'s `appendable`/`bucketIterator`/`counterResetHint` and `AppendFloatHistogram`'s cut-and-header decision are ported and pinned by 140 differential cases (§5e(c)), which also answers §5d's unexported-seam problem: drive the exported behaviour the private helper decides. Still unmerged: — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
@@ -1433,21 +1433,54 @@ single-selector argument makes the two windows coincide exactly and no perturbat
 show. Three tests proved nothing before that was understood; the fix was a two-selector argument plus
 two info series whose newest-wins tie-break puts the difference in the *labels*.
 
-#### (e) What is left in the gate, and it is all named
+#### (e) `label_replace` — LANDED, and **every evaluator arm is now ported**
 
-55 skips, no failures:
+**2,133 -> 2,154 of 2,188 (98%), still zero failures, 55 -> 34 skips.** It was a `PromRegex` slice
+rather than an evaluator one: `Sources/PromRegex/RegexCapture.swift` is a second Pike VM that tracks
+captures, plus `ExpandString`'s template language and a `CompiledRegex` facade carrying
+`numSubexp`/`subexpNames`. 66 differential cases. The boolean VM in `RegexCompiler.swift` is untouched
+and stays boolean — it answers a language-membership question that submatch boundaries cannot change.
+
+**Three findings, and the first is the one to remember.**
+
+1. **Go's `regexp` evaluator has two entry points and the difference is name removal** (quirk 111).
+   Exported `Eval` runs `cleanupMetricLabels`, internal `eval` does not, and every function evaluating
+   a *subexpression* must call the internal one. The port had collapsed them into one `eval`, so
+   `label_replace` and `info` applied the deferred `DropName` to their own argument. The symptom looked
+   nothing like a naming bug: `label_replace(rate({env="1"}[10m]), …)` reported **"vector cannot
+   contain metrics with the same labelset"**, because both input series had already lost the
+   `__name__` that made them distinct. `label_join` had it right; the two new callers did not, and the
+   comment on `eval` now says which is which.
+2. **The corpus wire cannot carry invalid UTF-8 as a JSON string.** Two cases disagreed on a lone
+   `0x80` byte, and the cause was `encoding/json` replacing it with U+FFFD on the way out — so Go was
+   measured on the raw byte and the port on the repaired one. The subject and template now travel as
+   **hex**. ADR-9's trap, on the wire rather than in an API, and worth checking for in any future
+   corpus that tests byte handling.
+3. **`info` discards `DropName`**, so it preserves a metric name its argument was going to drop (quirk
+   112). Only visible after finding (1), and it changed two expectations in `InfoEdgeTests`.
+
+`Scripts/controls-labelreplace.sh` has 22 controls; 19 break. The three survivors are all the same
+shape — **redundant given an anchored pattern or a caller one level up** — and all three are kept
+because upstream has them and the first non-anchored caller will need them (quirk 115):
+
+* the first-match cut, which matters only when a lower-priority thread can match further right;
+* `matchcap[0] = pos`, which is always 0 for `^(?s:…)$`;
+* `label_replace`'s own `mergeSeriesWithSameLabelset`, because `cleanupMetricLabels` merges every
+  matrix unconditionally anyway.
+
+#### (f) What is left in the gate
+
+34 skips, no failures, and **nothing left in the evaluator**:
 
 ```
- 21  label_replace                        PromRegex: Pike VM capture tracking + Go's Expand
  23  @st loads and their dependents        Phases 6-7 (EncXOR2, quirk 36)
- 10  expect range vector / string / fail regex:   the RUNNER
+ 11  expect range vector / string / fail regex:   the RUNNER
 ```
 
-**`label_replace` is the last unported evaluator arm** — `EngineExecTests.unportedArmsAreLoud` is down
-to one entry. It is a `PromRegex` slice rather than an evaluator one: `FindStringSubmatchIndex` and
-`ExpandString` need Pike VM **capture tracking**, and `RegexCompiler.swift`'s header says the VM is
-deliberately boolean-only. The 10 runner directives are cheap by comparison and one of them
-(`fail regex:`) is a single assertion in `info.test`.
+`EngineExecTests.unportedArmsAreLoud` now asserts the list is EMPTY rather than iterating it. The 11
+runner directives are the cheapest remaining work in Phase 5 — `fail regex:` is one assertion in
+`info.test` and needs an unanchored matcher, and `expect string`/`expect range vector` are directive
+parsing. After that Phase 5's gate is only waiting on `EncXOR2`, which is Phase 6.
 
 * ~~`histogram_quantile`'s monotonicity info does not fire~~ — **FIXED, and it was the RUNNER.** The
   info fired all along, with text matching to the character. The line scanner split on the first `#`

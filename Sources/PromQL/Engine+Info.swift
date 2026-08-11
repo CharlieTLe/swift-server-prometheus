@@ -64,8 +64,11 @@ extension Evaluator {
     func evalInfo(
         _ ctx: GoContext, _ args: [any Expr], _ ws: inout Annotations
     ) throws -> any Value {
-        let (val, annots) = try eval(ctx, args[0])
-        ws.merge(annots)
+        // `evalNode`, not `eval` — Go's internal `eval`, which does NOT run
+        // `cleanupMetricLabels`. The outer one would apply the deferred `DropName` to the argument,
+        // and `info` reads `__name__` (through `ignoreSeries` and the signature), so a name removed
+        // early changes the answer. `label_replace` had the same trap and `label_join` did not.
+        let val = try evalNode(ctx, args[0], &ws)
         // Go: an unchecked `val.(Matrix)` type assertion — the parser's type checking guarantees it,
         // so a failure here is an internal invariant rather than a user error.
         guard let mat = val as? Matrix else {

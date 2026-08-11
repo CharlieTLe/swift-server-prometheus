@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"regexp/syntax"
@@ -162,4 +163,123 @@ func genQuoteMeta(e *emitter) {
 	} {
 		emit(s)
 	}
+}
+
+// FindStringSubmatchIndex + ExpandString, which is what `label_replace` is built on.
+//
+// Compiled the way `evalLabelReplace` compiles: `"^(?s:" + re + ")$"`. So every pattern here is fully
+// anchored and `(?s)` is on, which means `.` matches a newline — a pattern that behaves differently
+// unanchored is not what the caller sees.
+//
+// What has to be reached:
+//   - the INDICES, in BYTES, including `-1` pairs for groups that did not participate;
+//   - leftmost-FIRST semantics: with `(a|ab)` against `ab` the answer is the first alternative, and an
+//     implementation that tracks captures without cutting lower-priority threads gets the other one;
+//   - nested and repeated groups, where a repeated group keeps only its LAST iteration;
+//   - the `$1` / `${1}` / `$name` template language, whose rules are upstream's own: `$1x` is the name
+//     `1x`, a `$` before a non-name expands to nothing, `$$` is a literal `$`, a leading zero
+//     disqualifies a number, and an unknown group expands to nothing;
+//   - non-ASCII subjects, where byte offsets and rune offsets diverge.
+func genRegexSubmatch(e *emitter) {
+	n := 0
+	emit := func(pattern, subject, template string) {
+		out := map[string]any{}
+		re, err := regexp.Compile("^(?s:" + pattern + ")$")
+		if err != nil {
+			out["err"] = err.Error()
+		} else {
+			idx := re.FindStringSubmatchIndex(subject)
+			if idx == nil {
+				out["matched"] = false
+			} else {
+				out["matched"] = true
+				out["index"] = idx
+				out["expandedHex"] = hex.EncodeToString(
+					re.ExpandString([]byte{}, template, subject, idx))
+			}
+			out["numSubexp"] = re.NumSubexp()
+			out["names"] = re.SubexpNames()
+		}
+		// **The subject and template travel as HEX, not as JSON strings.** `encoding/json` replaces
+		// an invalid UTF-8 byte with U+FFFD when marshalling a Go string, so a corpus that carries
+		// them as strings tests Go on the raw bytes and the port on the repaired ones — two cases
+		// disagreed by exactly that before this was hex. The same trap ADR-9 is about, on the wire
+		// rather than in an API.
+		e.emit(fmt.Sprintf("submatch/%d", n),
+			map[string]string{
+				"pattern":  pattern,
+				"subject":  hex.EncodeToString([]byte(subject)),
+				"template": hex.EncodeToString([]byte(template)),
+			}, out)
+		n++
+	}
+
+	// The shapes `label_replace` is actually used with in the .test files and in practice.
+	emit("(.*)", "foo", "$1")
+	emit("(.*)", "", "$1")
+	emit(".*", "foo", "$1")
+	emit("(.*)-(.*)", "a-b", "$2-$1")
+	emit("(?P<first>[a-z]+)_(?P<second>[a-z]+)", "ab_cd", "${second}.${first}")
+	emit("([^:]+):(\\d+)", "host:9090", "$1")
+	emit("([^:]+):(\\d+)", "host:9090", "$2")
+
+	// LEFTMOST-FIRST. `(a|ab)` inside an anchored pattern with a trailing `b?`: the first alternative
+	// wins even though the second would consume more.
+	emit("(a|ab)b?", "ab", "[$1]")
+	emit("(ab|a)b?", "ab", "[$1]")
+	emit("(a*)(a*)", "aaa", "[$1][$2]")
+	emit("(a*?)(a*)", "aaa", "[$1][$2]")
+	emit("(a+)(a*)", "aaa", "[$1][$2]")
+
+	// A group that does not participate: `-1` in the index array, and nothing in the expansion.
+	emit("(a)|(b)", "a", "[$1][$2]")
+	emit("(a)|(b)", "b", "[$1][$2]")
+	emit("(a)?b", "b", "[$1]")
+	emit("(a)?b", "ab", "[$1]")
+
+	// A REPEATED group keeps its last iteration only.
+	emit("(?:(a)|(b))+", "abab", "[$1][$2]")
+	emit("(a|b)+", "abab", "[$1]")
+	emit("((a)(b))+", "abab", "[$1][$2][$3]")
+
+	// Nesting.
+	emit("((a)(b))", "ab", "[$1][$2][$3]")
+	emit("(a(b(c)))", "abc", "[$1][$2][$3]")
+
+	// Zero-width and anchors inside the pattern.
+	emit("()", "", "[$1]")
+	emit("(^)a", "a", "[$1]")
+	emit("a($)", "a", "[$1]")
+	emit("(\\b)a", "a", "[$1]")
+
+	// `(?s)` is on, so `.` spans a newline. This is the one place the wrapper is observable.
+	emit("(.*)", "a\nb", "[$1]")
+	emit("a(.)b", "a\nb", "[$1]")
+
+	// The TEMPLATE language.
+	for _, tpl := range []string{
+		"$1", "${1}", "$1x", "${1}x", "$0", "$00", "$01", "$2", "$99", "$", "$$", "$$1", "a$1b",
+		"$-", "$_", "${}", "${1", "${1x}", "$1$2", "$name", "${name}", "no dollars", "",
+		"$1 $1", "${0}", "x$", "$}", "${a-b}",
+	} {
+		emit("(a)(b)", "ab", tpl)
+	}
+
+	// NON-ASCII, where byte offsets and rune offsets differ.
+	emit("(.*)", "héllo", "[$1]")
+	emit("(h)(é)(l+o)", "héllo", "[$1][$2][$3]")
+	emit("(.)(.)", "日本", "[$1][$2]")
+	emit("(.*)", "日本語", "[$1]")
+	emit("(é)(.*)", "éa", "[$1][$2]")
+	// A Unicode group NAME, which `extract` allows because it tests `unicode.IsLetter`.
+	emit("(?P<café>a)", "a", "${café}")
+	// A subject that is not valid UTF-8 cannot be written as a Go string literal here, but a lone
+	// 0x80 byte can: Go decodes it as RuneError with width 1.
+	emit("(.*)", "\x80", "[$1]")
+	emit("(.)", "\x80", "[$1]")
+
+	// An invalid pattern, which `evalLabelReplace` turns into a panic.
+	emit("(", "a", "$1")
+	emit("a{2,1}", "a", "$1")
+	emit("[z-a]", "a", "$1")
 }

@@ -1917,6 +1917,41 @@ changing behaviour.
     than a wider answer. That is what makes the escaping observable, and it took an unbalanced paren in
     a test to show it.
 
+111. **Go's `regexp` has two evaluation entry points and the difference is name removal.** Exported
+    `Eval` runs `cleanupMetricLabels`; internal `eval` does not. Every function that evaluates a
+    *subexpression* must call the internal one — `label_join`, `label_replace` and `info` are the only
+    three with the choice, and calling the exported one applies the deferred `DropName` to an
+    intermediate result, which is exactly what deferring exists to prevent.
+
+    The symptom is not obviously about names: `label_replace(rate({env="1"}[10m]), …)` reports
+    **"vector cannot contain metrics with the same labelset"**, because both input series had already
+    lost the `__name__` that made them distinct, so the duplicate check fired before `label_replace`
+    could rename them. Two of the port's three got this wrong on the way in.
+
+112. **`info` discards `DropName`, so it PRESERVES a metric name its argument was going to drop.**
+    `combineWithInfoVector` builds `Sample{Metric:…, F:…, H:…}` and `combineWithInfoSeries` builds
+    `Series{Metric:…}`, both leaving the field false. So `info(sum_over_time(m[10m]))` keeps
+    `__name__` where `sum_over_time(m[10m])` alone would not.
+
+113. **`label_replace` leaves a non-matching series completely alone.** `if indexes != nil` guards the
+    whole rewrite — the destination label is not cleared, not set empty, not touched. And the two
+    argument validations (the regex, the destination name) happen **before** the argument is
+    evaluated, so a bad regex is reported even when the inner expression would also have failed.
+
+114. **`label_replace`'s regex is `"^(?s:" + re + ")$"`,** so it is fully anchored and `.` matches a
+    newline. A pattern that would match a substring does not match here.
+
+115. **The capture VM's first-match cut is redundant for an anchored pattern, and must be kept
+    anyway.** `machine.step` truncates the queue on a match so lower-priority threads cannot overwrite
+    a leftmost-first result. With `^(?s:…)$` the `match` instruction is reachable only at end of text,
+    every matching thread is at the same position, and `add`'s dedup-by-pc already keeps the
+    highest-priority one — so the control for the cut survives. It is the *unanchored* caller that
+    needs it, and the failure mode there would be a silently leftmost-longest answer.
+
+    Two neighbours in the same file have the same shape: `matchcap[0] = pos` is always 0 for an
+    anchored pattern, and `label_replace`'s own `mergeSeriesWithSameLabelset` is redundant because
+    `cleanupMetricLabels` merges every matrix unconditionally one level up.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

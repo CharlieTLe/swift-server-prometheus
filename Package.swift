@@ -111,6 +111,8 @@ let package = Package(
             dependencies: [
                 "PromQLParser", "PromStorage", "PromChunkEnc", "PromHistogram",
                 "PromLabels", "PromSchema", "PromAnnotations", "PromModel", "GoCompat",
+                // `label_replace` needs the capture-tracking VM and `ExpandString`.
+                "PromRegex",
             ]
         ),
 

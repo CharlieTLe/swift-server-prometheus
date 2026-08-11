@@ -16,6 +16,54 @@ import PromQLParser
 import PromQLTest
 import Testing
 
+@Suite("label_replace: the edge the .test files do not reach")
+struct LabelReplaceEdgeTests {
+
+    /// A rename can make two series collide, and the collision must merge rather than duplicate. No
+    /// committed `.test` file has that shape.
+    ///
+    /// **What this pins is the merge happening, not WHERE it happens** — and that distinction is the
+    /// finding. `label_replace` ends with `mergeSeriesWithSameLabelset`, but `cleanupMetricLabels`
+    /// merges every matrix unconditionally one level up, so deleting `label_replace`'s own call changes
+    /// nothing and its control survives with an argument rather than a test. This assertion still earns
+    /// its place: it is the only thing anywhere that checks a renamed collision merges at all.
+    ///
+    /// The two input series carry points at DIFFERENT timestamps, which is what makes the merge
+    /// observable as a merge rather than as an error: `mergeSeriesWithSameLabelset` combines colliding
+    /// series and only errors when two of them have a point at the same timestamp. Without the merge
+    /// the result is two series with identical label sets — which for a range query nothing downstream
+    /// catches, since `cleanupMetricLabels` only re-checks series whose `DropName` is set.
+    ///
+    /// The step is **6 minutes, past the 5-minute lookback**, and that is the whole difficulty: at a
+    /// 1-minute step the first series is still live at the second step, both series have a point at
+    /// that timestamp, and the merge correctly ERRORS instead of merging. Spacing the samples beyond
+    /// the lookback is what gives the two series disjoint timestamps.
+    @Test("two series renamed onto the same label set are merged, not duplicated")
+    func mergesCollidingLabelSets() {
+        let options = Options(enableExperimentalFunctions: true)
+        let engine = Engine(
+            EngineOpts(
+                maxSamples: 50_000_000,
+                timeout: GoDuration(nanoseconds: 100 * 1_000_000_000),
+                lookbackDelta: GoDuration(nanoseconds: 5 * 60 * 1_000_000_000),
+                noStepSubqueryIntervalFn: { _ in 60_000 },
+                enableAtModifier: true, enableNegativeOffset: true,
+                enableDelayedNameRemoval: true, parserOptions: options))
+        let r = PromQLTestRunner(engine: engine, parser: Parser(options: options)).run(
+            """
+            load 6m
+              m{env="a"} 1 _
+              m{env="b"} _ 2
+
+            eval range from 0m to 6m step 6m label_replace(m, "env", "x", "env", "(.+)")
+              m{env="x"} 1 2
+            """, name: "synthetic")
+        #expect(r.failed == 0, "\(r.failures)")
+        #expect(r.skipped == 0, "\(r.skipReasons)")
+        #expect(r.passed == 1)
+    }
+}
+
 @Suite("info: the edges info.test does not reach")
 struct InfoEdgeTests {
 
@@ -53,6 +101,12 @@ struct InfoEdgeTests {
     /// This one pins the off-by-one itself. Upstream reduces the start by `lookbackDelta - 1`, not
     /// `lookbackDelta`, with the comment "we want to exclude samples that are precisely the lookback
     /// delta before the eval time" — so an info sample exactly 5m before the eval time is invisible.
+    ///
+    /// Note `__name__` in the expectations even though `sum_over_time` drops names: `info` builds its
+    /// output samples and series **without** `DropName`, so it PRESERVES a name its argument was going
+    /// to drop. That is upstream's shape (`info.go` constructs `Sample{Metric:…}` and `Series{Metric:…}`
+    /// with the field left false), and it only became visible here once `info` was fixed to evaluate
+    /// its argument with Go's internal `eval` rather than the exported `Eval`.
     @Test("an info sample exactly one lookback before the eval time is excluded")
     func lookbackBoundary() {
         expectClean(
@@ -63,7 +117,7 @@ struct InfoEdgeTests {
                   target_info{instance="a", job="1", data="d"} 1 _
 
                 eval instant at 5m info(sum_over_time(metric[10m]))
-                  {instance="a", job="1"} 3
+                  {__name__="metric", instance="a", job="1"} 3
                 """), 1)
 
         // One millisecond later the same sample IS inside the window, which is what makes the line
@@ -78,7 +132,7 @@ struct InfoEdgeTests {
                   metric{instance="a", job="1"} 1 2
 
                 eval instant at 5m info(sum_over_time(metric[10m]))
-                  {instance="a", job="1", data="d"} 3
+                  {__name__="metric", instance="a", job="1", data="d"} 3
                 """), 1)
     }
 

@@ -133,6 +133,7 @@
     "regex/quotemeta.jsonl": { "sha256": "434296bcdf58874bd962f92fadc59d462d7becb36870e7f5cff671ece3f67c2d", "lines": 62 },
     "regex/setmatches.jsonl": { "sha256": "d0f09f1ddaade4bc4eaab8246b399ff9f0d01504eacf75a085e665c7507d1743", "lines": 675 },
     "regex/simplefold.jsonl": { "sha256": "b240b1de6eb59059e86e3a64887e1958dfda7286bbbd33a6b117999dc1310c5f", "lines": 2047 },
+    "regex/submatch.jsonl": { "sha256": "6e14b59f5dfb652d1c2b2c955be9ec3bbeadf0c4bbbc4b8e34df3fd786fe8a4d", "lines": 66 },
     "regex/unicodetable.jsonl": { "sha256": "48d9ef43dc955239ee5f447ea96a2a067bc7f716f3c91823a13cfe7f1cabd6a9", "lines": 159 },
     "schema/metadata.jsonl": { "sha256": "78589f8c8b8a2e37c07785e95cd885eb168eb206b566fd29b97263ecb027b0a0", "lines": 186 },
     "schema/metadatalabel.jsonl": { "sha256": "d3b03912c2e31300fbe1e5fde4ecd12d98c340a2d95fcbc166302fc65603a598", "lines": 28 },
