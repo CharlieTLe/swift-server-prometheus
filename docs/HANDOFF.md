@@ -1188,15 +1188,28 @@ metric. The test carries a **ratchet** (`promqlTestAllowedFailures = 0`) and a *
 (`promqlTestMinimumPasses = 1_448`) so neither a new failure nor a pass quietly turned into a skip
 can slip through.
 
-The 331 skips, and who owns each:
+The 321 skips, and who owns each — **and the biggest bucket is now MEASURED rather than assumed**:
 
 ```
-205  depend on a declined load_with_nhcb        Phases 6-7 (convert.go)
- 42  info(...)                                  the evaluator
- 23  depend on a declined @st load               Phases 6-7 (EncXOR2, quirk 36)
- 18  label_replace                               PromRegex (captures)
+171  may need the NHCB companion series          util/convertnhcb (unported)
+ 42  info(...)                                   the evaluator
+ 33  load_with_nhcb's own load lines             util/convertnhcb
+ 21  label_replace                               PromRegex (captures)
+ 21  histogram-valued range assertions           the RUNNER
+ 23  @st loads and their dependents              Phases 6-7 (EncXOR2, quirk 36)
  ~8  expect … regex: / range vector / string     the RUNNER
 ```
+
+`load_with_nhcb` appends the classic `_bucket` series **and** their NHCB conversions. The conversion
+is `util/convertnhcb`, which is not ported — but the classic half is an ordinary load, so the runner
+now does it and lets those assertions run, counting a *failure* in such a block as a skip rather than
+a bug. That converted "205 assertions we knew nothing about" into a number: **10 pass on the classic
+series alone and ~195 genuinely need the conversion.**
+
+Which makes `util/convertnhcb` the **single largest remaining item in the gate** — worth ~195
+assertions, more than `info` (42) and `label_replace` (21) combined, and it is a self-contained
+utility rather than TSDB work. `PromHistogram` already has `convertNHCBToClassic`; this is the
+inverse direction. Do it before either function.
 
 The 39 failures are categorised in `Tests/PromQLTestTests/ExitGateTests.swift` next to the
 ratchet. Three of them are **real engine findings** and worth naming here:

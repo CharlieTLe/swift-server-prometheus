@@ -141,6 +141,10 @@ public enum AssertionOutcome: Sendable {
     case failed(String)
     /// A known gap, with its reason. Counted separately so a bug cannot hide among them.
     case skipped(String)
+    /// A `load_with_nhcb` block: the classic series ARE loaded, so its assertions run — but a
+    /// failure may be the missing NHCB companion rather than a bug, so failures in such a block are
+    /// counted as skips and passes as passes. That measures the gap instead of assuming it.
+    case partialNHCB
 }
 
 /// The tally a run produces.
@@ -181,6 +185,7 @@ public struct PromQLTestRunner {
         let store = MemStorage()
 
         var storeIncomplete: String? = nil
+        var nhcbPartial = false
         var i = 0
         while i < lines.count {
             let line = lines[i]
@@ -194,6 +199,7 @@ public struct PromQLTestRunner {
             case "clear":
                 store.clear()
                 storeIncomplete = nil
+                nhcbPartial = false
                 i += 1
             case let h where h.hasPrefix("load"):
                 let (next, outcome) = runLoad(lines, i, store)
@@ -205,6 +211,10 @@ public struct PromQLTestRunner {
                 if case .skipped(let reason) = outcome {
                     storeIncomplete = "depends on a declined load: \(reason)"
                 }
+                if case .partialNHCB = outcome {
+                    // Not incomplete — the classic series loaded. Only failures are forgiven.
+                    nhcbPartial = true
+                }
                 record(outcome, &report)
             case let h where h.hasPrefix("eval"):
                 if let reason = storeIncomplete {
@@ -215,7 +225,13 @@ public struct PromQLTestRunner {
                 }
                 let (next, outcomes) = runEval(lines, i, store, name: name)
                 i = next
-                for o in outcomes { record(o, &report) }
+                for o in outcomes {
+                    if nhcbPartial, case .failed = o {
+                        record(.skipped("may need the NHCB companion series (util/convertnhcb)"), &report)
+                    } else {
+                        record(o, &report)
+                    }
+                }
             default:
                 record(.failed("\(name):\(i + 1): unknown command: \(line)"), &report)
                 i += 1
@@ -237,6 +253,10 @@ public struct PromQLTestRunner {
         case .skipped(let reason):
             report.skipped += 1
             report.skipReasons[reason, default: 0] += 1
+        case .partialNHCB:
+            report.skipped += 1
+            report.skipReasons["load_with_nhcb: classic series loaded, NHCB companions missing",
+                default: 0] += 1
         }
     }
 

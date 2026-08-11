@@ -143,12 +143,12 @@ struct PromQLTestTests {
 let promqlTestAllowedFailures = 2
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 1,888 of 2,221 (85%), with 2 failures — and BOTH are a Phase 6-7 dependency rather than an
+// 1,898 of 2,221 (85%), with 2 failures — and BOTH are a Phase 6-7 dependency rather than an
 // engine bug, so the engine has no known divergence left that the gate can see. The 331 skips are itemised by the run itself and
 // every one names a known gap: 228 depend on `load_with_nhcb` or `@st` (Phases 6-7), 60 are
 // `info`/`label_replace`, and the rest are `expect … regex:` and the two `expect range
 // vector`/`expect string` directives.
-let promqlTestMinimumPasses = 1_888
+let promqlTestMinimumPasses = 1_898
 
 extension String {
     fileprivate func padded(to n: Int) -> String {
