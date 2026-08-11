@@ -2241,21 +2241,27 @@ which needs `ChunkOrIterable`'s iterable half — and a block never produces one
 from the out-of-order head, so it is Phase 7's; the port throws `iterableNotSupported` rather than silently
 returning nothing if an iterable ever arrives.
 
-**The `currDelIter` gap this slice was meant to close is STILL OPEN, and the finding is why.** The
-expectation was that nil-ness becomes observable once something uses it to decide whether to re-encode. It
-does decide that — but for a block the two outcomes look byte-identical, because XOR encoding is
-deterministic over a sample sequence, so re-encoding an undeleted chunk reproduces its original bytes. The
-branch would then be a cost saving here and load-bearing only for the Head, where the chunk is open and
-`copyHeadChunk` interacts with it.
+**The `currDelIter` gap this slice was meant to close did not close — and the experiment that settles it has
+now been run.** The expectation was that nil-ness becomes observable once something uses it to decide whether
+to re-encode. It does decide that, but the control kept surviving, and the reasoning for why was easy: XOR
+encoding is deterministic over a sample sequence, so re-encoding an undeleted chunk should reproduce its
+original bytes.
 
-That argument is **reasoning, not evidence**, and quirk 159 is specifically about distrusting this shape. So
-it is recorded as a hypothesis with the experiment that settles it: emit the chunk BYTES on both sides and
-compare, on a corpus with deleted and undeleted chunks side by side. Cheap, and the next thing to do.
+Quirk 159 is specifically about distrusting that shape of reasoning, so rather than write it up as an
+equivalence, the corpus was extended to record **every chunk's BYTES** — `it.At().Chunk.Bytes()` on the Go
+side, `current.bytes` on the port's — over cases with trimmed and untrimmed chunks side by side. The control
+still survives.
 
-**Next in Phase 6, in this order:** the chunk-bytes comparison above (settles the `currDelIter` hypothesis
-either way), then `blockQuerier.Select`, and Phase 6's read path is closed. Two gaps stay open past that by
-construction and are Phase 7's: `Err` ordering and the undecodable-encoding path both need malformed or
-non-XOR chunk bytes in a fixture input, which no block the port can currently write contains.
+So the equivalence is **established rather than assumed**: for a block, the branch is a cost saving, and it is
+load-bearing only for the Head where the chunk is open and `copyHeadChunk` interacts with it. Kept because it
+is upstream's shape and because the Head will need it. The bytes stay in the corpus — they are the strongest
+assertion in this suite, and they now also pin the re-encoder itself.
+
+**Next in Phase 6:** `blockQuerier.Select` — `selectSeriesSet`'s hint handling (`Start`/`End` overriding the
+querier's range, `DisableTrimming`, `Func == "series"` substituting a nop chunk reader) and
+`blockChunkQuerier`. Then Phase 6's read path is closed. Two gaps stay open past it by construction and are
+Phase 7's: `Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes in a
+fixture input, which no block the port can currently write contains.
 
  The port derives a trimmed chunk's RANGE from its
    first and last surviving sample, which is what that iterator does to set a rewritten meta's bounds — but

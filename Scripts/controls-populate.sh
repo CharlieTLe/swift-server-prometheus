@@ -47,12 +47,16 @@ perl -0pi -e 's/            if chunkIntervals\.isEmpty \{\n                \/\/ 
 # the original bytes. The branch is then a cost saving here, and load-bearing only for the HEAD, where the
 # chunk is open and `copyHeadChunk` interacts with it.
 #
-# **That argument is reasoning, not evidence, and quirk 159 says to distrust exactly this shape.** It is
-# recorded as a hypothesis with the test that would settle it: emit the chunk BYTES from
-# `it.At().Chunk.Bytes()` on the Go side and from `current.bytes` on the port's, and compare. If they differ
-# for an undeleted chunk the branch is observable and this is a real gap; if they match on a corpus that
-# includes deleted and undeleted chunks side by side, the equivalence is established rather than assumed.
-# Cheap to do and not yet done.
+# That argument was reasoning rather than evidence when first written, and quirk 159 says to distrust exactly
+# this shape — so it was recorded as a hypothesis with the experiment that settles it. **The experiment has now
+# been run.** `block/seriesset.jsonl` records every chunk's BYTES (`it.At().Chunk.Bytes()` on the Go side,
+# `current.bytes` on the port's), over a corpus containing trimmed and untrimmed chunks side by side, and the
+# control still survives.
+#
+# So the equivalence is ESTABLISHED, not assumed: for a block, re-encoding an undeleted XOR chunk reproduces
+# its original bytes, because XOR encoding is deterministic over a sample sequence. The branch is a cost
+# saving here and load-bearing only for the HEAD, where the chunk is open and `copyHeadChunk` interacts with
+# it. Kept for that reason and because it is upstream's shape.
 perl -0pi -e 's/                currDelIter = nil\n                return true/                currDelIter = nil\n                return false/' "$P"; run "an undeleted chunk ends the iteration"
 
 echo "=== the exhaustion bound and its -1 start ==="

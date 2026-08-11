@@ -34,6 +34,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 
@@ -85,8 +86,12 @@ type seriesSetOut struct {
 	// the current chunk, one landing in a LATER chunk, and one past the end — and those are all reachable
 	// from `mint`/`maxt` without new plumbing. `block/deletediter.jsonl` carries the free-form op scripts.
 	SeekTimes [][][]int64 `json:"seekTimes"`
-	Errs      []string    `json:"errs"`
-	OpenErr   string      `json:"openErr"`
+	// Per query, per series: each chunk's BYTES, hex. This is what settles whether `currDelIter`'s nil-ness
+	// is observable for a block — pass-through versus re-encoded — rather than leaving it to the reasoning
+	// that XOR encoding is deterministic and therefore the two must agree. See §6u.
+	ChunkBytes [][][]string `json:"chunkBytes"`
+	Errs       []string     `json:"errs"`
+	OpenErr    string       `json:"openErr"`
 }
 
 func genBlockSeriesSet(e *emitter) {
@@ -140,6 +145,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.SeekTimes = append(out.SeekTimes, [][]int64{})
+				out.ChunkBytes = append(out.ChunkBytes, [][]string{})
 				out.Errs = append(out.Errs, ierr.Error())
 				continue
 			}
@@ -150,6 +156,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.SeekTimes = append(out.SeekTimes, [][]int64{})
+				out.ChunkBytes = append(out.ChunkBytes, [][]string{})
 				out.Errs = append(out.Errs, cerr.Error())
 				continue
 			}
@@ -161,6 +168,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.SeekTimes = append(out.SeekTimes, [][]int64{})
+				out.ChunkBytes = append(out.ChunkBytes, [][]string{})
 				out.Errs = append(out.Errs, terr.Error())
 				continue
 			}
@@ -197,6 +205,7 @@ func genBlockSeriesSet(e *emitter) {
 				out.ChunkRanges = append(out.ChunkRanges, [][][2]int64{})
 				out.SampleTimes = append(out.SampleTimes, [][]int64{})
 				out.SeekTimes = append(out.SeekTimes, [][]int64{})
+				out.ChunkBytes = append(out.ChunkBytes, [][]string{})
 				out.Errs = append(out.Errs, bad)
 			}
 			ir.Close()
@@ -355,19 +364,28 @@ func runSeriesSet(
 
 	sets := []string{}
 	ranges := [][][2]int64{}
+	allBytes := [][]string{}
 	for ss.Next() {
 		s := ss.At()
 		sets = append(sets, s.Labels().String())
 		rs := [][2]int64{}
+		bs := []string{}
 		it := s.Iterator(nil)
 		for it.Next() {
 			m := it.At()
 			rs = append(rs, [2]int64{m.MinTime, m.MaxTime})
+			if m.Chunk != nil {
+				bs = append(bs, hex.EncodeToString(m.Chunk.Bytes()))
+			} else {
+				bs = append(bs, "")
+			}
 		}
 		ranges = append(ranges, rs)
+		allBytes = append(allBytes, bs)
 	}
 	out.LabelSets = append(out.LabelSets, sets)
 	out.ChunkRanges = append(out.ChunkRanges, ranges)
+	out.ChunkBytes = append(out.ChunkBytes, allBytes)
 
 	// A SECOND pass through `blockQuerier.Select`, which is the exported route to
 	// `populateWithDelSeriesIterator` — the flat SAMPLE view over a series' chunks. A fresh querier rather

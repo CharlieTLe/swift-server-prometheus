@@ -6,7 +6,7 @@
     "block/deletediter.jsonl": { "sha256": "ce3aa18ff31b93b29714661439dc449203dc29424203c7be6d643ef8ea303c15", "lines": 41 },
     "block/labels.jsonl": { "sha256": "4e7b75076ef34b97592c5ccb87a9f9127485b75f7f6437b0c0651754a5b8b36c", "lines": 7 },
     "block/meta.jsonl": { "sha256": "156998aedb669f9fb9215a35ad9d563664b1098d4714617b507bf6b93ff9f4d3", "lines": 25 },
-    "block/seriesset.jsonl": { "sha256": "ca811af8cbf39bf295529349643514113c2be3800a331841fb44ee8b490639b4", "lines": 7 },
+    "block/seriesset.jsonl": { "sha256": "d24d26a488c0d37e7433e24e0ac576e316e3847315c3364c3b111784a44c6bb4", "lines": 7 },
     "block/tsintervals.jsonl": { "sha256": "4d7dac3c8ae231f73ede9ce9566648120270f18965db09c1ac56de49c8286a52", "lines": 38 },
     "chunkenc/chunkmeta.jsonl": { "sha256": "32475dd0955ef4d422b5eae7e9481989d66baadf654568e88d8c5ae871cd136b", "lines": 140 },
     "chunkenc/compatible.jsonl": { "sha256": "705caedcd4167985825cbcb5ecb43ce9699d8894e024e55d071c9c9b8af76481", "lines": 36 },
