@@ -2120,6 +2120,16 @@ changing behaviour.
     `NewDecbufUvarintAt` failure with `get buffer for series: %w` and no `read series:` prefix. Two corpus
     cases caught the port double-wrapping.
 
+141. **A SWIFT trap rather than a Go quirk, recorded here because it will recur.** For a `Dictionary`
+    whose Value is itself Optional — `[String: [UInt8]?]` — subscript-assigning `nil` **removes the key**
+    instead of storing a nil value. `InMemoryFS` used `files[dir] = nil` to mean "this path is a
+    directory", which created nothing at all: seven of nine tests failed with "no such file or directory"
+    before it was spotted. `updateValue(nil, forKey:)` is the spelling that stores.
+
+    Any port that models "present but empty" as an Optional value in a dictionary has this hazard. The
+    alternative — a separate set of directory paths — trades the trap for a second structure to keep in
+    sync, which is why the fix is the spelling rather than the shape.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

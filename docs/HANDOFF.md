@@ -1725,10 +1725,38 @@ is the one worth internalising:
   asked** — `read series:` from `Reader.Series`, `get buffer for series:` from `LabelNamesFor`. Two cases
   caught the port double-wrapping.
 
-**Next in Phase 6: `PromFS` from ADR-15.** It is now the only thing between the port and a real on-disk
-block: the index and chunk READERS are done and pinned, and both writers are blocked on nothing else.
-ADR-15 already fixes the shape (a narrow protocol, in-memory for corpora, `FileManager` for real use, no
-mmap), so this is implementation rather than design. `MemPostings` waits for the Head in Phase 7.
+### 6g. `PromFS` — LANDED (the protocol and the in-memory implementation)
+
+`Sources/PromFS/PromFS.swift` implements ADR-15's seam: `PromFS`, `FSWriteHandle`, `FSReadHandle`, and
+`InMemoryFS`. **`RealFS` (the `FileManager`-backed one) is not written yet** — nothing needs it until the
+port has to read a directory a real Prometheus produced, and every corpus wants the in-memory one.
+
+`PromFS` is NOT a port, so it has no differential corpus: there is no Go function to compare against.
+`PromFSTests` is nine hand-written behavioural tests, which is the right shape here and is argued next to
+them — the upstream behaviour that matters gets pinned where it belongs, in the index and chunk WRITERS
+that will run on top, whose bytes are compared against Go's. A bug in `InMemoryFS` surfaces there as wrong
+bytes.
+
+Three of the tests assert things that look like nothing:
+
+* `write(at:)` must **not** move the append position — Go's file offset and `FileWriter.Pos()` are
+  separate, and `index.Writer` relies on it when it patches a length prefix and keeps appending;
+* `sync` and `syncDirectory` **succeed without doing anything**, because ADR-15 declines durability.
+  Asserting that stops a later reader "fixing" them;
+* a reader **snapshots** the file at open, because ADR-15 declines mmap. That is a real divergence from
+  upstream, where an appender's writes can become visible to an open reader — the same concurrency
+  question quirk 120 raised for chunks — and asserting it keeps the divergence documented rather than
+  incidental.
+
+**One bug found, and it is a Swift trap worth knowing** (quirk 141): for `[String: [UInt8]?]`,
+`files[k] = nil` REMOVES the key rather than storing a nil value, so "this path is a directory" created
+nothing. Seven of nine tests failed with "no such file or directory" before it was spotted;
+`updateValue(nil, forKey:)` is the spelling that stores.
+
+**Next in Phase 6:** the chunk and index WRITERS on top of `PromFS`, which is now unblocked and is where
+Phase 6 finally produces a readable on-disk block. Both are pinnable the same way §6e and §6f were — the
+oracle writes with Go, the port writes to `InMemoryFS`, and the byte strings are compared. Then `RealFS`,
+thinly. `MemPostings` waits for the Head in Phase 7.
 
 A note for whoever writes the next generator: put anything the port cannot compute in the fixture's
 **input**, not its output. The file bytes were on the output side first, which had the port comparing
