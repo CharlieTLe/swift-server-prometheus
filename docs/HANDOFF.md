@@ -2032,6 +2032,46 @@ through `NewBlockQuerier` — which needs a `tsdb.BlockReader`, and that interfa
 of `querier.go`**, including `blockQuerier.Select` and the `populateWithDel*` iterators — so write it once,
 carefully, as its own step.
 
+### 6p. `labelValuesWithMatchers` / `labelNamesWithMatchers` — LANDED, on a real block
+
+`Sources/PromBlock/BlockLabelQueries.swift`, plus the `blockIndexReader` dispatch above them.
+
+**The seam is the story here, and `oracle/blockfixture.go` is the reusable part.** Both functions are
+unexported. The obvious way in is an oracle-side type satisfying `tsdb.BlockReader` by delegating to
+`index.Reader` — five trivial methods — and it would have been wrong twice: `Block.Index()` returns
+`blockIndexReader`, not the raw reader, and `blockIndexReader.LabelValues` is *precisely* the code that
+decides between `ir.LabelValues` and `labelValuesWithMatchers`. Delegating bypasses the function under test;
+reproducing the wrapper puts upstream logic in the grader (quirk 161).
+
+So the oracle writes the three files a block is — chunks, then index (it needs the refs), then `meta.json`
+(its stats come from the other two) — and hands them to `tsdb.OpenBlock`, then queries through
+`tsdb.NewBlockQuerier`. **That helper is the unlock for the rest of `tsdb/querier.go`**, `blockQuerier.Select`
+and the `populateWithDel*` iterators included. Write new querier suites on top of it rather than inventing a
+second way in.
+
+Behaviours worth carrying:
+
+- **The dispatch itself.** No matchers goes straight to the index reader; any matcher goes through the
+  filter. `SortedLabelValues` adds a second layer — with matchers it sorts what `LabelValues` returned, with
+  none it asks the reader for sorted values — so the two entry points differ in ORDER and both are reachable.
+  The corpus records both forms of every value query; they differ in 2 of 43.
+- **A matcher on the queried name prunes before postings are read**, and does NOT set
+  `hasMatchersForOtherLabels` — so if every matcher names the queried label, the filtered values *are* the
+  answer and no postings are touched.
+- **Quirk 160: the limit acts over two different orders.** Not two mechanisms — that framing is a tautology
+  and this file's header said it first, before a control proved otherwise. What is real is that the
+  postings branch walks a heap's order, so a limit there keeps a set the sorted order would not choose.
+  Sorting `indexes` first breaks 2 of 7 cases.
+
+21 controls, 17 broke. Two provable survivors, plus a deliberate no-op and a deliberate **tautology** —
+the latter kept as the complement to quirk 159: not every survivor is a corpus gap, and the test is whether
+the perturbation changes what is computed or only how it is spelled.
+
+**Next in Phase 6:** `blockBaseSeriesSet` and the `populateWithDel*` iterators, then `blockQuerier.Select`
+and `blockChunkSeriesSet` — all now reachable through `blockfixture.go`. That is where
+`BlockReader.samples(_:)`'s XOR-only shortcut goes away, and where the 2,183-assertion promqltest gate could
+start running against a real block instead of `MemStorage`.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.

@@ -2275,6 +2275,32 @@ changing behaviour.
     elsewhere in the sweeps are argued from *proofs about the data* (a superset intersection, an empty
     subtraction, two offsets assigned the same value on adjacent lines) — not from reasoning about order.
 
+160. **`labelValuesWithMatchers` applies its limit over two different ORDERS, and that is the observable
+    difference — not the mechanism.** With no other-label matchers it truncates the filtered values, which
+    are in the index's own (sorted) order. With them, it stops collecting while walking
+    `FindIntersectingPostings`' returned order, which is a heap's (quirk 158). So the same limit on the same
+    label can keep a set the sorted order would not have chosen.
+
+    Worth stating precisely because a first version of this note claimed the *mechanism* differed —
+    "stop-at-k versus truncate-to-k" — which is a tautology: both select the same prefix of the same
+    sequence, and a control asserting otherwise can never break. Sorting `indexes` before collecting is what
+    breaks, on 2 of 7 corpus cases. `controls-blocklabels.sh` keeps the tautological control, marked, as the
+    complement to quirk 159: **not every survivor is a corpus gap — some perturbations change the spelling
+    and not the function**, and the test is whether the perturbation changes what is computed.
+
+161. **A fixture generator must not reimplement the code it is grading.** `labelValuesWithMatchers` and
+    `labelNamesWithMatchers` are unexported, and the obvious way to reach them is an oracle-side type
+    satisfying `tsdb.BlockReader` by delegating to `index.Reader` — five trivial methods. That would have
+    been wrong twice over: `Block.Index()` returns `blockIndexReader`, not the raw reader, and
+    `blockIndexReader.LabelValues` is *precisely* the code that decides between `ir.LabelValues` and
+    `labelValuesWithMatchers`. Delegating to the raw reader bypasses the function under test; reproducing
+    `blockIndexReader` in the oracle puts upstream logic in the grader.
+
+    So `oracle/blockfixture.go` writes the three files a block is — chunks, then index (it needs the refs),
+    then `meta.json` (its stats come from the other two) — and hands them to `tsdb.OpenBlock`. Everything
+    downstream is real upstream code. This is the seam the rest of `tsdb/querier.go` needs, `blockQuerier
+    .Select` included.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
