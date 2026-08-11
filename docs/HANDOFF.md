@@ -415,6 +415,16 @@ where I had written a plausible expectation and the fixture proved the implement
   `GaugeType`, or skipping `Compact` altogether. Three controls passed that should not have. Both
   corpora now emit the hint and a full span/bucket rendering. Quirk 56. **When adding a corpus that
   renders a type an older corpus already renders, go and read what the older one had to add.**
+- **"I regenerated it twice and it matched" does not establish determinism for a Go map.**
+  `count_values("a b", cv)` produced three rows in map order — `a b` is *valid* under UTF8
+  validation, a space and all, so it does not error the way the corpus assumed — and four local
+  regenerations agreed. **CI disagreed on the first try.** With three entries the number of
+  orders is small enough that repeated runs coincide by chance, so the sample size that convinces
+  you locally is exactly the sample size that proves nothing. The fix is structural (sort the
+  result, or restrict to one row), not statistical. Note the companion trap in the same slice:
+  sorting only rescues an order when the sort **key** is unambiguous — a
+  `sort_by_label(count_values(…))` case still drifted, because `natsort.Compare` treats `0.1` and
+  `0.000000001` as equal. Quirk 96.
 - **`verify-fixtures.sh` earns its keep on nondeterminism, not just on drift.** A case with two
   annotations recorded them in Go's map order, so `promql/functions-overtime.jsonl` differed between
   regenerations — the exact "a fixture whose own output is nondeterministic is worse than no fixture"

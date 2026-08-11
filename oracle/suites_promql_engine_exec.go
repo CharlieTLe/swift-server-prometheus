@@ -1046,7 +1046,11 @@ func genPromQLExec(e *emitter) {
 		{`count_values("", cv)`, cvSeries},
 		{`sort_by_label(count_values("a.b", cv), "a.b")`, cvSeries},
 		{`sort_by_label(count_values("é", cv), "é")`, cvSeries},
-		{`count_values("a b", cv)`, cvSeries},
+		// `a b` is VALID under UTF8 validation — a space is fine — so this succeeds with three
+		// rows, and a bare `count_values` exposes the Go map's order. It has to be sorted, and two
+		// local reruns agreeing does not establish otherwise: with three entries Go's randomised
+		// map order repeats by chance often enough to fool a pair of runs. CI caught it.
+		{`sort_by_label(count_values("a b", cv), "a b")`, cvSeries},
 		// A value whose `'f'` and `'g'` renderings DIFFER — `1e-9` is `0.000000001` under `'f'`
 		// and `1e-09` under `'g'`. One output row, so the order is not in question.
 		{`count_values("v", ix{i="5"})`, aggInexact},
