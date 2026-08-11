@@ -194,17 +194,9 @@ struct BlockSeriesSetTests {
                         disableTrimming: q.disableTrimming)
                     // The hint-driven set, used for the sample and seek passes below.
                     let selectMs = ms.isEmpty ? [try Matcher(.equal, "", "")] : ms
-                    let (hintSet, _) = try blockSelect(
-                        index: ix, chunks: source, mint: q.mint, maxt: q.maxt,
-                        matchers: selectMs, sortSeries: false,
-                        hints: BlockSelectHints(
-                            start: q.effectiveHints.start, end: q.effectiveHints.end,
-                            disableTrimming: q.disableTrimming))
-                    var hintSeries: [SeriesData] = []
-                    while hintSet.next() {
-                        if let c = hintSet.current { hintSeries.append(c) }
-                    }
-                    var hintIndex = 0
+                    let hintSpec = BlockSelectHints(
+                        start: q.effectiveHints.start, end: q.effectiveHints.end,
+                        disableTrimming: q.disableTrimming)
                     var sets: [String] = []
                     var ranges: [[[Int64]]] = []
                     var times: [[Int64]] = []
@@ -219,37 +211,60 @@ struct BlockSeriesSetTests {
                         // than derived from the sample iterator — which is what makes `currDelIter`'s
                         // nil-ness observable: an undeleted chunk passes its ORIGINAL bytes through, a
                         // deleted one is re-encoded, and the meta's bounds come from the surviving samples.
-                        var rs: [[Int64]] = []
-                        var bs: [String] = []
-                        let chunkIt = PopulateWithDelChunkSeriesIterator(
-                            blockID: "", source: source, metas: cur.chunks,
-                            intervals: cur.intervals)
-                        while chunkIt.next() {
-                            guard let c = chunkIt.current else { continue }
-                            rs.append([c.meta.minTime, c.meta.maxTime])
-                            bs.append(c.bytes.map { String(format: "%02x", $0) }.joined())
-                        }
-                        if let e = chunkIt.err() { throw e }
-                        ranges.append(rs)
-                        allBytes.append(bs)
+                        _ = cur
 
-                        _ = 0
                     }
                     // The sample and seek passes, as their own loop over the HINT-driven series — the hint
                     // range can select a DIFFERENT NUMBER of series than the querier's range, so they cannot
                     // be nested inside the label loop. That is what made 1 of 8 cases mismatch until the two
                     // passes were separated; the gap §6v declared caught a harness bug, not a port bug.
-                    for hintCur in hintSeries {
-                        let flat = PopulateWithDelSeriesIterator(
-                            blockID: "", source: source, metas: hintCur.chunks,
-                            intervals: hintCur.intervals)
-                        var ts: [Int64] = []
-                        while flat.next() != .none { ts.append(flat.atT()) }
-                        times.append(ts)
+                    // The chunk view, through `blockChunkQuerierSelect`. The oracle drives this half with
+                    // `NewBlockChunkSeriesSet` on the querier's OWN range, so no hints here — the split the
+                    // previous commit's harness bug was about.
+                    // Hints carrying the querier's OWN range — so the override is a no-op — but the real
+                    // `disableTrimming`, which `NewBlockChunkSeriesSet` receives directly on the Go side and
+                    // which `blockSelect` reads only from hints. Passing nil hints here defaults it to false
+                    // and mismatched 6 of 8 cases: the flag has no other route in.
+                    let chunkSet = try blockChunkQuerierSelect(
+                        index: ix, chunks: source, mint: q.mint, maxt: q.maxt,
+                        matchers: selectMs,
+                        hints: BlockSelectHints(
+                            start: q.mint, end: q.maxt, disableTrimming: q.disableTrimming))
+                    while chunkSet.next() {
+                        guard let cc = chunkSet.current else { continue }
+                        var rs: [[Int64]] = []
+                        var bs: [String] = []
+                        while cc.iterator.next() {
+                            guard let c = cc.iterator.current else { continue }
+                            rs.append([c.meta.minTime, c.meta.maxTime])
+                            bs.append(c.bytes.map { String(format: "%02x", $0) }.joined())
+                        }
+                        if let e = cc.iterator.err() { throw e }
+                        ranges.append(rs)
+                        allBytes.append(bs)
+                    }
+                    if let e = chunkSet.err() { throw e }
 
-                        let sk = PopulateWithDelSeriesIterator(
-                            blockID: "", source: source, metas: hintCur.chunks,
-                            intervals: hintCur.intervals)
+                    // Through `blockQuerierSelect` — the real entry point, so the sample/chunk distinction is
+                    // exercised where a reader would look for it rather than assembled here.
+                    let sampleSet = try blockQuerierSelect(
+                        index: ix, chunks: source, mint: q.mint, maxt: q.maxt,
+                        matchers: selectMs, hints: hintSpec)
+                    while sampleSet.next() {
+                        guard let cur2 = sampleSet.current else { continue }
+                        var ts: [Int64] = []
+                        while cur2.iterator.next() != .none { ts.append(cur2.iterator.atT()) }
+                        times.append(ts)
+                    }
+                    if let e = sampleSet.err() { throw e }
+
+                    // The seek script needs a fresh set: the one above is exhausted.
+                    let seekSet = try blockQuerierSelect(
+                        index: ix, chunks: source, mint: q.mint, maxt: q.maxt,
+                        matchers: selectMs, hints: hintSpec)
+                    while seekSet.next() {
+                        guard let cur3 = seekSet.current else { continue }
+                        let sk = cur3.iterator
                         var res: [Int64] = []
                         let hs = q.effectiveHints
                         let mid = hs.start + (hs.end - hs.start) / 2
@@ -267,6 +282,7 @@ struct BlockSeriesSetTests {
                         record(sk.next())
                         seeks.append(res)
                     }
+                    if let e = seekSet.err() { throw e }
 
                     out.labelSets.append(sets)
                     out.chunkRanges.append(ranges)

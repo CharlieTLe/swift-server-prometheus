@@ -2293,8 +2293,33 @@ Three behaviours worth carrying:
   block, since postings are in ref order and refs are assigned in label order. `ShardedPostings` needs the
   label hash and throws rather than silently returning unsharded results — Phase 7's.
 
-**Next in Phase 6:** only `blockChunkQuerier` remains, and it is `blockSelect` plus §6u's iterator with no
-logic of its own — the corpus already drives both halves. After that Phase 6's read path is closed, and the two
+### 6w. `blockQuerier` and `blockChunkQuerier` — LANDED. Phase 6's READ PATH IS CLOSED.
+
+`blockQuerierSelect` / `blockChunkQuerierSelect` plus the two series sets they return. Upstream's two queriers
+differ in exactly one thing — which iterator `At()` wraps the shared `seriesData` in — so these functions are
+deliberately logic-free, and a reader looking for the sample/chunk distinction finds it here and nowhere else.
+
+`block/seriesset.jsonl` now drives BOTH through the real entry points rather than assembling the iterators in
+the test: the chunk view through `blockChunkQuerierSelect`, the sample and seek views through
+`blockQuerierSelect`.
+
+**One finding, and it is a design wart worth knowing before Phase 7 wires the engine to this.**
+`disableTrimming` reaches `blockSelect` ONLY through hints. Upstream's `newBlockChunkSeriesSet` takes it as a
+direct argument, but `selectSeriesSet` — the only path an exported `Select` offers — reads it from
+`hints.DisableTrimming` and defaults it to false when hints are nil. So calling the chunk querier with nil
+hints silently enables trimming, which mismatched 6 of 8 corpus cases the moment the chunk view was routed
+through the real entry point. The flag has no other route in. A caller that wants untrimmed chunks *must*
+supply hints, and nothing in the signature says so.
+
+That is the third harness-level bug this suite has caught in three commits (after the two-entry-point split
+and the nested-loop zip), and all three share a shape: **the corpus exercised a behaviour through a path the
+port had not been made to mirror.** Routing the test through the real entry points is what surfaced them —
+assembling the pieces by hand in the test hid all three.
+
+**Phase 6's read path is complete.** A block Prometheus wrote can be opened, matched, selected, trimmed and
+read as samples or chunks, with every layer pinned against upstream on real files. Two gaps stay open by
+construction and are Phase 7's: `Err` ordering and the undecodable-encoding path both need malformed or
+non-XOR chunk bytes, which no block the port can currently write contains. After that Phase 6's read path is closed, and the two
 gaps that stay open are Phase 7's by construction (`Err` ordering and the undecodable-encoding path both need
 malformed or non-XOR chunk bytes, which no block the port can currently write contains).
 

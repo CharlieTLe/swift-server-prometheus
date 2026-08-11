@@ -139,3 +139,99 @@ public func blockSelect(
         tombstonesFor: tombstonesFor)
     return (set, source)
 }
+
+// MARK: - The two queriers
+
+/// Go: `blockQuerier.Select` — a series set whose members iterate SAMPLES.
+///
+/// `blockQuerier` and `blockChunkQuerier` differ in exactly one thing upstream: which iterator `At()` wraps
+/// the shared `seriesData` in (`blockSeriesEntry` versus `chunkSeriesEntry`). Both embed the same
+/// `blockBaseSeriesSet` and both call the same `selectSeriesSet`. So these two functions are the difference,
+/// and there is deliberately no logic in either — a reader looking for the sample/chunk distinction should
+/// find it here and nowhere else.
+public func blockQuerierSelect(
+    index: any SeriesIndex & PostingsIndex, chunks: any BlockChunkSource,
+    mint: Int64, maxt: Int64, matchers: [Matcher], sortSeries: Bool = false,
+    hints: BlockSelectHints? = nil,
+    tombstonesFor: @escaping (SeriesRef) throws -> [DeletionInterval] = { _ in [] }
+) throws -> BlockSampleSeriesSet {
+    let (set, source) = try blockSelect(
+        index: index, chunks: chunks, mint: mint, maxt: maxt, matchers: matchers,
+        sortSeries: sortSeries, hints: hints, tombstonesFor: tombstonesFor)
+    return BlockSampleSeriesSet(set: set, source: source)
+}
+
+/// Go: `blockChunkQuerier.Select` — a series set whose members iterate CHUNKS.
+public func blockChunkQuerierSelect(
+    index: any SeriesIndex & PostingsIndex, chunks: any BlockChunkSource,
+    mint: Int64, maxt: Int64, matchers: [Matcher], sortSeries: Bool = false,
+    hints: BlockSelectHints? = nil,
+    tombstonesFor: @escaping (SeriesRef) throws -> [DeletionInterval] = { _ in [] }
+) throws -> BlockChunkSeriesSet {
+    let (set, source) = try blockSelect(
+        index: index, chunks: chunks, mint: mint, maxt: maxt, matchers: matchers,
+        sortSeries: sortSeries, hints: hints, tombstonesFor: tombstonesFor)
+    return BlockChunkSeriesSet(set: set, source: source)
+}
+
+/// Go: `blockSeriesSet` — `At()` yields a series whose iterator is `populateWithDelSeriesIterator`.
+public final class BlockSampleSeriesSet {
+    private let set: BlockBaseSeriesSet
+    private let source: any BlockChunkSource
+    /// Go: `At()`. Upstream's comment — "At can be looped over before iterating, so save the current values
+    /// locally" — is why this is captured on `next()` rather than read from the base set on demand.
+    public private(set) var current: (labels: [(name: String, value: String)], iterator: PopulateWithDelSeriesIterator)?
+
+    init(set: BlockBaseSeriesSet, source: any BlockChunkSource) {
+        self.set = set
+        self.source = source
+    }
+
+    public func next() -> Bool {
+        guard set.next(), let cur = set.current else {
+            current = nil
+            return false
+        }
+        current = (
+            cur.labels,
+            PopulateWithDelSeriesIterator(
+                blockID: "", source: source, metas: cur.chunks, intervals: cur.intervals)
+        )
+        return true
+    }
+
+    public func err() -> (any Error)? { set.err() }
+}
+
+/// Go: `blockChunkSeriesSet` — `At()` yields a series whose iterator is
+/// `populateWithDelChunkSeriesIterator`.
+///
+/// Upstream's type comment is worth keeping: "Series with all deleted chunks are still present as Labelled
+/// iterator with no chunks." So a series whose every chunk was deleted appears with an empty iterator rather
+/// than being skipped — the skip in `blockBaseSeriesSet` is for chunks that fall outside the RANGE, not for
+/// chunks the deletions emptied.
+public final class BlockChunkSeriesSet {
+    private let set: BlockBaseSeriesSet
+    private let source: any BlockChunkSource
+    public private(set) var current: (labels: [(name: String, value: String)], iterator: PopulateWithDelChunkSeriesIterator)?
+
+    init(set: BlockBaseSeriesSet, source: any BlockChunkSource) {
+        self.set = set
+        self.source = source
+    }
+
+    public func next() -> Bool {
+        guard set.next(), let cur = set.current else {
+            current = nil
+            return false
+        }
+        current = (
+            cur.labels,
+            PopulateWithDelChunkSeriesIterator(
+                blockID: "", source: source, metas: cur.chunks, intervals: cur.intervals)
+        )
+        return true
+    }
+
+    public func err() -> (any Error)? { set.err() }
+}
