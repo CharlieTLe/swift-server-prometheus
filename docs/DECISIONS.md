@@ -143,6 +143,30 @@ the `HashForLabels`/`HashWithoutLabels` name-merge loops all go through it.
 Note also that only the **sign** of `labels.Compare` is contractual: stringlabels returns a byte
 length delta for the prefix case, slicelabels a label count delta. Every caller is a sort comparator.
 
+## ADR-10a — ADR-10 applies to EQUALITY and HASHING, not just ordering
+
+ADR-10 records that Go compares strings by byte and Swift by Unicode collation, and it is usually cited
+when sorting. **The same divergence applies to `==` and to `Hashable`,** which is easier to miss and
+quieter when wrong:
+
+```swift
+"e\u{301}" == "é"   // true in Swift; the same two byte strings are NOT equal in Go
+```
+
+So a `Set<String>` de-duplicates canonically-equivalent spellings and a `[String: T]` merges them into one
+key. `index.Writer`'s `symbolCache` was `[String: UInt32]`, mapping each symbol to the ordinal a series
+record stores — and with both spellings of `é` in the symbol table, one silently took the other's ordinal.
+The file stayed structurally valid, its CRCs passed, and it decoded to the **wrong labels**.
+
+**Decision.** Anywhere the port keys, de-duplicates or compares strings that originate as Go bytes, use
+`[UInt8]` as the key or comparand. `symbolCache` is `[[UInt8]: UInt32]`; the test harness that rebuilds a
+symbol list de-duplicates on `Array(s.utf8)`.
+
+This was found by a differential corpus and would not have been found by review: the failing case had two
+visually identical symbols, and every rendering of the input — including the fixture's own JSON, and
+`print`ing it — showed them as the same character. What showed the difference was Go writing **seven**
+symbols where the port wrote six.
+
 ## ADR-11 — The PromQL AST is final classes behind a protocol, not an `indirect enum`
 
 `ast.go` uses interfaces plus pointer structs, and the **engine mutates nodes in place**.
