@@ -2019,6 +2019,27 @@ changing behaviour.
     `Merge` passes `SeriesRef(UInt64.max)` with upstream's comment saying so. A real ref that large
     would sort as exhausted and vanish.
 
+126. **A chunk's CRC covers the encoding byte and the data, but NOT the length prefix.** `writeHash`
+    feeds the hash `byte(Chunk.Encoding())` then `Chunk.Bytes()`, and the framing is
+    `<uvarint len> <encoding> <data> <CRC32-C>`. So a corrupted length field is not detected by the
+    checksum — only by the read that follows failing to make sense. Worth knowing before treating a
+    passing CRC as "this chunk is intact".
+
+127. **`NewHeadChunkRef` panics on an over-wide field; `NewBlockChunkRef` does not check at all.** Head
+    refs are 40 bits of series ref and 24 of chunk ID, with `panic("series ID exceeds 5 bytes")` and
+    `panic("chunk ID exceeds 3 bytes")` guarding them. Block refs are 32 and 32 with no guard, so an
+    over-large file index silently shifts out. The port throws rather than traps, because the bound is
+    reachable from data and a `preconditionFailure` cannot be recovered.
+
+128. **`WriteChunks` sizes each chunk with the MAXIMUM varint width, not the actual one.**
+    `MaxChunkLengthFieldSize` is `binary.MaxVarintLen32` = 5, so a segment is cut slightly early —
+    necessarily, since the decision precedes writing the prefix. A port that used the real width produces
+    different segment boundaries for identical input.
+
+    The `firstBatch` clause is the subtle half: for the first batch only, and only when the segment
+    already holds more than a header, the comparison is against bytes-already-written rather than against
+    `SegmentHeaderSize`. That is what tops up a partially filled segment instead of abandoning it.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

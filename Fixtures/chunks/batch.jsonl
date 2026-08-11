@@ -1,0 +1,12 @@
+{"id":"batch/0","in":{"sizes":[100],"segmentSize":1024},"out":{"segmentOf":[0],"offsetOf":[8],"err":""}}
+{"id":"batch/1","in":{"sizes":[100,100],"segmentSize":1024},"out":{"segmentOf":[0,0],"offsetOf":[8,114],"err":""}}
+{"id":"batch/2","in":{"sizes":[500,500],"segmentSize":1024},"out":{"segmentOf":[0,1],"offsetOf":[8,8],"err":""}}
+{"id":"batch/3","in":{"sizes":[500,500,500],"segmentSize":1024},"out":{"segmentOf":[0,1,2],"offsetOf":[8,8,8],"err":""}}
+{"id":"batch/4","in":{"sizes":[1000],"segmentSize":1024},"out":{"segmentOf":[0],"offsetOf":[8],"err":""}}
+{"id":"batch/5","in":{"sizes":[200,200,200,200,200,200],"segmentSize":1024},"out":{"segmentOf":[0,0,0,0,1,1],"offsetOf":[8,217,426,635,8,217],"err":""}}
+{"id":"batch/6","in":{"sizes":[100,900,100],"segmentSize":1024},"out":{"segmentOf":[0,1,2],"offsetOf":[8,8,8],"err":""}}
+{"id":"batch/7","in":{"sizes":[900,100,900],"segmentSize":1024},"out":{"segmentOf":[0,1,2],"offsetOf":[8,8,8],"err":""}}
+{"id":"batch/8","in":{"sizes":[50,50,50,50],"segmentSize":256},"out":{"segmentOf":[0,0,0,0],"offsetOf":[8,64,120,176],"err":""}}
+{"id":"batch/9","in":{"sizes":[100,100,100,100,100,100,100,100],"segmentSize":512},"out":{"segmentOf":[0,0,0,0,1,1,1,1],"offsetOf":[8,114,220,326,8,114,220,326],"err":""}}
+{"id":"batch/10","in":{"sizes":[2000,2000],"segmentSize":1024},"out":{"segmentOf":[0,1],"offsetOf":[8,8],"err":""}}
+{"id":"batch/11","in":{"sizes":[10,10,10],"segmentSize":64},"out":{"segmentOf":[0,0,1],"offsetOf":[8,25,8],"err":""}}
