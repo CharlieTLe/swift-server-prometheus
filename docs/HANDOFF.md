@@ -1,13 +1,16 @@
 # Handoff
 
-Written at the end of the session that landed **range queries**, the **matrix selector**, the
-**`matrixArg` half of the `Call` arm**, the **vector binary operators** and the
-**aggregations**. So `rate(foo[5m])`, `sum by (job) (rate(foo[5m]))`,
-`foo + on(job) group_left bar`, `foo and bar` and `quantile(0.9, foo)` all evaluate, as
-instant *and* range queries, and all 82 ported `FunctionCalls` bodies are reachable. What is
-left in Phase 5 is **`label_replace`** — blocked on Pike VM **capture tracking** in `PromRegex`,
-which is a `PromRegex` slice rather than an evaluator one — plus `info`, and then `promqltest`,
-which is the exit gate. **Every other arm of the evaluator now runs.**
+Written at the end of the session that finished **Phase 5** and built **Phase 6's read path**.
+
+Phase 5's exit gate — `promqltest` over the committed `.test` files — now passes **2,183 of 2,183
+assertions, zero failures and zero skips**, so the engine has nothing left to measure. Phase 6 went
+from one merged slice to nineteen: both chunk encodings, the postings algebra, the index reader *and*
+writer (the writer produces **byte-identical files** to Go's), the filesystem seam, the chunk writer
+and reader, `meta.json`, and the `BlockReader` that joins them — so a block the port writes reopens
+and every series' labels and samples survive. **What is left in Phase 6 is the querier-shaped API**
+(§6m), which is what would let that 2,183-assertion gate run against a real block instead of
+`MemStorage` — the strongest single check available to the TSDB port.
+
 Read `README.md` first for what the project is, then this for how to continue it.
 
 ---
@@ -22,35 +25,40 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
 | 5 — engine + storage protocols | **DONE. 2,183 of 2,183 assertions pass — zero failures, zero skips.** Every evaluator arm, every runner directive, and every start-timestamp assertion. The gate has nothing left to measure. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). and **`chunkenc`'s metadata half** — `appendable`, the chunk-cut/header rules and the position-based hint derivation, wired into `MemStorage`, which took the gate to zero failures (§5e(c)). and **`info`** — `promql/info.go` plus `regexp.QuoteMeta`, 41 of `info.test`'s 42 (§5e(d)). and **`label_replace`**, on a new capture-tracking Pike VM in `PromRegex` (§5e(e)) — the last unported arm. and the last 11 **runner directives** (§5e(f)). Nothing in Phase 5 is outstanding. Next: **Phase 6's chunk ENCODER** — `tsdb/chunkenc/xor.go` on top of `wip/phase6-bstream` — which is also what the gate's last 23 skips wait on |
-| 6 — TSDB | **started, and the metadata half of `chunkenc` is MERGED** — `histogram_meta.go`'s `appendable`/`bucketIterator`/`counterResetHint` and `AppendFloatHistogram`'s cut-and-header decision are ported and pinned by 140 differential cases (§5e(c)), which also answers §5d's unexported-seam problem: drive the exported behaviour the private helper decides. Still unmerged: — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
+| 6 — TSDB | **started, and the whole READ path now exists.** Nineteen pinned slices, ~700 differential cases: `chunkenc`'s metadata half (§5e(c)), `bstream`, `xor.go` and `xor2.go` (§6a-§6c), the postings algebra and loser tree (§6g), the index READER (§6d-§6f) and the index WRITER (§6i-§6j) — which produces **byte-identical index files** to Go's — `PromFS`, ADR-15's seam (§6h), `chunks.Writer` and `chunks.Reader` (§6h, §6l), `meta.json` and `ULID` (§6k), and the `BlockReader` that joins them (§6m). A block written by the port reopens and every series' labels and samples survive, on both the in-memory and the real filesystem. **Next:** the querier-shaped API (`blockQuerier`/`blockChunkSeriesSet`), which would let the 2,183-assertion promqltest gate run against a real block instead of `MemStorage` — see §6m. Deliberately not ported: `tombstones` (exception 16). `MemPostings` waits for the Head in Phase 7 |
 | 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
-Green as of this commit: **338,403 committed fixture lines, 512 tests**, on both Swift 6.4
+Green as of this commit: **338,951 committed fixture lines, 560 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor. The case count is `wc -l` over `Fixtures/**/*.jsonl` — the
 previous figure in this line was computed some other way and had drifted, so the method is stated
 here to make it reproducible rather than folkloric.
 
 ```
 Sources/            src     generated
-  GoCompat          5,129       193
+  GoCompat          5,329       193
   PromHash            216         –
   PromMath             91         –
-  PromModel           357         –
+  PromModel           432         –
   PromLabels          854         –
   PromSchema          148         –
   PromEncoding        343         –
-  PromRegex         3,312     3,974
+  PromRegex         3,866     3,974
   PromHistogram     4,125       163
   PromPosRange         51         –
   PromAnnotations     623         –
-  PromChunkEnc        274         –
-  PromChunks          117         –
-  PromStorage       1,735         –
-  PromTestStorage     453         –
+  PromConvertNHCB     348         –
+  PromChunkEnc      2,700         –
+  PromChunks          692         –
+  PromIndex         1,771         –
+  PromFS              505         –
+  PromBlock           510         –
+  PromStorage       1,740         –
+  PromTestStorage     522         –
   PromQLParser      5,995       550
-  PromQL           12,150         –
-Tests             13,144
-oracle (Go)       19,864
+  PromQL           12,833         –
+  PromQLTest        1,255         –
+Tests             16,051
+oracle (Go)       22,802
 ```
 
 ### Verify everything in one go
@@ -1874,9 +1882,8 @@ One test-authoring note: the round-trip test first asserted a multi-segment layo
 small chunks fit inside a 512-byte segment. A test that asserts a precondition it did not establish passes
 for the wrong reason, and here it failed loudly instead, which is the better outcome.
 
-**Next in Phase 6:** the `BlockReader` itself — open a directory, read `meta.json`, and join the index reader
-to the chunk reader so a series resolves to its samples. Every piece it needs is now ported and pinned, so it
-is composition rather than new format work. `MemPostings` waits for the Head in Phase 7.
+**Next in Phase 6:** see §6m, which landed the `BlockReader` — and then the querier-shaped iterator API,
+which is the last reading piece before Phase 7's Head. `MemPostings` waits for the Head in Phase 7.
 
 **Previously next, now done:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
 machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus
@@ -1887,6 +1894,58 @@ waits for the Head in Phase 7.
 A note for whoever writes the next generator: put anything the port cannot compute in the fixture's
 **input**, not its output. The file bytes were on the output side first, which had the port comparing
 against itself; `writtenRefs` repeated the mistake one commit later and was dropped rather than moved.
+
+### 6m. `BlockReader` — LANDED, and why it is the one slice with NO new corpus
+
+`Sources/PromBlock/BlockReader.swift`. Open a block directory, read `meta.json`, and join the index reader to
+the chunk reader so a series resolves to its samples.
+
+**This slice deliberately adds no oracle suite, and the reasoning is worth keeping** because it is the first
+time in the project that "no new fixture" was the right answer rather than a shortcut. Every *format* the
+block reader touches is already pinned from both directions: `index/batch.jsonl` says the index writer's bytes
+are Go's bytes and the reader reads Go's files, `chunks/batch.jsonl` the same for chunks against Go's own
+segment files and Go's own refs, `block/meta.jsonl` that `meta.json` marshals as `encoding/json` marshals it.
+A `promoracle` suite that drove `tsdb.OpenBlock` would re-derive those and pin one genuinely new thing — the
+directory layout — which is four string literals.
+
+So what got written instead was (a) a round-trip test that writes a block with both writers and reopens it,
+and (b) **a second use of the existing meta corpus, from the other end**: `readsBackWhatGoWrote` feeds Go's
+own marshalled bytes into `BlockMeta(json:)` and requires the re-marshal to be identical. That is differential
+without a new suite, and it is what actually earns confidence in the permissive parser, because all 25 of Go's
+`omitempty` shapes — absent stats, absent `sources`, a `compaction` that is `{}`, an escaped hint — are cases
+Go produced rather than cases someone thought to write. Six of the sweep's perturbations drop a field the
+parser should keep, and every one of them is caught by that test alone.
+
+**The parser is hand-written on the READING side too, and for the mirror of the encoder's reason** (quirk 154):
+`json.Unmarshal` ignores unknown fields *and* defaults absent ones, and since `omitempty` means most real
+`meta.json` files omit most fields, a `Codable` struct with non-optional properties would reject the very
+files the encoder produces. The sweep pins leniency in **both** directions — one control adds a strict
+unknown-field check and must break, six others drop a field and must break.
+
+**The one hazard composition can actually introduce is quirk 142**, so the round-trip test uses a 256-byte
+segment size to force a multi-segment block. A single-segment block has file index 0 everywhere and would pass
+with the join wired to either meaning of "file index", which is the same class of mistake §6l's own test made
+when it asserted a multi-segment layout it had not created.
+
+Two argued survivors in `controls-block.sh`, both recorded there and in PORTING.md:
+
+- **the chunk reader's `.sorted()` is redundant**, because both `PromFS` implementations already sort. The
+  sweep proves which sort is load-bearing by removing them in a pair: remove either alone and nothing breaks,
+  remove both and the file index means nothing. The `.sorted()` stays because `PromFS` is a protocol and a
+  third implementation has not made that promise.
+- **`toc.labelIndicesTable` and `toc.postingsTable` are the same offset** in every v2 index —
+  `index.go:410-412` assigns both `w.f.pos` back to back with nothing between (quirk 155). Reading one at the
+  other's offset is unobservable on any file Prometheus has written since v2, and not equivalent in general.
+
+**Tombstones are not read, and that is exception 16 rather than a gap.** A block directory containing a
+`tombstones` file still opens; its deletions are simply not applied. Porting `tsdb/tombstones` is a
+prerequisite for `Delete()`, not for reading.
+
+**Next in Phase 6:** the querier-shaped API — `blockQuerier`/`blockChunkSeriesSet`, so a block is reachable
+through the `Querier` protocol the engine already uses instead of `BlockReader`'s convenience methods. That is
+what makes `samples(_:)`'s XOR-only shortcut go away (it exists because chunk-encoding dispatch is the Head's
+problem, Phase 7's) and what would let the promqltest gate run against a real block rather than `MemStorage`
+— which would be the strongest single check the TSDB port can get, since the gate is 2,183 assertions wide.
 
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 

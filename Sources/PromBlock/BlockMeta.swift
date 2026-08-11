@@ -268,3 +268,67 @@ func jsonQuote(_ s: String) -> String {
     }
     return out + "\""
 }
+
+// MARK: - Reading meta.json
+
+extension BlockMeta {
+    /// Go: `readMetaFile` — `json.Unmarshal` then a version check.
+    ///
+    /// A hand-written parser rather than `JSONDecoder`, for a reason that is the mirror of the encoder's:
+    /// Go's `Unmarshal` is **lenient** in ways `JSONDecoder` is not. It ignores unknown fields (so a block
+    /// from a newer Prometheus with an extra key still opens), and it leaves absent fields at their zero
+    /// value rather than failing. `JSONDecoder` matches on the second point but a `Codable` struct with a
+    /// non-optional field errors on an absent key, which would reject the very files `omitempty` produces —
+    /// and `omitempty` means *most* real files omit *most* fields.
+    ///
+    /// So: parse permissively, default everything, and check only what upstream checks — the version.
+    public init(json bytes: [UInt8]) throws {
+        guard let root = try? JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any]
+        else {
+            throw BlockError.malformedMeta("not a JSON object")
+        }
+
+        func i64(_ any: Any?) -> Int64 {
+            if let n = any as? NSNumber { return n.int64Value }
+            return 0
+        }
+        func u64(_ any: Any?) -> UInt64 {
+            if let n = any as? NSNumber { return n.uint64Value }
+            return 0
+        }
+
+        guard let ulidString = root["ulid"] as? String, let parsed = ULID(ulidString) else {
+            throw BlockError.malformedMeta("missing or invalid ulid")
+        }
+        self.init(
+            ulid: parsed, minTime: i64(root["minTime"]), maxTime: i64(root["maxTime"]))
+
+        // Go checks the version and NOTHING else, so an unknown field is ignored rather than rejected.
+        let version = Int(i64(root["version"]))
+        if version != 1 {
+            throw BlockError.unexpectedMetaVersion(version)
+        }
+        self.version = version
+
+        if let st = root["stats"] as? [String: Any] {
+            stats.numSamples = u64(st["numSamples"])
+            stats.numFloatSamples = u64(st["numFloatSamples"])
+            stats.numHistogramSamples = u64(st["numHistogramSamples"])
+            stats.numSeries = u64(st["numSeries"])
+            stats.numChunks = u64(st["numChunks"])
+            stats.numTombstones = u64(st["numTombstones"])
+        }
+        if let c = root["compaction"] as? [String: Any] {
+            compaction.level = Int(i64(c["level"]))
+            compaction.deletable = (c["deletable"] as? Bool) ?? false
+            compaction.failed = (c["failed"] as? Bool) ?? false
+            compaction.hints = (c["hints"] as? [String]) ?? []
+            compaction.sources = ((c["sources"] as? [String]) ?? []).compactMap(ULID.init)
+            for p in (c["parents"] as? [[String: Any]]) ?? [] {
+                guard let us = p["ulid"] as? String, let u = ULID(us) else { continue }
+                compaction.parents.append(
+                    BlockDesc(ulid: u, minTime: i64(p["minTime"]), maxTime: i64(p["maxTime"])))
+            }
+        }
+    }
+}

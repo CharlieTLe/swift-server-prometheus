@@ -216,6 +216,17 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     The cross-series order is the part with no upstream answer, and it feeds `MemStorage`'s
     insertion order (exception 11), so the two choices are the same choice.
 
+16. **A block's tombstones are not read, so a block's deletions are not applied.**
+    `tsdb/tombstones` stores the deletion intervals that `Block.Delete()` writes, and `OpenBlock`
+    reads them so a querier can subtract them from a series' samples. `BlockReader` skips the file
+    entirely: nothing in the port deletes yet, so there is nothing to subtract (which is also why
+    `MemStorage`'s interval subtraction has nothing to subtract, exception 12's neighbour).
+
+    The scoped part matters: a block directory that *does* contain a `tombstones` file still opens,
+    and its deletions are silently not applied. That is the divergence — not "unsupported", but
+    "accepted and ignored". Porting `tombstones` is a prerequisite for `Delete()`, not for reading,
+    and it belongs with whichever phase adds deletion.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -2189,6 +2200,24 @@ changing behaviour.
 152. **A ULID is 26 Crockford base32 characters over 128 bits, so its first character holds only 3 bits.**
     26 x 5 = 130, and the top two are padding — a ULID string whose first character is above `7` is invalid
     and upstream's parser rejects it. The alphabet omits I, L, O and U.
+
+153. **`meta.json` is read BEFORE the index, and that ordering is the error message.** `OpenBlock` calls
+    `readMetaFile` first, which rejects anything but version 1 with `unexpected meta file version %d`. So a
+    block written by a future Prometheus fails on its metadata rather than part-way through an index parse.
+    Nothing but the ordering makes that true, which is why `controls-block.sh` perturbs it.
+
+154. **`json.Unmarshal` is LENIENT in two ways a `Codable` struct is not, and `meta.json` needs both.** It
+    ignores unknown fields — so a block from a newer Prometheus with an extra key still opens — and it leaves
+    an absent field at its zero value rather than erroring. A `Codable` struct with non-optional fields
+    matches on neither, and because *`omitempty` means most real `meta.json` files omit most fields*, a
+    strict decoder would reject the very files the encoder produces. Hence a hand-written permissive parser
+    on the reading side as well as the writing side, checking only what upstream checks: the version.
+
+155. **`LabelIndicesTable` and `PostingsTable` hold the SAME offset in every v2 index.** `index.go:410-412`
+    assigns both `w.f.pos` back to back with nothing written between, because v2 writes no label indices
+    section and keeps the field for v1 compatibility. So reading the postings offset table at
+    `toc.labelIndicesTable` cannot be observed on any file Prometheus has written since v2 — an argued
+    control survivor rather than a fix, since a v1 file has a real table there.
 
 ## Not ported
 
