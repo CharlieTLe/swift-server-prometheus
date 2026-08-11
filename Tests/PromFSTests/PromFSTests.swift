@@ -180,3 +180,139 @@ struct PromFSTests {
         #expect(r2.size == 4)
     }
 }
+
+//===----------------------------------------------------------------------===//
+// `RealFS`, in a temporary directory.
+//
+// **Deliberately a handful of round trips rather than coverage.** Every corpus in the project drives
+// `InMemoryFS`, so the byte-level behaviour of the writers and readers is already pinned against Go without
+// `RealFS` existing. What is left for it to get right is the mapping onto the filesystem — the part a
+// differential corpus cannot check — so these tests do exactly that and stop.
+//
+// The suite also proves the two implementations agree on the contract, by running the same sequence through
+// both and comparing. That is the property that matters: a corpus that passes on `InMemoryFS` should mean
+// something about `RealFS`.
+//===----------------------------------------------------------------------===//
+
+import Foundation
+
+@Suite("PromFS: the FileManager-backed implementation")
+struct RealFSTests {
+
+    private func withTempDir<R>(_ body: (String) throws -> R) throws -> R {
+        let dir = NSTemporaryDirectory() + "/promfs-\(UInt64.random(in: 0..<UInt64.max))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        return try body(dir)
+    }
+
+    @Test("a written file reads back byte for byte")
+    func roundTrip() throws {
+        try withTempDir { dir in
+            let fs = RealFS()
+            try fs.createDirectory(dir + "/a/b")
+            let w = try fs.createFile(dir + "/a/b/chunks")
+            try w.append([1, 2, 3])
+            try w.append([4, 5])
+            #expect(w.position == 5)
+            try w.flush()
+            try w.sync()
+            try w.close()
+
+            let r = try fs.openForReading(dir + "/a/b/chunks")
+            #expect(r.size == 5)
+            #expect(try r.read(offset: 0, length: 5) == [1, 2, 3, 4, 5])
+            #expect(try r.read(offset: 1, length: 3) == [2, 3, 4])
+            try r.close()
+        }
+    }
+
+    @Test("write(at:) patches in place without moving the append position")
+    func writeAt() throws {
+        try withTempDir { dir in
+            let fs = RealFS()
+            let w = try fs.createFile(dir + "/f")
+            try w.append([0, 0, 0, 0])
+            try w.append([9, 9, 9])
+            let before = w.position
+            try w.write([0, 0, 0, 3], at: 0)
+            #expect(w.position == before)
+            try w.append([7])
+            try w.close()
+            let r = try fs.openForReading(dir + "/f")
+            #expect(try r.read(offset: 0, length: 8) == [0, 0, 0, 3, 9, 9, 9, 7])
+        }
+    }
+
+    @Test("createFile truncates, and list returns sorted names")
+    func truncateAndList() throws {
+        try withTempDir { dir in
+            let fs = RealFS()
+            let w1 = try fs.createFile(dir + "/f")
+            try w1.append([1, 2, 3, 4])
+            try w1.close()
+            let w2 = try fs.createFile(dir + "/f")
+            try w2.append([9])
+            try w2.close()
+            let r = try fs.openForReading(dir + "/f")
+            #expect(r.size == 1, "O_TRUNC: the second create empties the file")
+
+            for name in ["000003", "000001", "000002"] {
+                let w = try fs.createFile(dir + "/" + name)
+                try w.close()
+            }
+            #expect(try fs.list(dir) == ["000001", "000002", "000003", "f"])
+        }
+    }
+
+    @Test("the error cases match InMemoryFS's")
+    func errors() throws {
+        try withTempDir { dir in
+            let fs = RealFS()
+            #expect(throws: FSError.notFound(dir + "/nope")) {
+                _ = try fs.openForReading(dir + "/nope")
+            }
+            #expect(throws: FSError.isADirectory(dir)) { _ = try fs.openForReading(dir) }
+            #expect(throws: FSError.notFound(dir + "/missing")) { _ = try fs.list(dir + "/missing") }
+            #expect(throws: FSError.notFound(dir + "/gone")) { try fs.remove(dir + "/gone") }
+
+            let w = try fs.createFile(dir + "/f")
+            try w.append([1, 2, 3])
+            try w.close()
+            let r = try fs.openForReading(dir + "/f")
+            #expect(throws: FSError.outOfBounds(path: dir + "/f", offset: 1, length: 5, size: 3)) {
+                _ = try r.read(offset: 1, length: 5)
+            }
+        }
+    }
+
+    /// **The property that makes the corpora meaningful.** The same sequence of operations run through both
+    /// implementations must produce the same bytes and the same positions — otherwise a corpus passing on
+    /// `InMemoryFS` says nothing about a real directory.
+    @Test("the two implementations agree on the same sequence")
+    func implementationsAgree() throws {
+        func run(_ fs: any PromFS, _ root: String) throws -> ([UInt8], Int, [String]) {
+            try fs.createDirectory(root + "/d")
+            let w = try fs.createFile(root + "/d/f")
+            try w.append([1, 2, 3])
+            try w.addPadding(to: 16)
+            try w.append([4])
+            try w.write([9, 9], at: 0)
+            try w.addPadding(to: 8)
+            let pos = w.position
+            try w.flush()
+            try w.sync()
+            try w.close()
+            let r = try fs.openForReading(root + "/d/f")
+            let bytes = try r.read(offset: 0, length: r.size)
+            try r.close()
+            return (bytes, pos, try fs.list(root + "/d"))
+        }
+
+        let memory = try run(InMemoryFS(), "root")
+        let real = try withTempDir { try run(RealFS(), $0) }
+        #expect(memory.0 == real.0, "the two implementations wrote different bytes")
+        #expect(memory.1 == real.1, "the two implementations report different positions")
+        #expect(memory.2 == real.2, "the two implementations list differently")
+    }
+}
