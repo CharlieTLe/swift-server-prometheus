@@ -38,10 +38,21 @@ perl -0pi -e 's/            let del = DeletedIterator\(iter: it, intervals: chun
 
 echo "=== currDelIter's nil-ness IS the decision ==="
 perl -0pi -e 's/            if chunkIntervals\.isEmpty \{\n                \/\/ No overlap and a single chunk: take it as it is\.\n                currDelIter = nil\n                return true\n            \}//' "$P"; run "a chunk with no deletions still goes through bufIter"
-# ^ Expect SURVIVED: routing an undeleted chunk through an empty-interval `DeletedIterator` yields the same
-# samples. Upstream's branch avoids the wrapper, and — the part that is not merely cost —
-# `populateWithDelChunkSeriesIterator` uses the nil-ness to decide whether to RE-ENCODE, so it becomes
-# load-bearing in the slice that ports it. Declared, with the closing slice named.
+# ^ STILL SURVIVES after `populateWithDelChunkSeriesIterator` landed, which was supposed to close it — and the
+# reason is worth more than the verdict.
+#
+# The expectation was that nil-ness becomes load-bearing once something uses it to decide whether to
+# RE-ENCODE. It does decide that. But for a block the two outcomes appear to be byte-identical: XOR encoding
+# is deterministic over a sample sequence, so re-encoding an undeleted chunk from its own samples reproduces
+# the original bytes. The branch is then a cost saving here, and load-bearing only for the HEAD, where the
+# chunk is open and `copyHeadChunk` interacts with it.
+#
+# **That argument is reasoning, not evidence, and quirk 159 says to distrust exactly this shape.** It is
+# recorded as a hypothesis with the test that would settle it: emit the chunk BYTES from
+# `it.At().Chunk.Bytes()` on the Go side and from `current.bytes` on the port's, and compare. If they differ
+# for an undeleted chunk the branch is observable and this is a real gap; if they match on a corpus that
+# includes deleted and undeleted chunks side by side, the equivalence is established rather than assumed.
+# Cheap to do and not yet done.
 perl -0pi -e 's/                currDelIter = nil\n                return true/                currDelIter = nil\n                return false/' "$P"; run "an undeleted chunk ends the iteration"
 
 echo "=== the exhaustion bound and its -1 start ==="
