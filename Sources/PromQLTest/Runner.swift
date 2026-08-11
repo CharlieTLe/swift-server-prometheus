@@ -244,13 +244,16 @@ public struct PromQLTestRunner {
     /// block terminator, so they cannot be dropped.
     static func scan(_ input: String) -> [String] {
         input.split(separator: "\n", omittingEmptySubsequences: false).map { raw -> String in
-            let s = String(raw)
-            // Go: `strings.Split(l, "#")[0]` — the comment marker is taken at its FIRST occurrence
-            // anywhere, so a `#` inside a label value would truncate the line. That is upstream's
-            // behaviour and no committed `.test` file contains one, so it is reproduced rather than
-            // improved: a runner that were cleverer here would accept files Go rejects.
-            let body = s.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
-            return String(body).trimmed()
+            // Go: `getLines` — trim, and blank the line **only when it STARTS with `#`**. A `#`
+            // anywhere else is ordinary text.
+            //
+            // The runner originally split on the first `#` anywhere, on a guess at what Go did, and
+            // that silently truncated an expectation: `expect info msg: … functions/#histogram_quantile`
+            // became `… functions/`, so `histogram_quantile`'s monotonicity assertion compared a cut
+            // string against a correct answer and read as an engine bug. The engine was right the
+            // whole time — the message text matched to the character past the cut.
+            let t = String(raw).trimmed()
+            return t.hasPrefix("#") ? "" : t
         }
     }
 }

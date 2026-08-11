@@ -518,7 +518,7 @@ extension PromQLTestRunner {
                 }
                 if !actual.contains(want) {
                     return .failed(
-                        "\(loc): \(cmd.expr): expected \(e.kind.rawValue) \(want), got \(actual)")
+                        "\(loc): \(cmd.expr):\n      want \(want)\n      got  \(actual)")
                 }
             case .noWarn:
                 if !warnings.isEmpty {
