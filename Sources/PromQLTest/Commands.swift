@@ -36,8 +36,13 @@ extension PromQLTestRunner {
         guard parts.count == 2, let gap = try? PromDuration.parse(parts[1].trimmed()) else {
             return (i + 1, .failed("\(i + 1): invalid load step in: \(line)"))
         }
+        // `load_with_nhcb` appends the classic `_bucket` series **and** their NHCB conversions.
+        // The conversion is `util/convertnhcb`, which is not ported — but the classic half is an
+        // ordinary load, so it is done anyway and only the NHCB companions are missing. That turns
+        // "205 assertions we know nothing about" into "N that pass on the classic series and M that
+        // genuinely need the conversion", which is worth knowing before porting anything.
         if withNHCB {
-            outcome = .skipped("load_with_nhcb needs the NHCB loader (Phases 6-7's convert.go)")
+            outcome = .partialNHCB
         }
 
         // Go accumulates the block into `cmd.defs[hash]` and **REPLACES** on a repeated metric —
@@ -63,7 +68,7 @@ extension PromQLTestRunner {
                 outcome = .skipped("@st lines need EncXOR2 (Phases 6-7, quirk 36)")
                 continue
             }
-            if withNHCB || outcome != nil {
+            if outcome != nil {
                 continue
             }
             do {
@@ -518,7 +523,7 @@ extension PromQLTestRunner {
                 }
                 if !actual.contains(want) {
                     return .failed(
-                        "\(loc): \(cmd.expr): expected \(e.kind.rawValue) \(want), got \(actual)")
+                        "\(loc): \(cmd.expr):\n      want \(want)\n      got  \(actual)")
                 }
             case .noWarn:
                 if !warnings.isEmpty {

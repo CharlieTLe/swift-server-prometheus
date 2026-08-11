@@ -125,7 +125,11 @@ struct PromQLTestTests {
 //      sites match Go line for line, and the values are right. The remaining suspect is
 //      `funcSumOverTime`/`funcAvgOverTime`'s own annotation return path, plus whether the `[2m]`
 //      window at `11m` holds both samples. Five-line checks now the layers beneath are pinned.
-//   1  `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
+// FIXED, and it was the RUNNER: `histogram_quantile`'s monotonicity info did fire, with text
+// matching to the character. The line scanner split on the first `#` anywhere — a guess at Go's
+// `getLines`, which blanks a line only when it STARTS with `#` — so the expectation
+// `… functions/#histogram_quantile` was truncated to `… functions/` and a correct answer compared
+// against a cut string. A reminder that a gate failure indicts the harness as readily as the engine.
 // While here: `SequenceValue.counterResetHintSet` already exists, so the gate's
 // `compareNativeHistogram` could pass it instead of hard-coding false — which would start
 // comparing the hint on the assertions that write one. Worth doing with, not before, the fix
@@ -136,14 +140,15 @@ struct PromQLTestTests {
 // rather than a decoded `String` — decoding substitutes U+FFFD, after which the check cannot fail.
 // That is one instance of ADR-9's open question closed on the byte side rather than deferred.
 //
-let promqlTestAllowedFailures = 3
+let promqlTestAllowedFailures = 2
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 1,887 of 2,221 (85%), with only 3 failures. The 331 skips are itemised by the run itself and
+// 1,898 of 2,221 (85%), with 2 failures — and BOTH are a Phase 6-7 dependency rather than an
+// engine bug, so the engine has no known divergence left that the gate can see. The 331 skips are itemised by the run itself and
 // every one names a known gap: 228 depend on `load_with_nhcb` or `@st` (Phases 6-7), 60 are
 // `info`/`label_replace`, and the rest are `expect … regex:` and the two `expect range
 // vector`/`expect string` directives.
-let promqlTestMinimumPasses = 1_887
+let promqlTestMinimumPasses = 1_898
 
 extension String {
     fileprivate func padded(to n: Int) -> String {
