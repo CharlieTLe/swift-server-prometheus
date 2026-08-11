@@ -1205,16 +1205,28 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   could never make `counterResetSeen && notCounterResetSeen` both true — and `native_histograms.test`
   has the shape that can. The corpus lesson predicted its own blind spot and the gate found it.
 
-  **Narrowed, so the next session starts from a hypothesis rather than a symptom.** The two
-  `trackCounterReset` call sites match Go line for line, seed sample included; the *values* are
-  right, so the aggregation runs and only the hints fail to collide; and `parseSeriesDesc` does
-  parse `counter_reset_hint:` — it even exposes `SequenceValue.counterResetHintSet`. So the hint is
-  lost between `MemStorage.load` and `matrixIterSlice`, and §5's own note says why that was never
-  caught: **the `storage/mem-select` corpus is float-only on purpose**, so histogram *hint* carriage
-  through the in-memory storage has never been pinned. First step: a Swift-side test that loads a
-  two-sample series with `notCounterReset` then `counterReset` and asserts the hints survive a
-  `matrixIterSlice`. That is the same "drop a level when the corpus cannot reach it" move as
-  `MatrixIterSliceTests`.
+  **Two hypotheses were formed, tested and REFUTED, and both links are now pinned** — which is why
+  this entry is worth reading before touching it:
+
+  1. *the hint is lost between `MemStorage.load` and `matrixIterSlice`* (because the
+     `storage/mem-select` corpus is float-only on purpose, so hint carriage had never been pinned
+     anywhere). **Refuted.** `MatrixIterSliceTests.counterResetHintCarriage` loads a two-sample
+     series hinted `notCounterReset` then `counterReset` and asserts both survive the querier, the
+     buffer and the slice. They do.
+  2. *`parseSeriesDesc` drops `counter_reset_hint:`* (plausible because Phase 4's 1,685-case
+     series-description corpus compares `String()`, and `FloatHistogram.String()` does not print the
+     hint — the trap §3 records for `promql/histogram-stats`, in a corpus that predates the lesson).
+     **Refuted** by an assertion in the same test.
+
+  So the hints reach `trackCounterReset`, whose two call sites match Go line for line including the
+  seed sample, and the *values* are right (`{} 21`), so the aggregation runs. **The remaining suspect
+  is `funcSumOverTime`/`funcAvgOverTime`'s own annotation return path** — whether the `annos` the
+  collision is added to is the one returned, and whether the `[2m]` window at `11m` actually holds
+  both samples. Both are five-line checks now that the layers beneath are pinned.
+
+  The lesson worth keeping regardless: **the two refuted hypotheses left two permanent tests
+  behind.** Neither link had ever been pinned, both were plausible, and finding out cost less than
+  reading either implementation would have.
 * `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
 * ~~`count_values` accepts an invalid UTF-8 label name~~ — **FIXED**, and it is the first piece of
   ADR-9 closed on the byte side rather than deferred. `ValidationScheme` now has a `[UInt8]`
