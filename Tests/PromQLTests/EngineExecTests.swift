@@ -35,6 +35,9 @@ struct ExecSeriesIn: Decodable, Sendable {
 
 struct ExecIn: Decodable, Sendable {
     var query: String
+    /// `EnableDelayedNameRemoval` — what `promqltest` runs with, and therefore what the exit gate
+    /// exercises. See the oracle suite's note.
+    var delayed: Bool
     var ts: String
     var lookback: String
     var maxSamples: Int
@@ -70,6 +73,8 @@ struct EngineExecTests {
                     noStepSubqueryIntervalFn: { _ in 60_000 },
                     enableAtModifier: true,
                     enableNegativeOffset: true,
+                    // What `promqltest` runs with, and therefore what the exit gate exercises.
+                    enableDelayedNameRemoval: input.delayed,
                     // `enableExtendedRangeSelectors` is what admits `foo[5m] anchored` and
                     // `smoothed`, which is `matrixSelector`'s `extendFloats` path. Parser-only:
                     // the engine has no matching flag.

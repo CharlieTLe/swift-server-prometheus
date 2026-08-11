@@ -506,6 +506,15 @@ where I had written a plausible expectation and the fixture proved the implement
   exceptions then changed nothing, which read like a corpus gap and was actually dead code. Deleting
   it was the fix. Quirk 47, which also records that `dateToAbsDays`'s `(979*amonth - 2919) >> 5` has
   genuine slack — 2918 is invisible — so *that* surviving perturbation is not a gap either.
+- **A corpus AXIS that is not plumbed through the harness reports 99.8% agreement.** The
+  `delayed` axis (`EnableDelayedNameRemoval`, which is what `promqltest` runs with) was added to
+  the oracle and to the wire type, and the Swift harness silently never passed it to `EngineOpts` —
+  a `python` replacement whose pattern did not match. **987 of 989 cases still agreed**, because
+  with the flag off each function body drops the metadata labels itself and the *final answer* is
+  usually the same either way; only two cases could tell. So the failure looked like two ordinary
+  divergences rather than a dead axis, and half an hour went into diagnosing the implementation
+  before the harness. When adding an axis, **assert that it changes something**: pick one case
+  whose two settings must differ and check the pair before trusting the other 987.
 - **A `--filter` that matches nothing reports success, and a negative-control harness cannot tell the
   difference.** `swift test --filter "promql/functions"` matched no tests — Swift Testing filters on
   the *type* name, and the `/` in the suite's display string is not it — so twelve controls came back
@@ -1141,11 +1150,9 @@ Two things to get right at the start rather than retrofit:
    `RunBuiltinTestsWithStorage(t, engine, newStorage func(testing.TB) storage.Storage)`, and it is
    how Phases 6-7 re-run the same assertions against the real Head for free.
 2. **`promqltest` sets `EnableDelayedNameRemoval` true** (test.go:111) and
-   `FloatChunkEncoding = chunkenc.EncXOR2` in its own `init()`. Both matter: the first changes the
-   result of every function in `functions.go` (see `EvalNodeHelper`'s note), and the port currently
-   **throws** for it — `Evaluator.eval` refuses when `enableDelayedNameRemoval` is set, because
-   `cleanupMetricLabels` is not ported. That is the first thing the runner will hit, and it is a
-   ~30-line function (engine.go:4300-ish) plus `Matrix`/`Vector` arms.
+   `FloatChunkEncoding = chunkenc.EncXOR2` in its own `init()`. The first used to make the port
+   throw; `cleanupMetricLabels` is **now ported** and `promql/exec` carries a `delayed` axis, so the
+   runner can use the setting the exit gate needs. `EncXOR2` is still Phases 6-7's (quirk 36).
 
 Expect the first run to fail widely and to be *informative*: the assertions carry exact
 annotation text, which is already byte-exact (4,118 pinned cases), so a failure is a real
