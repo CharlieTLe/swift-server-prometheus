@@ -1753,10 +1753,33 @@ Three of the tests assert things that look like nothing:
 nothing. Seven of nine tests failed with "no such file or directory" before it was spotted;
 `updateValue(nil, forKey:)` is the spelling that stores.
 
-**Next in Phase 6:** the chunk and index WRITERS on top of `PromFS`, which is now unblocked and is where
-Phase 6 finally produces a readable on-disk block. Both are pinnable the same way §6e and §6f were — the
-oracle writes with Go, the port writes to `InMemoryFS`, and the byte strings are compared. Then `RealFS`,
-thinly. `MemPostings` waits for the Head in Phase 7.
+### 6h. `chunks.Writer` — LANDED, and the port now writes real segment files
+
+`Sources/PromChunks/ChunkWriter.swift`, on `PromFS`. **§6e's batch corpus is now a byte-for-byte comparison
+of the writer itself**: Go writes real segment files to a temporary directory, the port writes to
+`InMemoryFS`, and every segment's name and full contents are compared. When §6e wrote that suite it could
+only check the batching arithmetic; ADR-15's seam is what upgraded it.
+
+Quirks 142-144, and the first is the kind of thing only a differential corpus catches:
+
+* **`BlockChunkRef`'s "file index" is a position in the writer's file LIST, not the segment's filename
+  number** — `Writer.seq()` is `len(w.files) - 1`. The two coincide for any fresh directory, so the
+  difference hides in exactly the case a test writes first. The port had it as the filename number and
+  **all twelve cases disagreed on the ref while the segment bytes matched exactly**;
+* a segment's name is the **maximum** parsable filename plus one, not the file count, and unparsable names
+  are skipped (which is how a stray `.tmp` is tolerated);
+* the header is 8 bytes with 3 of padding, and the padding is load-bearing because quirk 128's batching
+  compares against `SegmentHeaderSize`.
+
+Two places the port diverges from upstream's I/O, both deliberate and commented at the call site: there is
+no rename (the port copies and removes, since `PromFS` cannot crash between the two and the observable
+result is identical), and `finalizeTail`'s truncate is a no-op because ADR-15 declines pre-allocation.
+
+**Next in Phase 6:** `index.Writer` on the same seam — bigger than the chunk writer (a five-stage state
+machine: symbols, series, label indices, postings, TOC) but pinnable identically, and §6f's reader corpus
+already proves the port can read what Go writes, so a writer corpus closes the loop in both directions.
+Then `RealFS`, thinly, and a `BlockReader` that ties the chunk and index readers together. `MemPostings`
+waits for the Head in Phase 7.
 
 A note for whoever writes the next generator: put anything the port cannot compute in the fixture's
 **input**, not its output. The file bytes were on the output side first, which had the port comparing

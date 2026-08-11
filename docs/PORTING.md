@@ -2130,6 +2130,24 @@ changing behaviour.
     alternative — a separate set of directory paths — trades the trap for a second structure to keep in
     sync, which is why the fix is the spelling rather than the shape.
 
+142. **`BlockChunkRef`'s "file index" is a position in the writer's file LIST, not the segment's filename
+    number.** `Writer.seq()` is `len(w.files) - 1`. The two coincide only for a directory whose segments
+    start at `000001` with no gaps — which is every fresh directory, so the difference hides in exactly the
+    case a test writes first. A directory whose first segment is `000005` yields index 0 for it, because
+    `NewDirReader` builds its list by sorting the directory.
+
+    The port had this as the filename number, and **all twelve batch cases disagreed on the ref while the
+    segment bytes matched byte for byte**. A corpus comparing only the written bytes would have missed it.
+
+143. **A segment's name comes from the MAXIMUM parsable filename plus one, not the file count.**
+    `nextSequenceFile` parses every directory entry as a `uint64` and **skips the ones that do not parse**,
+    which is how a stray `.tmp` is tolerated. Upstream's comment gives the reason for max-not-count:
+    `'1000000'` sorts before `'200000'`, so directory order is not numeric order.
+
+144. **The segment header is 8 bytes and 3 of them are padding.** Magic, one version byte, then three
+    zeros. The padding is not cosmetic: the batching arithmetic (quirk 128) compares against
+    `SegmentHeaderSize`, so a 5-byte header moves every segment boundary.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
