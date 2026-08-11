@@ -31,6 +31,7 @@ let package = Package(
         .library(name: "PromChunkEnc", targets: ["PromChunkEnc"]),
         .library(name: "PromIndex", targets: ["PromIndex"]),
         .library(name: "PromFS", targets: ["PromFS"]),
+        .library(name: "PromBlock", targets: ["PromBlock"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -98,6 +99,9 @@ let package = Package(
         // `fileutil` and `mmap` the TSDB reaches for, with an in-memory implementation so corpora need no
         // scratch directory.
         .target(name: "PromFS", dependencies: ["PromEncoding"]),
+
+        // Phase 6: a block's `meta.json` and the reader that ties the index and chunk readers together.
+        .target(name: "PromBlock", dependencies: ["PromIndex", "PromChunks", "PromFS", "GoCompat"]),
 
         // Phase 6: `tsdb/index`'s postings algebra. `MemPostings` is deliberately not here — that is
         // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
@@ -243,6 +247,10 @@ let package = Package(
                 "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "PromPosRange",
                 "PromStorage", "GoCompat", "GoOracleSupport",
             ]
+        ),
+        .testTarget(
+            name: "PromBlockTests",
+            dependencies: ["PromBlock", "PromFS", "GoOracleSupport", "GoCompat"]
         ),
         .testTarget(
             name: "PromFSTests",
