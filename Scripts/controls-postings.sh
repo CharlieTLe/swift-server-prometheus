@@ -11,34 +11,17 @@ cp "$P" /tmp/p.orig && cp "$L" /tmp/l.orig
 restore() { cp /tmp/p.orig "$P"; cp /tmp/l.orig "$L"; }
 trap restore EXIT
 
-# A perturbation can make an iterator NON-TERMINATING rather than wrong — `intersect.seek` loops until
-# its target settles, so accepting an equal value means it never does. Without a timeout that hangs the
-# whole sweep instead of reporting, which is how the first run of this script stalled for half an hour at
-# `=== Intersect ===`. A control that never returns is a control that broke; time it out and say so.
-#
-# `timeout(1)` is GNU coreutils and not on a stock macOS, hence the background-and-poll.
+# This is the sweep the shared harness exists for: a perturbation here can make an iterator
+# NON-TERMINATING rather than wrong — `intersect.seek` loops until its target settles, so accepting an
+# equal value means it never does — and the first run of this script stalled for half an hour at
+# `=== Intersect ===` with no output at all.
+
+# The shared harness: builds, runs the filter under a time budget, prints the verdict. Its header says
+# why that is not three lines inline.
+source "$(dirname "$0")/lib/control-run.sh"
+
 run() {
-  local name="$1"
-  if ! swift build 2>/dev/null >/dev/null; then printf '  %-52s COMPILE\n' "$name"; restore; return; fi
-  local log; log=$(mktemp)
-  swift test --filter 'Postings' >"$log" 2>&1 &
-  local pid=$!
-  local waited=0
-  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 120 ]; do
-    sleep 2
-    waited=$((waited + 2))
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null
-    pkill -9 -f swiftpm-testing-helper 2>/dev/null
-    wait "$pid" 2>/dev/null
-    printf '  %-52s broke (hung)\n' "$name"
-  elif grep -qE '✘|error:|signal' "$log"; then
-    printf '  %-52s broke\n' "$name"
-  else
-    printf '  %-52s SURVIVED\n' "$name"
-  fi
-  rm -f "$log"
+  control_verdict "$1" 'Postings' 52
   restore
 }
 

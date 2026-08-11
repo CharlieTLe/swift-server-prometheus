@@ -24,30 +24,12 @@ cp "$B" /tmp/b.orig && cp "$M" /tmp/m.orig && cp "$C" /tmp/c.orig && cp "$F" /tm
 restore() { cp /tmp/b.orig "$B"; cp /tmp/m.orig "$M"; cp /tmp/c.orig "$C"; cp /tmp/f.orig "$F"; }
 trap restore EXIT
 
-# The timeout that `controls-postings.sh` learnt the hard way: a perturbation can hang rather than fail,
-# and a control that never returns is a control that broke. `timeout(1)` is not on a stock macOS.
+# The shared harness: builds, runs the filter under a time budget, prints the verdict. Its header says
+# why that is not three lines inline.
+source "$(dirname "$0")/lib/control-run.sh"
+
 run() {
-  local name="$1"
-  if ! swift build 2>/dev/null >/dev/null; then printf '  %-56s COMPILE\n' "$name"; restore; return; fi
-  local log; log=$(mktemp)
-  swift test --filter 'Block' >"$log" 2>&1 &
-  local pid=$!
-  local waited=0
-  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 120 ]; do
-    sleep 2
-    waited=$((waited + 2))
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null
-    pkill -9 -f swiftpm-testing-helper 2>/dev/null
-    wait "$pid" 2>/dev/null
-    printf '  %-56s broke (hung)\n' "$name"
-  elif grep -qE '✘|error:|signal' "$log"; then
-    printf '  %-56s broke\n' "$name"
-  else
-    printf '  %-56s SURVIVED\n' "$name"
-  fi
-  rm -f "$log"
+  control_verdict "$1" 'Block' 56
   restore
 }
 
