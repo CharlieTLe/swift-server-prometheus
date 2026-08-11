@@ -1204,6 +1204,17 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   `sum_over_time`/`avg_over_time` over a mixed-hint matrix. Quirk 59 says the `functions-*` corpus
   could never make `counterResetSeen && notCounterResetSeen` both true — and `native_histograms.test`
   has the shape that can. The corpus lesson predicted its own blind spot and the gate found it.
+
+  **Narrowed, so the next session starts from a hypothesis rather than a symptom.** The two
+  `trackCounterReset` call sites match Go line for line, seed sample included; the *values* are
+  right, so the aggregation runs and only the hints fail to collide; and `parseSeriesDesc` does
+  parse `counter_reset_hint:` — it even exposes `SequenceValue.counterResetHintSet`. So the hint is
+  lost between `MemStorage.load` and `matrixIterSlice`, and §5's own note says why that was never
+  caught: **the `storage/mem-select` corpus is float-only on purpose**, so histogram *hint* carriage
+  through the in-memory storage has never been pinned. First step: a Swift-side test that loads a
+  two-sample series with `notCounterReset` then `counterReset` and asserts the hints survive a
+  `matrixIterSlice`. That is the same "drop a level when the corpus cannot reach it" move as
+  `MatrixIterSliceTests`.
 * `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
 * ~~`count_values` accepts an invalid UTF-8 label name~~ — **FIXED**, and it is the first piece of
   ADR-9 closed on the byte side rather than deferred. `ValidationScheme` now has a `[UInt8]`
