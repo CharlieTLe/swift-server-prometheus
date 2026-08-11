@@ -34,6 +34,7 @@ let package = Package(
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
         .library(name: "PromQLParser", targets: ["PromQLParser"]),
         .library(name: "PromQL", targets: ["PromQL"]),
+        .library(name: "PromQLTest", targets: ["PromQLTest"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromSchema", targets: ["PromSchema"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
@@ -123,6 +124,23 @@ let package = Package(
                 "PromStorage", "PromChunkEnc", "PromChunks", "PromHistogram",
                 "PromLabels", "PromAnnotations", "GoCompat",
             ]
+        ),
+
+        // Phase 5: the `.test` file runner — THE EXIT GATE. Unlike every other
+        // target this one needs no differential corpus: the 2,183 `eval`
+        // assertions in `Fixtures/promql/testdata/` are already upstream's, so
+        // running them IS the verification. See Sources/PromQLTest/Runner.swift.
+        .target(
+            name: "PromQLTest",
+            dependencies: [
+                "PromQL", "PromQLParser", "PromTestStorage", "PromStorage",
+                "PromChunks", "PromHistogram", "PromLabels", "PromModel", "GoCompat",
+            ]
+        ),
+
+        .testTarget(
+            name: "PromQLTestTests",
+            dependencies: ["PromQLTest", "PromQL", "PromQLParser", "GoOracleSupport", "GoCompat"]
         ),
 
         // ── Tooling ──────────────────────────────────────────────────────────
