@@ -10,6 +10,7 @@ internal import GoCompat
 internal import PromChunks
 internal import PromHistogram
 internal import PromLabels
+internal import PromConvertNHCB
 internal import PromModel
 internal import PromQL
 internal import PromQLParser
@@ -36,14 +37,8 @@ extension PromQLTestRunner {
         guard parts.count == 2, let gap = try? PromDuration.parse(parts[1].trimmed()) else {
             return (i + 1, .failed("\(i + 1): invalid load step in: \(line)"))
         }
-        // `load_with_nhcb` appends the classic `_bucket` series **and** their NHCB conversions.
-        // The conversion is `util/convertnhcb`, which is not ported — but the classic half is an
-        // ordinary load, so it is done anyway and only the NHCB companions are missing. That turns
-        // "205 assertions we know nothing about" into "N that pass on the classic series and M that
-        // genuinely need the conversion", which is worth knowing before porting anything.
-        if withNHCB {
-            outcome = .partialNHCB
-        }
+        // `load_with_nhcb` appends the classic `_bucket`/`_sum`/`_count` series **and** their NHCB
+        // conversions, which `appendCustomHistogram` below builds through `PromConvertNHCB`.
 
         // Go accumulates the block into `cmd.defs[hash]` and **REPLACES** on a repeated metric —
         // `aggregators.test` has two `data{test="-inf3",point="c"}` lines, and the second wins. An
@@ -104,7 +99,97 @@ extension PromQLTestRunner {
                 return (i + 1, .failed("\(i + 1): \(d.metric): \(String(describing: error))"))
             }
         }
+        if withNHCB {
+            do {
+                try appendCustomHistograms(order.compactMap { defs[$0] }, store)
+            } catch {
+                return (i + 1, .failed("\(i + 1): NHCB conversion: \(String(describing: error))"))
+            }
+        }
         return (i + 1, outcome)
+    }
+
+    /// Go: `loadCmd.appendCustomHistogram` — collate the classic parts by base metric and
+    /// timestamp, convert each timestamp's collation to one NHCB, and append those too.
+    ///
+    /// Three details from upstream that a straight reading would miss:
+    ///
+    ///   * a `_bucket` series whose `le` fails to parse, or is NaN, is **skipped silently** — not an
+    ///     error, because a classic histogram can carry a malformed `le` and the rest is still
+    ///     usable. `myHistogram2{le="Hello World"}` in `native_histograms.test` is exactly that;
+    ///   * a *histogram-valued* sample inside a classic series is skipped (`if s.H != nil`), so a
+    ///     series that is partly classic and partly native contributes only its floats;
+    ///   * the result is emitted as a **FloatHistogram** either way: an integer conversion is
+    ///     validated and then `ToFloat`ed, so the storage never sees the integer form.
+    func appendCustomHistograms(
+        _ defs: [(metric: Labels, samples: [any PromChunks.Sample])], _ store: MemStorage
+    ) throws {
+        // Base metric -> timestamp -> the collation so far. Insertion-ordered, because Go ranges a
+        // map here and the append order is not contractual (PORTING.md exception 11's situation).
+        var wrappers: [UInt64: (metric: Labels, byTs: [Int64: TempHistogram], order: [Int64])] = [:]
+        var wrapperOrder: [UInt64] = []
+
+        for d in defs {
+            let mName = d.metric[LabelName.metricName]
+            let (suffix, name) = getHistogramMetricBaseName(mName)
+            if suffix == .none { continue }
+
+            var setter: ((inout TempHistogram, Double) -> Void)
+            switch suffix {
+            case .bucket:
+                // A malformed or NaN `le` skips the whole series, silently.
+                guard let le = try? GoFloat.parse(d.metric["le"]), !le.isNaN else { continue }
+                setter = { h, f in h.setBucketCount(le, f) }
+            case .count:
+                setter = { h, f in h.setCount(f) }
+            case .sum:
+                setter = { h, f in h.setSum(f) }
+            case .none:
+                continue
+            }
+
+            let base = getHistogramMetricBase(d.metric, name)
+            let key = base.goHash()
+            var w =
+                wrappers[key] ?? {
+                    wrapperOrder.append(key)
+                    return (metric: base, byTs: [:], order: [])
+                }()
+            w.metric = base
+            for s in d.samples {
+                // A histogram-valued sample in a classic series contributes nothing.
+                guard s.type == .float else { continue }
+                var h = w.byTs[s.t] ?? TempHistogram()
+                setter(&h, s.f)
+                if w.byTs[s.t] == nil { w.order.append(s.t) }
+                w.byTs[s.t] = h
+            }
+            wrappers[key] = w
+        }
+
+        for key in wrapperOrder {
+            guard let w = wrappers[key] else { continue }
+            var samples = [any PromChunks.Sample]()
+            // Sorted by timestamp, as Go's `sort.Slice` does — the storage's append ordering
+            // depends on it.
+            for t in w.order.sorted() {
+                guard let temp = w.byTs[t] else { continue }
+                let (ih, fh, err) = temp.convert()
+                if let err { throw err }
+                var out = fh
+                if out == nil, let ih {
+                    // Validated, then converted: the storage only ever sees the float form.
+                    try ih.validate()
+                    out = ih.toFloat()
+                }
+                guard let out else { continue }
+                try out.validate()
+                samples.append(FHSample(st: 0, t: t, fh: out))
+            }
+            if !samples.isEmpty {
+                try store.load(w.metric, samples)
+            }
+        }
     }
 
     // MARK: - eval
@@ -367,9 +452,13 @@ extension PromQLTestRunner {
             // failures, and it was the COMPARISON rather than `compact` or `mul` — the corpus
             // addition proved Go's `Compact(0)` and the port's already agree.
             //
-            // `counterResetHintSet` is false: a `.test` expectation that does not write a hint
-            // means "don't care", and the series-description parser has no way to say which it
-            // was — a documented narrowing, since upstream compares it only when the file set one.
+            // `counterResetHintSet` is passed as FALSE, deliberately and temporarily. Upstream
+            // passes `exp0.CounterResetHintSet` (test.go:1362) and `SequenceValue` already carries
+            // the flag — but turning it on today fails 6 assertions for one reason that is not the
+            // engine's: `MemStorage` does not derive counter-reset hints on append, where upstream's
+            // Head does. Measured, not assumed: with the flag on, the gate reports 8 failures all
+            // of the form `want hint=notCounterReset, got hint=unknownCounterReset`. The flag goes
+            // on in the commit that ports `chunkenc`'s `appendable` and the chunk-position rule.
             var wantC = wantH
             var gotC = gotH
             return compareNativeHistogram(

@@ -207,6 +207,15 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     Kahan sums in. Drive those fixtures with an explicitly ordered input matrix rather
     than through `rangeEval`.
 
+15. **`load_with_nhcb`'s NHCB companions are appended in first-insertion order.** The fourth
+    instance of exception 7's situation: `loadCmd.appendCustomHistogram` ranges
+    `map[uint64]tempHistogramWrapper`, so which base metric's NHCB series is appended first is
+    randomised per run upstream. Within one series the samples *are* sorted, by an explicit
+    `sort.Slice` on the timestamp, and that is reproduced exactly — its control breaks.
+
+    The cross-series order is the part with no upstream answer, and it feeds `MemStorage`'s
+    insertion order (exception 11), so the two choices are the same choice.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -1803,6 +1812,35 @@ changing behaviour.
     The `>= dataTS` search boundary is *not* load-bearing: with `>` an exact hit falls into the
     interpolation branch with `prev.T == dataTS`, which returns `prev.F`. Its control survives, and
     that is why.
+
+100. **`convertnhcb` compacts the integer result with `Compact(2)` and the float result with
+    `Compact(0)`.** Same function, same input shape, two different arguments — and it is observable:
+    a classic histogram with exactly **two adjacent empty buckets** merges them in the integer path
+    and splits the span in the float path. Nothing in upstream explains the asymmetry, so it is
+    reproduced as-is.
+
+    Neither control caught it at first, because every case in the corpus had at most a one-wide
+    empty run. Three cases now pin it: a two-wide gap taking the integer path, the same layout with
+    a fractional count so it takes the float path, and a three-wide gap that *both* paths decline to
+    merge — the last is what proves the difference is the gap width rather than the path.
+
+101. **`errCountNotCumulative` has one value and two format strings.** The in-order and out-of-order
+    predecessor checks render `%g < %g`; the out-of-order **successor** check renders `%g > %g`. A
+    port that models the error as a single case with a single message is wrong on exactly the
+    out-of-order-with-a-too-large-count input, which is what `convertnhcb/20` and `/21` are.
+
+102. **`counterResetHint(header, numRead)` throws the stored hint away.** Read back from a chunk, a
+    native histogram's hint is `GaugeType` for every sample of a gauge chunk, `NotCounterReset` for
+    the second sample onwards of a counter chunk, and `UnknownCounterReset` otherwise — *including*
+    for the first sample of a chunk that was written with a known header, because the previous chunk
+    may no longer exist (upstream's own TODO, prometheus/prometheus#15346). So what a `.test` file's
+    `counter_reset_hint:` writes is not what a query reads back, and the position in the chunk
+    matters more than the value.
+
+    `MemStorage` does not model chunks and so returns the stored hint unchanged. Measured cost: 8 of
+    the exit gate's assertions, which is why `promqltest`'s comparison passes
+    `counterResetHintSet: false` for now. Closing it means porting `chunkenc`'s `appendable` — pure
+    logic over two histograms, no bstream — plus the chunk-cut rules. Phase 6.
 
 ## Not ported
 

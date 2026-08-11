@@ -21,7 +21,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **1,888 of 2,221 assertions pass (85%)** with **2 failures**, both a Phase 6-7 storage dependency rather than engine bugs — so the gate can see no remaining divergence in the engine. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
+| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **2,068 of 2,188 assertions pass (94%)** with **2 failures**, both a Phase 6-7 storage dependency (quirk 102) rather than engine bugs — so the gate can see no remaining divergence in the engine. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). Next: `chunkenc`'s `appendable` + the chunk-position counter-reset-hint rule — Phase 6 work that closes the gate's last 2 failures and 22 of its skips (§5e(c)) |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
@@ -1180,8 +1180,11 @@ Phases 6-7 dependency, so they cannot pass until then whatever the runner does.
 
 #### (a) `promqltest` — LANDED, and here is what it says
 
-**1,888 of 2,221 assertions pass (85%), 2 fail, 331 skip — and both failures are a Phase 6-7
-storage dependency, so the gate can see no remaining divergence in the engine itself.** `swift test --filter PromQLTestTests` prints the
+**2,068 of 2,188 assertions pass (94%), 2 fail, 118 skip — and both failures are a Phase 6-7
+storage dependency, so the gate can see no remaining divergence in the engine itself.** (That is
+after `util/convertnhcb` landed; the figure when the runner itself landed was 1,888 of 2,221, and the
+skip table below is the *pre*-convertnhcb one, kept because it is what the next slice was chosen
+from.) `swift test --filter PromQLTestTests` prints the
 per-file tally and itemises every skip. There is no differential corpus, by design: the `.test`
 files *are* the comparison, so a failure here is an engine bug and the number is the headline
 metric. The test carries a **ratchet** (`promqlTestAllowedFailures = 0`) and a **floor**
@@ -1285,6 +1288,71 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   The lesson worth keeping regardless: **the two refuted hypotheses left two permanent tests
   behind.** Neither link had ever been pinned, both were plausible, and finding out cost less than
   reading either implementation would have.
+#### (b) `util/convertnhcb` — LANDED, and it paid what the measurement said
+
+**+170 assertions in one commit: 1,898 -> 2,068 passing, 118 skips left.** The scoping above put it
+at "~195", and 170 of those turned out to be real while the rest were assertions inside
+`load_with_nhcb` blocks that had already been passing on the classic series alone. Measuring the gap
+before choosing the work is the whole reason this slice came before `info` (42) and `label_replace`
+(21) — it was worth more than both together, and it is a self-contained utility rather than TSDB
+work.
+
+What it is: `Sources/PromConvertNHCB/ConvertNHCB.swift` (`TempHistogram`, the three setters,
+`Convert`, and the metric-name helpers) plus `appendCustomHistograms` in the runner, which collates
+each base metric's `_bucket`/`_sum`/`_count` parts by timestamp and appends one NHCB per timestamp.
+Pinned by `Fixtures/histogram/convertnhcb.jsonl`, 49 cases.
+
+**Four things the corpus and the controls caught that reading the Go would not have:**
+
+1. the integer path compacts with `Compact(2)` and the float path with `Compact(0)` — quirk 100. Both
+   controls **survived** the first corpus, because every case had at most a one-wide empty bucket run
+   and nothing could tell the two arguments apart. Three cases now pin it, including a three-wide gap
+   that *both* decline to merge, which is what proves the difference is the gap width rather than the
+   path;
+2. `errCountNotCumulative` renders `%g < %g` in two places and `%g > %g` in a third — quirk 101. Two
+   cases failed on the first run for exactly this;
+3. the **out-of-order predecessor** cumulativity check was never reached: every out-of-order case
+   tripped the successor check first, so deleting the predecessor branch entirely left the corpus
+   green;
+4. the corpus recorded only `Convert`'s error, never what a **setter returned** — and upstream's own
+   callers write `_ = h.SetBucketCount(...)`, so that half of the API was unobserved. Turning the
+   out-of-order duplicate-`le` tolerance into an error changed nothing anyone looked at. The wire now
+   carries `opErrs`.
+
+`Scripts/controls-convertnhcb.sh` has 19 controls. 18 break; the survivor is
+`out.validate()` in the loader, and it is **argued rather than covered**: `validate()` is a pure
+check that only throws, and `convert()` cannot produce a structurally invalid NHCB from valid classic
+input (single span run, always the custom-buckets schema, boundaries kept in order by
+`setBucketCount`). The call is kept because upstream makes it and because Phase 8's scrape path will
+reach it with input this loader never sees.
+
+Two loader branches had **no coverage in the `.test` corpus at all** — a malformed `le`, and a
+histogram-valued sample inside a classic series. Neither `histograms.test` nor `operators.test` (the
+only two files with a `load_with_nhcb` block) has either, so both controls survived until
+`NHCBLoaderEdgeTests` was written for them. Writing that test also caught a hand-derived expectation
+of mine that was wrong: when a bucket is skipped, its boundary leaves `custom_values` too.
+
+#### (c) The gate's last 2 failures, and the 22 skips next to them
+
+Both remaining failures are quirk 102: `MemStorage` returns a stored counter-reset hint unchanged,
+where a chunk read-back derives it from the chunk header and the sample's position. And **it is worse
+than the gate can see** — passing `counterResetHintSet` the way upstream does (test.go:1362) turns 2
+failures into 8, all `want hint=notCounterReset, got hint=unknownCounterReset`. So the runner passes
+`false` for now, with the measurement recorded next to the ratchet.
+
+The 22 histogram-valued *range* skips are a **runner** gap with a known fix, and it is written and
+measured but deliberately not landed here: Go times expectation value `i` at `start + i*step` and
+splits the list into a float list and a histogram list, each lining up element-wise with the series'
+own two point slices (test.go:1290-1340) — the timestamps are the missing join key. Doing that closes
+all 22 *and* turns on the hint comparison, which is why it belongs in the same commit as the
+`chunkenc` work rather than before it.
+
+**So the next slice is `chunkenc`'s `appendable` + the chunk-position hint rule.** It is pure logic
+over two `FloatHistogram`s with no bstream involved, so it is portable and differentially testable
+today, it is Phase 6 work that Phase 5's gate happens to need, and it is worth 22 + 8 = 30
+assertions plus the last two failures. §5d's `xor.go` starting point stands for the *encoding*; this
+is the metadata half of the same package and does not depend on it.
+
 * ~~`histogram_quantile`'s monotonicity info does not fire~~ — **FIXED, and it was the RUNNER.** The
   info fired all along, with text matching to the character. The line scanner split on the first `#`
   *anywhere*, a guess at Go's `getLines` — which blanks a line only when it **starts** with `#` — so
