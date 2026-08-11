@@ -18,6 +18,7 @@ import Foundation
 import GoOracleSupport
 import PromChunkEnc
 import PromChunks
+import PromFS
 import Testing
 
 struct HeadRefIn: Codable, Sendable {
@@ -66,6 +67,10 @@ struct BatchOut: Decodable, Equatable, Sendable {
     var segmentOf: [Int]
     var offsetOf: [Int]
     var err: String
+    /// Every segment file the writer left behind, name-sorted, with its full contents. This is what makes
+    /// the WRITER pinnable rather than only its arithmetic.
+    var segmentNames: [String]
+    var segmentHex: [String]
 }
 
 private func fbits(_ s: String) -> Double { Double(bitPattern: UInt64(s, radix: 16)!) }
@@ -145,9 +150,10 @@ struct ChunkFormatTests {
         }
     }
 
-    /// The batching's observable effect is which segment each chunk lands in, and at what offset. The
-    /// port has no writer, so it computes the same thing from `chunkWriteBatches` plus the framing
-    /// widths — which is exactly what upstream's writer does as it goes.
+    /// **The port now HAS a writer** (`ChunkWriter` on `PromFS`), so this compares the real thing: Go
+    /// writes real segment files to a temporary directory, the port writes to `InMemoryFS`, and the byte
+    /// strings are compared. When §6e wrote this it could only check the batching arithmetic; ADR-15's seam
+    /// is what turned it into a byte-for-byte comparison of the writer itself.
     @Test("segment batching matches, including the worst-case length sizing")
     func batching() throws {
         try Fixtures.check("chunks/batch.jsonl", FixtureCase<BatchIn, BatchOut>.self) {
@@ -167,23 +173,31 @@ struct ChunkFormatTests {
                 datas.append(c.bytes)
             }
 
-            let batches = chunkWriteBatches(
-                dataSizes: dataSizes, segmentSize: input.segmentSize, bytesAlreadyWritten: 0)
+            let fs = InMemoryFS()
+            let w = try ChunkWriter(fs: fs, dir: "d", segmentSize: input.segmentSize)
+            let refs = try w.write(datas.map { (encoding: Encoding.xor, bytes: $0) })
+            try w.close()
 
             var segmentOf: [Int] = []
             var offsetOf: [Int] = []
-            var segment = 0
-            for (b, range) in batches.enumerated() {
-                if b > 0 { segment += 1 }
-                // Each segment starts after its header.
-                var offset = segmentHeaderSize
-                for i in range {
-                    segmentOf.append(segment)
-                    offsetOf.append(offset)
-                    offset += ChunkFraming.framed(.xor, datas[i]).count
-                }
+            for r in refs {
+                let (si, cs) = BlockChunkRef(rawValue: r.rawValue).unpack()
+                segmentOf.append(si)
+                offsetOf.append(cs)
             }
-            return BatchOut(segmentOf: segmentOf, offsetOf: offsetOf, err: "")
+
+            // Every file left behind, name-sorted — including any `.tmp` that should not have survived.
+            var names = try fs.list("d")
+            names.sort()
+            var hexes: [String] = []
+            for nm in names {
+                let h = try fs.openForReading("d/" + nm)
+                hexes.append(hx(try h.read(offset: 0, length: h.size)))
+                try h.close()
+            }
+            return BatchOut(
+                segmentOf: segmentOf, offsetOf: offsetOf, err: "", segmentNames: names,
+                segmentHex: hexes)
         }
     }
 }

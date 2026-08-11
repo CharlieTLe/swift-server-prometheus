@@ -23,6 +23,8 @@ import (
 	"hash/crc32"
 	"math"
 	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	"github.com/prometheus/prometheus/tsdb/chunks"
@@ -80,6 +82,11 @@ type batchOut struct {
 	SegmentOf []int `json:"segmentOf"`
 	OffsetOf  []int `json:"offsetOf"`
 	Err       string `json:"err"`
+	// Every segment file the writer left behind: its name and its full contents, hex. This is what makes
+	// the WRITER pinnable rather than just its arithmetic — the port writes to an in-memory filesystem and
+	// the byte strings are compared.
+	SegmentNames []string `json:"segmentNames"`
+	SegmentHex   []string `json:"segmentHex"`
 }
 
 // Four generators, one fixture file each: `Fixtures.check` decodes every line of a file with one
@@ -218,7 +225,9 @@ func genChunksBatch(e *emitter) {
 	n := 0
 	emitBatch := func(sizes []int, segmentSize int64) {
 		in := batchIn{Sizes: sizes, SegmentSize: segmentSize}
-		out := batchOut{SegmentOf: []int{}, OffsetOf: []int{}}
+		out := batchOut{
+			SegmentOf: []int{}, OffsetOf: []int{}, SegmentNames: []string{}, SegmentHex: []string{},
+		}
 
 		dir, err := os.MkdirTemp("", "chunks")
 		if err != nil {
@@ -253,6 +262,24 @@ func genChunksBatch(e *emitter) {
 			out.Err = err.Error()
 		}
 		_ = w.Close()
+
+		// Every file the writer left, in name order. `.tmp` files should not survive a successful close.
+		entries, _ := os.ReadDir(dir)
+		names := []string{}
+		for _, en := range entries {
+			names = append(names, en.Name())
+		}
+		sort.Strings(names)
+		for _, nm := range names {
+			b, rerr := os.ReadFile(filepath.Join(dir, nm))
+			if rerr != nil {
+				out.Err = rerr.Error()
+				continue
+			}
+			out.SegmentNames = append(out.SegmentNames, nm)
+			out.SegmentHex = append(out.SegmentHex, hex.EncodeToString(b))
+		}
+
 		for _, m := range metas {
 			si, cs := chunks.BlockChunkRef(m.Ref).Unpack()
 			out.SegmentOf = append(out.SegmentOf, si)

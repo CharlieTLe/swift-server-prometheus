@@ -9,7 +9,7 @@
     "chunkenc/valuetype.jsonl": { "sha256": "cc70b980e039bfbfaf8ef7a132673d7418d388b5556833360c25fe60bc1afddb", "lines": 7 },
     "chunkenc/xor.jsonl": { "sha256": "023e77d4eab1330254c4d03b8f7c608b4a5e015042e21fdab1fda4b5ba47b83b", "lines": 70 },
     "chunkenc/xor2.jsonl": { "sha256": "bb08795b0c941b6d0f3ff727461284a36ab7fe63a1295f264fec9d7c8caf6736", "lines": 183 },
-    "chunks/batch.jsonl": { "sha256": "11556a84d93402ea84df65975c185f66b1699078488af0d99e96cdcab307f9a3", "lines": 12 },
+    "chunks/batch.jsonl": { "sha256": "8199fdc9e084483f5aa26cbd4be49c34d60b513a2965f8e98399f9d2895154e6", "lines": 12 },
     "chunks/blockref.jsonl": { "sha256": "59a9f91111f6f662093aff43b1f066a621246ac79418bd039e4228a4628a6954", "lines": 11 },
     "chunks/framing.jsonl": { "sha256": "0d5fee40d465f95d584039e50ef712e721640c506be787bd39fbf815f820b7d2", "lines": 9 },
     "chunks/headref.jsonl": { "sha256": "162d65304edd23001be3ed40846dfd82d1a9fc0f253d0f4cfc5b2eaa83030f0e", "lines": 14 },

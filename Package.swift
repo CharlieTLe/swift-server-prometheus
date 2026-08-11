@@ -91,7 +91,7 @@ let package = Package(
         .target(
             name: "PromChunks",
             // Phase 6 added `ChunkFormat.swift`, which needs the Castagnoli CRC and varints.
-            dependencies: ["PromChunkEnc", "PromHistogram", "PromHash", "GoCompat"]
+            dependencies: ["PromChunkEnc", "PromHistogram", "PromHash", "PromFS", "GoCompat"]
         ),
 
         // Phase 6: the filesystem seam ADR-15 decided. NOT a port — it stands in for the parts of `os`,
@@ -249,7 +249,7 @@ let package = Package(
         .testTarget(
             name: "PromChunksTests",
             dependencies: [
-                "PromChunks", "PromChunkEnc", "PromHash", "GoOracleSupport", "GoCompat",
+                "PromChunks", "PromChunkEnc", "PromHash", "PromFS", "GoOracleSupport", "GoCompat",
             ]
         ),
         .testTarget(
