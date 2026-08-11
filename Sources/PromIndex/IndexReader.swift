@@ -678,6 +678,55 @@ public func indexPostings(
     return res
 }
 
+/// Go: `Reader.postingsForLabelMatching`, which implements **both** `PostingsForLabelMatching` (a non-nil
+/// predicate) and `PostingsForAllLabelValues` (a nil one). The port keeps them one function for the same
+/// reason: `match == nil` is not merely "a predicate that always returns true", it also changes the
+/// capacity estimate, and a caller that passed `{ _ in true }` would take the other path.
+///
+/// ## The stop condition is the same sentinel `LabelValues` uses, and it is the reason this terminates
+///
+/// The traversal returns `val != lastVal`, where `lastVal` is the SPARSE index's final entry for the name.
+/// The postings offset table is one flat run over every label name, so without that sentinel the walk
+/// continues into the next name's entries — which the `skip` optimisation would then mis-parse (quirks 135
+/// and 136). It works only because the sparse index always records each name's last value.
+///
+/// ## `postingsEstimate` is `len(e) * symbolFactor` and ONLY when the predicate is nil
+///
+/// A pure allocation hint — the sparse index holds one entry per 32 values, so the real count is up to 32x
+/// its length. With a predicate there is no way to guess how many values will match, so upstream reserves
+/// nothing rather than over-reserving. Reproduced because it costs nothing and because a reader comparing
+/// the two files should not have to wonder whether the difference was deliberate.
+///
+/// Note there is no `Reader.postingsForLabelMatchingV1` here: the port reads v2 only, as `IndexSymbols` and
+/// `indexPostings` already do.
+public func indexPostingsForLabelMatching(
+    _ bs: ByteSlice, postingsTable tableOff: UInt64, sparse: [String: [PostingOffset]],
+    name: String, match: ((String) -> Bool)? = nil
+) throws -> any Postings {
+    guard let e = sparse[name], !e.isEmpty else {
+        return emptyPostings()
+    }
+
+    var its: [any Postings] = []
+    if match == nil {
+        // The caller wants every posting for the name; see the note above.
+        its.reserveCapacity(e.count * symbolFactor)
+    }
+
+    let lastVal = e[e.count - 1].value
+    try traversePostingOffsets(bs, postingsTable: tableOff, from: e[0].off) { val, postingsOff in
+        if match == nil || match!(val) {
+            var d = Decbuf.at(bs, Int(postingsOff), verifyChecksum: true)
+            if let err = d.err { throw err }
+            let (_, p) = try decodePostingsRaw(d)
+            its.append(p)
+        }
+        return val != lastVal
+    }
+
+    return merge(its)
+}
+
 // MARK: - Label values and names
 
 /// Go: `Reader.LabelValues` for format v2 — every value of one label, in table order.

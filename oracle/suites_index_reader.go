@@ -27,6 +27,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
@@ -57,6 +59,10 @@ type indexReaderIn struct {
 	TruncateTo int `json:"truncateTo"`
 	// Flip one bit in the TOC's CRC, to reach the checksum path.
 	CorruptTOCCRC bool `json:"corruptTOCCRC"`
+	// `PostingsForLabelMatching(name, match)` / `PostingsForAllLabelValues(name)` queries, each a name
+	// and a NAMED predicate — a Go closure cannot cross JSONL, so the spec names one both sides build.
+	// See `matchPredicate` for the vocabulary; the spec `nil` means `PostingsForAllLabelValues`.
+	MatchQueries [][2]string `json:"matchQueries"`
 	// **The generated file's bytes, hex.** This is INPUT, not output: the port has no index writer
 	// (ADR-15 defers the file layer), so the oracle writes the file with Go's own `index.Writer` and hands
 	// the bytes over. Putting it in the output instead would have the port compare against itself.
@@ -82,9 +88,9 @@ type indexReaderOut struct {
 	Reversed    []uint32 `json:"reversed"`
 	ReverseErrs []string `json:"reverseErrs"`
 	// Per requested series ID: its labels as name/value pairs, its chunk metas, and any error.
-	SeriesLabels [][]string `json:"seriesLabels"`
+	SeriesLabels [][]string   `json:"seriesLabels"`
 	SeriesChunks [][][3]int64 `json:"seriesChunks"`
-	SeriesErrs   []string   `json:"seriesErrs"`
+	SeriesErrs   []string     `json:"seriesErrs"`
 	// Every entry of the postings offset table, in order: name, value, offset, entry position.
 	TableNames   []string `json:"tableNames"`
 	TableValues  []string `json:"tableValues"`
@@ -101,6 +107,45 @@ type indexReaderOut struct {
 	LabelValuesErrs []string   `json:"labelValuesErrs"`
 	NamesFor        [][]string `json:"namesFor"`
 	NamesForErrs    []string   `json:"namesForErrs"`
+	// Per match query, the expanded postings and any error.
+	MatchResults [][]uint64 `json:"matchResults"`
+	MatchErrs    []string   `json:"matchErrs"`
+}
+
+// The predicate vocabulary for `MatchQueries`. Both sides implement the same names, so the fixture
+// carries a SPEC rather than a closure. Deliberately small and deliberately including the two degenerate
+// cases — `all` and `none` — because they are the ones that decide whether the traversal's `val != lastVal`
+// stop condition and the empty-postings return are reached at all.
+//
+// `nil` is not in here: it is the absence of a predicate, which is a different code path upstream
+// (`PostingsForAllLabelValues`) and not the same as a predicate that always returns true.
+func matchPredicate(spec string) func(string) bool {
+	switch {
+	case spec == "all":
+		return func(string) bool { return true }
+	case spec == "none":
+		return func(string) bool { return false }
+	case spec == "empty":
+		return func(v string) bool { return v == "" }
+	case strings.HasPrefix(spec, "eq:"):
+		want := spec[3:]
+		return func(v string) bool { return v == want }
+	case strings.HasPrefix(spec, "ne:"):
+		unwanted := spec[3:]
+		return func(v string) bool { return v != unwanted }
+	case strings.HasPrefix(spec, "prefix:"):
+		return func(v string) bool { return strings.HasPrefix(v, spec[7:]) }
+	case strings.HasPrefix(spec, "suffix:"):
+		return func(v string) bool { return strings.HasSuffix(v, spec[7:]) }
+	case strings.HasPrefix(spec, "contains:"):
+		return func(v string) bool { return strings.Contains(v, spec[9:]) }
+	case strings.HasPrefix(spec, "longerthan:"):
+		nStr := spec[len("longerthan:"):]
+		want, _ := strconv.Atoi(nStr)
+		return func(v string) bool { return len(v) > want }
+	default:
+		panic("unknown match predicate spec: " + spec)
+	}
 }
 
 // `realByteSlice` is unexported, but `index.ByteSlice` is an exported interface with two methods — so the
@@ -121,6 +166,7 @@ func genIndexReader(e *emitter) {
 			TableEntryAt: []int{}, QueryResults: [][]uint64{}, QueryErrs: []string{},
 			LabelNames: []string{}, LabelValues: [][]string{}, LabelValuesErrs: []string{},
 			NamesFor: [][]string{}, NamesForErrs: []string{},
+			MatchResults: [][]uint64{}, MatchErrs: []string{},
 		}
 
 		dir, err := os.MkdirTemp("", "index")
@@ -396,6 +442,37 @@ func genIndexReader(e *emitter) {
 			}
 		}
 
+		// `PostingsForLabelMatching` and `PostingsForAllLabelValues`, which are ONE function upstream
+		// distinguished by a nil predicate — so the `nil` spec must take the other branch, not pass a
+		// closure that always returns true.
+		if len(in.MatchQueries) > 0 {
+			r4, rerr := index.NewReader(bs, index.DecodePostingsRaw)
+			if rerr != nil {
+				out.MatchErrs = append(out.MatchErrs, rerr.Error())
+			} else {
+				for _, q := range in.MatchQueries {
+					var p index.Postings
+					if q[1] == "nil" {
+						p = r4.PostingsForAllLabelValues(context.Background(), q[0])
+					} else {
+						p = r4.PostingsForLabelMatching(context.Background(), q[0], matchPredicate(q[1]))
+					}
+					ids, perr := index.ExpandPostings(p)
+					refs := []uint64{}
+					for _, id := range ids {
+						refs = append(refs, uint64(id))
+					}
+					out.MatchResults = append(out.MatchResults, refs)
+					if perr != nil {
+						out.MatchErrs = append(out.MatchErrs, perr.Error())
+					} else {
+						out.MatchErrs = append(out.MatchErrs, "")
+					}
+				}
+				_ = r4.Close()
+			}
+		}
+
 		e.emit(fmt.Sprintf("indexreader/%d", n), in, out)
 		n++
 	}
@@ -567,6 +644,73 @@ func genIndexReader(e *emitter) {
 	// Empty and near-empty symbols, and ones with a NUL.
 	emit(indexReaderIn{Symbols: []string{"", "a", "a\x00b"},
 		Lookups: []uint32{0, 1, 2}, Reverse: []string{"", "a", "a\x00b"}})
+
+	// --- PostingsForLabelMatching and PostingsForAllLabelValues.
+	//
+	// One function upstream, distinguished by a nil predicate, and what has to be reached is:
+	//   - the `val != lastVal` STOP CONDITION, which is the only thing keeping the traversal from walking
+	//     into the next label name's entries. It needs a name whose values span more than one sparse
+	//     entry, so the counts below cross the factor of 32.
+	//   - the empty return for an unknown name, and for a predicate that matches nothing — different
+	//     paths to the same answer (`e` empty vs. `its` empty, the latter through `Merge()`).
+	//   - `Merge`'s de-duplication and ordering over MANY postings lists, since each matching value
+	//     contributes one. Every series here has a distinct value of `l`, so a predicate matching k
+	//     values yields exactly k refs and the ORDER is `Merge`'s to get right.
+	{
+		// Three values, so a matching predicate is easy to read off by hand.
+		emit(indexReaderIn{
+			Symbols: []string{"aa", "ab", "bb"},
+			MatchQueries: [][2]string{
+				{"l", "nil"}, {"l", "all"}, {"l", "none"},
+				{"l", "prefix:a"}, {"l", "prefix:b"}, {"l", "prefix:z"},
+				{"l", "eq:ab"}, {"l", "ne:ab"}, {"l", "suffix:b"}, {"l", "contains:b"},
+				// An unknown name: `e` is empty, so this returns before any traversal.
+				{"nope", "nil"}, {"nope", "all"},
+				// The all-postings key, which is a real name in the table.
+				{"", "nil"},
+			},
+		})
+		// Values that span the sparse factor, so the traversal crosses entries and the stop condition is
+		// load-bearing rather than incidental.
+		for _, count := range []int{31, 32, 33, 65, 100} {
+			syms := make([]string, 0, count)
+			for i := range count {
+				syms = append(syms, fmt.Sprintf("v%04d", i))
+			}
+			emit(indexReaderIn{
+				Symbols: syms,
+				MatchQueries: [][2]string{
+					{"l", "nil"}, {"l", "all"}, {"l", "none"},
+					// Matches exactly one value, and it is the LAST — so the stop condition fires on the
+					// same entry that matched.
+					{"l", fmt.Sprintf("eq:v%04d", count-1)},
+					// Matches exactly the first.
+					{"l", "eq:v0000"},
+					// A predicate whose matches are scattered across sparse entries.
+					{"l", "suffix:0"}, {"l", "contains:1"},
+					// Everything but one.
+					{"l", fmt.Sprintf("ne:v%04d", count/2)},
+				},
+			})
+		}
+		// Byte-ordering-versus-collation values again (ADR-10): the table is sorted by bytes and the
+		// predicate sees the values in that order, so a port that walks a differently-ordered array
+		// matches a different set.
+		emit(indexReaderIn{
+			Symbols: []string{"Z", "a", "z", "é", "É"},
+			MatchQueries: [][2]string{
+				{"l", "nil"}, {"l", "prefix:z"}, {"l", "prefix:Z"}, {"l", "longerthan:1"},
+			},
+		})
+		// The empty value, which is a legal label value in the TABLE even though a series carrying it is
+		// unusual — so `empty` reaches a value the other predicates cannot.
+		emit(indexReaderIn{
+			Symbols: []string{"", "a", "b"},
+			MatchQueries: [][2]string{
+				{"l", "nil"}, {"l", "empty"}, {"l", "longerthan:0"}, {"l", "none"},
+			},
+		})
+	}
 
 	// A corrupted TOC CRC, and a truncated file.
 	emit(indexReaderIn{Symbols: []string{"a", "b"}, CorruptTOCCRC: true})
