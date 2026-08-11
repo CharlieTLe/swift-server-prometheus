@@ -2363,6 +2363,22 @@ changing behaviour.
     Random generation would not have found that; deriving the condition under which the two predicates differ,
     and then constructing it, did. Use whichever the shape of the perturbation calls for.
 
+166. **`blockBaseSeriesSet.Next` has THREE reasons to skip a series and only one of them is an error**, so a
+    postings list of N refs can yield anywhere from 0 to N series with nothing reported. A stale ref
+    (`storage.ErrNotFound` from `index.Series`) is skipped, a series with no chunks is skipped, and a series
+    whose chunks are all out of range or fully deleted is skipped. Any *other* error from `index.Series` stops
+    the whole set.
+
+    Rules 2 and 3 are **redundant in one direction**: an empty `bufChks` makes the prefilter append nothing,
+    so rule 3 catches a chunk-less series anyway and rule 2 is a fast path that avoids the tombstone lookup.
+    Removing rule 2 survives; removing rule 3 breaks. Established by adding a corpus case specifically to
+    close the rule-2 control, watching it not close, and then proving why.
+
+    The three time ranges involved are all different and upstream flags it in a NOTE: the block's is half-open
+    `[MinTime, MaxTime)`, a chunk's is closed `[MinTime, MaxTime]`, the request's is closed `[Start, End]`. So
+    the prefilter is strict — `chk.MaxTime < mint`, `chk.MinTime > maxt` — and a chunk merely touching a
+    boundary is KEPT. Six controls cover those four comparisons and all six break.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
