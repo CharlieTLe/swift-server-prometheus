@@ -95,7 +95,10 @@ let package = Package(
 
         // Phase 6: `tsdb/index`'s postings algebra. `MemPostings` is deliberately not here — that is
         // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
-        .target(name: "PromIndex", dependencies: ["PromStorage", "PromLabels", "GoCompat"]),
+        .target(
+            name: "PromIndex",
+            dependencies: ["PromStorage", "PromLabels", "PromEncoding", "PromHash", "GoCompat"]
+        ),
         .target(
             name: "PromStorage",
             dependencies: [
@@ -241,7 +244,9 @@ let package = Package(
         ),
         .testTarget(
             name: "PromIndexTests",
-            dependencies: ["PromIndex", "PromStorage", "GoOracleSupport", "GoCompat"]
+            dependencies: [
+                "PromIndex", "PromStorage", "PromEncoding", "GoOracleSupport", "GoCompat",
+            ]
         ),
         .testTarget(
             name: "PromChunkEncTests",
