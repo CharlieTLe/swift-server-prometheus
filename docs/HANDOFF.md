@@ -21,7 +21,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
+| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **1,448 of 2,221 assertions pass with 0 failures**; the 773 skips are itemised by the run and 451 of them are the runner's own remaining work rather than the engine's (§5e). Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
@@ -1172,7 +1172,49 @@ it needs **no** blocked feature — so histogram support in the runner's loader 
 either remaining function. And `start_timestamps.test`'s 18 need `EncXOR2`, which is quirk 36's
 Phases 6-7 dependency, so they cannot pass until then whatever the runner does.
 
-#### (a) `promqltest` — the exit gate, and do this one first
+#### (a) `promqltest` — LANDED, and here is what it says
+
+**1,448 assertions pass, 0 fail, 773 skip.** `swift test --filter PromQLTestTests` prints the
+per-file tally and itemises every skip. There is no differential corpus, by design: the `.test`
+files *are* the comparison, so a failure here is an engine bug and the number is the headline
+metric. The test carries a **ratchet** (`promqlTestAllowedFailures = 0`) and a **floor**
+(`promqlTestMinimumPasses = 1_448`) so neither a new failure nor a pass quietly turned into a skip
+can slip through.
+
+Where the 773 skips are, and who owns each:
+
+```
+250  positive `expect` annotation assertions     the RUNNER
+201  histogram-valued assertions                the RUNNER
+181  depend on a declined load_with_nhcb        Phases 6-7 (convert.go)
+ 40  info(...)                                  the evaluator
+ 33  load_with_nhcb itself                      Phases 6-7
+ 18  depend on a declined @st load               Phases 6-7 (EncXOR2, quirk 36)
+ 18  label_replace                               PromRegex (captures)
+  5  @st loads themselves                        Phases 6-7
+ ~8  expect range vector / expect string         the RUNNER
+```
+
+So **451 of the 773 are the runner's own remaining work, not the engine's** — comparing annotation
+text (which `PromAnnotations` already pins byte-for-byte, 4,118 cases, so this is wiring rather
+than porting) and comparing histogram values (`FloatHistogram.Equals` under `almost.Equal` per
+field, which `PromHistogram` already has). Those two are the cheapest 451 assertions left in the
+project and neither needs anything ported.
+
+Three things the first run taught, all of them recorded because they cost time:
+
+* **`defaultEpsilon` is `1e-6`, not `1e-12`** (test.go:61, "Relative error allowed for sample
+  values"). The `.test` files write expectations to nine significant figures — `1.833333333` for
+  `11/6` — so a tight epsilon rejects a *correct* answer. Twenty assertions failed on that alone.
+* **Go's loader REPLACES a repeated metric definition**; `cmd.defs[h] = samples`, not append.
+  `aggregators.test` has two `data{test="-inf3",point="c"}` lines and the second wins. An appending
+  loader errors on the duplicate, aborts the block, and then reads every following series line as a
+  command — one difference, 176 phantom failures.
+* **A declined load has to skip its dependent assertions, not fail them.** `histograms.test` opens
+  with `load_with_nhcb`, so without propagation all 149 of its assertions failed for want of data.
+  Skips and failures are only worth separating if the separation is maintained.
+
+#### (b) was: `promqltest` — the exit gate, and do this one first
 
 The runner turns the committed `.test` files into the assertion set Phase 5 is measured by. Its
 patterns are already reproduced in `oracle/corpus.go`, and the testdata is already committed and
@@ -1192,7 +1234,7 @@ Expect the first run to fail widely and to be *informative*: the assertions carr
 annotation text, which is already byte-exact (4,118 pinned cases), so a failure is a real
 divergence rather than a formatting difference.
 
-#### (b) `label_replace`, which is a `PromRegex` slice and not an evaluator one
+#### (c) `label_replace`, which is a `PromRegex` slice and not an evaluator one
 
 `evalLabelJoin` landed in #49; `evalLabelReplace` is 20 lines of evaluator around two `regexp`
 calls the port does not have:

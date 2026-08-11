@@ -50,6 +50,28 @@ public enum Fixtures {
         repositoryRoot.appendingPathComponent("Fixtures")
     }
 
+    /// The names in a fixture subdirectory. Sorted, so a run's order is stable.
+    ///
+    /// Added for the `promqltest` exit gate, which iterates `Fixtures/promql/testdata/*.test`
+    /// rather than decoding a JSONL corpus — the `.test` files are upstream's own assertions, not
+    /// generated ones.
+    public static func list(_ relativeDirectory: String) throws -> [String] {
+        let url = fixturesDirectory.appendingPathComponent(relativeDirectory)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else {
+            throw FixtureError.notFound(url.path)
+        }
+        return names.sorted()
+    }
+
+    /// A fixture file's contents as text, for the corpora that are not JSONL.
+    public static func text(_ relativePath: String) throws -> String {
+        let url = fixturesDirectory.appendingPathComponent(relativePath)
+        guard let data = try? Data(contentsOf: url) else {
+            throw FixtureError.notFound(url.path)
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// Load a JSONL fixture file, one case per line.
     public static func load<In: Decodable & Sendable, Out: Decodable & Equatable & Sendable>(
         _ relativePath: String,
