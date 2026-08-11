@@ -43,6 +43,23 @@ public enum GoHeap: Sendable {
         up(count - 1, less, swap)
     }
 
+    /// Go: `heap.Init` — establish the invariant over an already-populated collection.
+    ///
+    /// `for i := n/2 - 1; i >= 0; i--  { down(i, n) }`. **Not** the same as pushing every element in
+    /// turn: `Init` sifts DOWN from the last internal node backwards, and push sifts UP from the end,
+    /// so the two produce heaps that are both valid and differently ordered. `FindIntersectingPostings`
+    /// appends first and calls `Init`, so the port must too — its heap's order decides which candidate
+    /// index is popped first, and therefore the ORDER of the returned indexes.
+    public static func initialized(
+        count: Int, less: (Int, Int) -> Bool, swap: (Int, Int) -> Void
+    ) {
+        var i = count / 2 - 1
+        while i >= 0 {
+            _ = down(i, count, less, swap)
+            i -= 1
+        }
+    }
+
     /// Go: `heap.Fix` — restore the invariant after the element at `i` changed.
     ///
     /// `down` first, `up` only if `down` did not move it. Not both.
