@@ -2145,6 +2145,40 @@ the interval arithmetic (§6q) and `DeletedIterator` (§6r). Then the `populateW
 upstream's `ChunkReader.ChunkOrIterable` returns a `(Chunk, Iterable)` pair because one meta can name several
 chunks, while the port's `chunk` returns `(encoding, bytes)`.
 
+### 6s. `blockBaseSeriesSet` — LANDED (selection and order; trimming is §6t's)
+
+`Sources/PromBlock/BlockSeriesSet.swift`. The step from a postings list to selected series. The oracle drives
+upstream's own `NewBlockChunkSeriesSet` — exported, and it takes exactly what a real block hands over — over a
+block written by `blockfixture.go`.
+
+**The scoping is the thing to understand before extending this.** `Next` decides two things: WHICH series
+survive, and what deletion intervals to trim them by. The first is observable from the label sets alone; the
+second only through the `populateWithDel*` iterators. So this suite compares label sets and errors, and
+**seven of nineteen controls survive as declared corpus gaps** rather than argued equivalences — four for the
+trimming flags, one for the tombstone prefilter (unreachable until `Delete()` exists), and two for the error
+paths (a written block resolves every ref, so reaching them needs a hand-built index — the Head's territory,
+where stale postings happen by construction).
+
+That is deliberate. Recording the chunk metas here would have forced the populate iterator to exist for this
+suite to pass, which is the opposite of slicing. The oracle already showed what will close the trimming gaps:
+a query at `[120,120]` against a chunk spanning `[100,120]` yields a meta of `[120,120]` with trimming on and
+`[100,120]` with it off.
+
+Quirk 166 has the port findings. The one worth keeping: **skip rules 2 and 3 are redundant in one direction.**
+A control removing rule 2 (chunk-less series) survived; a corpus case was added specifically to close it and
+did not; the reason is that an empty `bufChks` makes the prefilter append nothing, so rule 3 catches the
+series anyway. Removing rule 3 breaks. That is the fourth shape of survivor now on record — after a corpus gap
+(159), a tautology (160) and an inert patch (163), a survivor can be **genuine redundancy in the upstream
+code**, provable only by trying to close it and failing.
+
+Also fixed here: a control that reported COMPILE (`if postings.next() {` orphans the `continue`s) now reads
+`while postings.next() && current == nil`, which yields at most one series and does break.
+
+**Next in Phase 6:** the `populateWithDel*` iterators, which close five of this sweep's declared gaps and
+`§6r`'s erroring-chunk gap at the same time. The `ChunkOrIterable` signature decision is still open and still
+first: upstream returns a `(Chunk, Iterable)` pair because one meta can name several chunks, the port's
+`chunk` returns `(encoding, bytes)`. Then `blockQuerier.Select`, and Phase 6's read path is closed.
+
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 
 Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.

@@ -118,6 +118,7 @@ var suites = map[string]func(*emitter){
 	"block/labels":              genBlockLabelQueries,
 	"block/tsintervals":         genTombstoneIntervals,
 	"block/deletediter":         genDeletedIterator,
+	"block/seriesset":           genBlockSeriesSet,
 	"block/meta":                genBlockMeta,
 	"gocompat/time-rfc3339":     genGoTimeRFC3339,
 	"gocompat/time-unixmilli":   genGoTimeUnixMilli,
