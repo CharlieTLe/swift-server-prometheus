@@ -209,6 +209,10 @@ var suites = map[string]func(*emitter){
 	// fixture file holds one in/out shape. See
 	// oracle/suites_promql_engine_rangequery.go.
 	"promql/exec-range": genPromQLExecRange,
+	// Phase 5: util/convertnhcb, classic histogram samples -> one NHCB. Exported
+	// and pure, so it is driven directly. Worth ~195 exit-gate assertions. See
+	// oracle/suites_convertnhcb.go.
+	"histogram/convertnhcb": genConvertNHCB,
 }
 
 func main() {

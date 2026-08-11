@@ -35,6 +35,7 @@ let package = Package(
         .library(name: "PromQLParser", targets: ["PromQLParser"]),
         .library(name: "PromQL", targets: ["PromQL"]),
         .library(name: "PromQLTest", targets: ["PromQLTest"]),
+        .library(name: "PromConvertNHCB", targets: ["PromConvertNHCB"]),
         .library(name: "PromLabels", targets: ["PromLabels"]),
         .library(name: "PromSchema", targets: ["PromSchema"]),
         .library(name: "PromEncoding", targets: ["PromEncoding"]),
@@ -126,6 +127,16 @@ let package = Package(
             ]
         ),
 
+        // Phase 5: classic histogram samples -> one NHCB. The direction
+        // `PromHistogram.convertNHCBToClassic` does not go, and what
+        // `promqltest`'s `load_with_nhcb` needs — ~195 exit-gate assertions.
+        // Its own target because Phase 8's scrape loop needs it too, and it
+        // depends on nothing but the histogram and label models.
+        .target(
+            name: "PromConvertNHCB",
+            dependencies: ["PromHistogram", "PromLabels", "PromModel", "GoCompat"]
+        ),
+
         // Phase 5: the `.test` file runner — THE EXIT GATE. Unlike every other
         // target this one needs no differential corpus: the 2,183 `eval`
         // assertions in `Fixtures/promql/testdata/` are already upstream's, so
@@ -134,10 +145,15 @@ let package = Package(
             name: "PromQLTest",
             dependencies: [
                 "PromQL", "PromQLParser", "PromTestStorage", "PromStorage",
-                "PromChunks", "PromHistogram", "PromLabels", "PromModel", "GoCompat",
+                "PromChunks", "PromHistogram", "PromConvertNHCB", "PromLabels", "PromModel",
+                "GoCompat",
             ]
         ),
 
+        .testTarget(
+            name: "PromConvertNHCBTests",
+            dependencies: ["PromConvertNHCB", "PromHistogram", "GoOracleSupport", "GoCompat"]
+        ),
         .testTarget(
             name: "PromQLTestTests",
             dependencies: ["PromQLTest", "PromQL", "PromQLParser", "GoOracleSupport", "GoCompat"]
