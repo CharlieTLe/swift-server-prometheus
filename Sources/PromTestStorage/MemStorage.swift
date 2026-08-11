@@ -90,6 +90,18 @@ public final class MemStorage: Queryable {
     /// caching actually mean something. Committing to its shape here would be
     /// guessing.
     public func append(_ lset: Labels, _ sample: any Sample) throws {
+        // **A histogram sample loses its start timestamp, because upstream's TSDB has nowhere to put
+        // it.** `EncXOR2` is the only encoding with an ST field and it holds floats; the histogram
+        // chunks have no equivalent, so a `@st` line attached to a histogram series is accepted by the
+        // loader, passed to the appender, and then silently dropped. `start_timestamps.test` says so in
+        // as many words — "TODO: start timestamps doesn't work for histograms yet, because the tsdb
+        // support is missing" — and its histogram expectations are written for the ST-free answers.
+        //
+        // `MemStorage` stands in for the TSDB, so this is the faithful place for the limitation. Keeping
+        // the ST here instead made four assertions fail with plausible-looking numbers: `increase`
+        // returned 420 where upstream says 300, because the port was applying an ST correction upstream
+        // cannot. Remove this when the histogram chunks grow an ST field and upstream's TODO is closed.
+        let sample = Self.droppingSTForHistograms(sample)
         guard let idx = byLabels[lset] else {
             byLabels[lset] = entries.count
             entries.append(Entry(lset: lset, samples: [sample]))
@@ -173,6 +185,19 @@ public final class MemStorage: Queryable {
         // needs a default even though the four constants above are all of them.
         default:
             preconditionFailure("MemStorage.append: unknown ValueType \(incoming.type.rawValue)")
+        }
+    }
+
+    /// See ``append(_:_:)`` — a histogram sample cannot carry a start timestamp through upstream's
+    /// storage, so it does not carry one through this one either.
+    private static func droppingSTForHistograms(_ s: any Sample) -> any Sample {
+        switch s.type {
+        case .histogram:
+            return s.st == 0 ? s : HSample(st: 0, t: s.t, h: s.h)
+        case .floatHistogram:
+            return s.st == 0 ? s : FHSample(st: 0, t: s.t, fh: s.fh)
+        default:
+            return s
         }
     }
 

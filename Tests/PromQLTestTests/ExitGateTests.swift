@@ -7,9 +7,10 @@
 // upstream wrote, copied verbatim and sha256-pinned. So the assertion here is not "matches Go" but
 // "answers correctly", and the number it prints is the project's headline metric.
 //
-// The ratchet is **zero**, **every evaluator arm is ported**, and **every runner directive is
-// supported**. All 23 remaining skips are one thing: `@st` lines, which ride on `EncXOR2` and so belong
-// to Phases 6-7 (quirk 36). Nothing in Phase 5 is outstanding.
+// **2,183 of 2,183. Zero failures, zero skips.** Every `eval` assertion in every committed `.test` file
+// passes: every evaluator arm, every runner directive, and — since `EncXOR2` landed and the loader
+// learnt `@st` — every start-timestamp assertion too. There is nothing left for this gate to measure,
+// which is the definition of Phase 5 being done.
 //
 // `EnableDelayedNameRemoval` is TRUE, because that is what upstream's own runner sets
 // (test.go:111) and therefore what the gate means.
@@ -42,6 +43,10 @@ struct PromQLTestTests {
                 enableNegativeOffset: true,
                 // What upstream's runner sets, so it is what the gate means.
                 enableDelayedNameRemoval: true,
+                // Go's runner sets `UseStartTimestamps: true` (test.go:112), so the gate must too —
+                // `start_timestamps.test` is written against it, and the four ST-aware functions read
+                // nothing without it.
+                useStartTimestamps: true,
                 // NOT set by upstream's runner (test.go:104-111), and setting it changes which
                 // possible-non-counter info `rate` emits — one assertion asserts `expect no_info`
                 // and got one. The gate has to run the engine upstream's runner builds, not a
@@ -131,10 +136,10 @@ let promqlTestAllowedFailures = 0
 // the six were real.
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 2,165 of 2,188 (99%), with ZERO failures — and BOTH are a Phase 6-7 dependency rather than an
-// so the engine has no known divergence left that the gate can see. The 23 remaining skips are ALL the
-// same gap — `@st` loads and the assertions that depend on them, which need `EncXOR2` (Phases 6-7,
-// quirk 36). There is nothing else left to name.
+// 2,183 of 2,183 (100%), with ZERO failures and ZERO skips — and BOTH are a Phase 6-7 dependency rather than an
+// so the engine has no known divergence left that the gate can see, and no assertion it declines to
+// run. The total moved from 2,188 to 2,183 because `@st` lines are no longer counted as assertions of
+// their own — they are load lines now, applied to the sample line that follows.
 //
 // `load_with_nhcb` is no longer among them: porting `util/convertnhcb` and wiring it into the loader
 // moved 170 assertions from skip to pass in one commit, which is what measuring the gap before
@@ -143,8 +148,12 @@ let promqlTestAllowedFailures = 0
 // of 42 to 41, the one holdout being a `fail regex:` expectation the runner declines. `label_replace`
 // then took the last 21, and with them the last unported arm of the evaluator. `expect string`,
 // `expect range vector` and `fail regex:` closed the last 11 — the `regex:` ones only became possible
-// once the capture VM existed, since the boolean VM cannot do an unanchored search.
-let promqlTestMinimumPasses = 2_165
+// once the capture VM existed, since the boolean VM cannot do an unanchored search. And `EncXOR2` plus
+// `@st` loading closed the final 23, which needed three fixes beyond the encoding itself: the runner had
+// to parse ST sequences, `MemStorage` had to DROP ST on histogram samples (upstream's TSDB has nowhere
+// to put it, and its own expectations are written for the ST-free answers), and `instantValue` had to
+// actually read `enh.startTimestamps`, which it never had.
+let promqlTestMinimumPasses = 2_183
 
 extension String {
     fileprivate func padded(to n: Int) -> String {

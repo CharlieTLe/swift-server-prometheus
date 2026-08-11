@@ -48,6 +48,7 @@ extension PromQLTestRunner {
         // `histograms.test` alone, so the accumulate-then-flush shape is not a detail.
         var defs: [UInt64: (metric: Labels, samples: [any PromChunks.Sample])] = [:]
         var order: [UInt64] = []
+        var pendingST: (metric: Labels, values: [SequenceValue])? = nil
 
         while i + 1 < lines.count {
             i += 1
@@ -57,11 +58,20 @@ extension PromQLTestRunner {
                 break
             }
             // `@st` is a SUFFIX ON THE METRIC (`foo{…}@st  <values>`), not a line prefix — Go's
-            // `isSTLine` looks at the token before the first space. Start timestamps ride on
-            // `EncXOR2`, so they belong to Phases 6-7 (quirk 36).
-            let firstToken = defLine.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
-            if firstToken.hasSuffix("@st") {
-                outcome = .skipped("@st lines need EncXOR2 (Phases 6-7, quirk 36)")
+            // `isSTLine` looks at the token before the first space.
+            //
+            // An ST line does not stand alone: it describes the start timestamps of the sample line that
+            // FOLLOWS it, so it is held pending and applied there. Two lines in a row is an error, as is
+            // an ST line with nothing after it.
+            if isSTLine(defLine) {
+                if pendingST != nil {
+                    return (i + 1, .failed("\(i + 1): @st line has no following sample line"))
+                }
+                do {
+                    pendingST = try parseSTLine(defLine)
+                } catch {
+                    return (i + 1, .failed("\(i + 1): invalid @st line: \(error)"))
+                }
                 continue
             }
             if outcome != nil {
@@ -69,27 +79,59 @@ extension PromQLTestRunner {
             }
             do {
                 let (metric, values) = try parser.parseSeriesDesc(defLine)
+                // The ST line's metric must match, and its value count must match exactly — a
+                // per-position correspondence, so `_` placeholders have to line up.
+                if let pending = pendingST {
+                    if pending.metric != metric {
+                        return (
+                            i + 1,
+                            .failed(
+                                "\(i + 1): @st metric does not match the following sample line metric")
+                        )
+                    }
+                    if pending.values.count != values.count {
+                        return (
+                            i + 1,
+                            .failed(
+                                "\(i + 1): @st line has \(pending.values.count) values but sample line"
+                                    + " has \(values.count)")
+                        )
+                    }
+                }
                 var samples = [any PromChunks.Sample]()
                 var t = Self.startTime
-                for v in values {
+                for (j, v) in values.enumerated() {
                     defer { t += gap.milliseconds }
                     // An omitted value (`_`) is a HOLE: the timestamp advances and nothing is
                     // appended, which is how a `.test` file writes a gap.
                     if v.omitted {
                         continue
                     }
+                    // Go: `s.ST = tsMs + int64(stVals[i].Value)` — the sequence holds OFFSETS in
+                    // milliseconds relative to the sample's own timestamp, and they are typically
+                    // negative (`-1m` means "this sample's series started a minute before it"). An
+                    // omitted ST position leaves the sample's ST at 0, which means "unknown".
+                    var st: Int64 = 0
+                    if let pending = pendingST, j < pending.values.count, !pending.values[j].omitted {
+                        st = t + Int64(pending.values[j].value)
+                    }
                     if let h = v.histogram {
-                        samples.append(FHSample(st: 0, t: t, fh: h))
+                        samples.append(FHSample(st: st, t: t, fh: h))
                     } else {
-                        samples.append(FSample(st: 0, t: t, f: v.value))
+                        samples.append(FSample(st: st, t: t, f: v.value))
                     }
                 }
+                pendingST = nil
                 let h = metric.goHash()
                 if defs[h] == nil { order.append(h) }
                 defs[h] = (metric, samples)
             } catch {
                 return (i + 1, .failed("\(i + 1): \(defLine): \(String(describing: error))"))
             }
+        }
+
+        if pendingST != nil {
+            return (i + 1, .failed("\(i + 1): @st line has no following sample line"))
         }
 
         for h in order {
@@ -787,10 +829,148 @@ extension PromQLTestRunner {
 
 /// The fields `FloatHistogram.String()` does not print, which is exactly where a mismatch with two
 /// identical renderings has to live.
+/// Renders every field `compareNativeHistogram` compares — **count and sum included**.
+///
+/// They were missing, and that made three `start_timestamps.test` failures unreadable: the message showed
+/// only the counter-reset hint differing while the real difference was the count, so the obvious reading
+/// (a hint bug) was wrong. A failure message that omits the field it is failing on is worse than no
+/// message.
 func hDetail(_ h: FloatHistogram) -> String {
-    var s = "schema=\(h.schema) zt=\(h.zeroThreshold) zc=\(h.zeroCount) hint=\(h.counterResetHint)"
+    var s = "count=\(GoFloat.format(h.count, .g)) sum=\(GoFloat.format(h.sum, .g))"
+    s += " schema=\(h.schema) zt=\(h.zeroThreshold) zc=\(h.zeroCount) hint=\(h.counterResetHint)"
     s += " pSpans=\(h.positiveSpans.map { "(\($0.offset),\($0.length))" }.joined())"
     s += " nSpans=\(h.negativeSpans.map { "(\($0.offset),\($0.length))" }.joined())"
     s += " pB=\(h.positiveBuckets) nB=\(h.negativeBuckets) cv=\(h.customValues.map(String.init(describing:)) ?? "nil")"
     return s
+}
+
+// MARK: - `@st` lines
+
+/// Go: `isSTLine` — a start-timestamp line is `metric{labels}@st <sequence>`, with **no space** before
+/// `@st`. So the test is on the first whitespace-delimited token, not on the line.
+func isSTLine(_ defLine: String) -> Bool {
+    let t = defLine.trimmed()
+    guard let spaceIdx = t.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
+        return false
+    }
+    return t[t.startIndex..<spaceIdx].hasSuffix("@st")
+}
+
+/// Go: `parseSTLine` — the metric and the offset sequence.
+///
+/// The metric is parsed by handing `metricPart + " _"` to the ordinary series-description parser, which
+/// is upstream's trick too: it avoids a second label parser at the cost of a dummy value.
+func parseSTLine(_ defLine: String) throws -> (metric: Labels, values: [SequenceValue]) {
+    let t = defLine.trimmed()
+    guard let spaceIdx = t.firstIndex(where: { $0 == " " || $0 == "\t" }) else {
+        throw STParseError("invalid @st line: missing value sequence")
+    }
+    let metricPart = String(t[t.startIndex..<spaceIdx].dropLast(3))  // drop "@st"
+    let valsPart = String(t[spaceIdx...]).trimmed()
+    let (metric, _) = try Parser(options: Options()).parseSeriesDesc(metricPart + " _")
+    return (metric, try parseSTSequence(valsPart))
+}
+
+/// Go: `parseDurationPrefix` — a signed Prometheus duration at the head of a string, in milliseconds,
+/// plus whatever follows.
+///
+/// The unit scan stops at `x` explicitly, because `x` is the repeat-count separator and never part of a
+/// duration unit — without that, `1mx3` would try to parse `mx` as a unit.
+func parseDurationPrefix(_ s: String) throws -> (ms: Int64, rest: String) {
+    if s.isEmpty { throw STParseError("empty duration") }
+    let chars = Array(s)
+    var negative = false
+    var i = 0
+    if chars[0] == "-" {
+        negative = true
+        i = 1
+    } else if chars[0] == "+" {
+        i = 1
+    }
+    let start = i
+    while i < chars.count, chars[i].isNumber { i += 1 }
+    if i == start {
+        throw STParseError("expected digits in duration \"\(s)\"")
+    }
+    while i < chars.count, chars[i].isLetter, chars[i] != "x" { i += 1 }
+    let text = String(chars[start..<i])
+    guard let dur = try? PromDuration.parse(text) else {
+        throw STParseError("invalid duration \"\(text)\"")
+    }
+    var ms = dur.milliseconds
+    if negative { ms = -ms }
+    return (ms, String(chars[i...]))
+}
+
+/// Go: `parseSTItem`. The grammar, from upstream's comment:
+///
+/// ```
+/// _              one omitted position
+/// _xN            N omitted positions
+/// <dur>          one position
+/// <dur>xN        N+1 positions, all the same
+/// <dur>+<dur>xN  N+1 positions, offset increasing by the delta each step
+/// <dur>-<dur>xN  N+1 positions, decreasing
+/// ```
+///
+/// Note the asymmetry: `_xN` gives **N** positions while `<dur>xN` gives **N+1**. That is upstream's,
+/// and it matches the series-description grammar, where `x` means "and N more".
+func parseSTItem(_ item: String) throws -> [SequenceValue] {
+    if item == "_" {
+        return [SequenceValue(omitted: true)]
+    }
+    if item.hasPrefix("_x") {
+        guard let n = UInt64(item.dropFirst(2)), n > 0 else {
+            throw STParseError("invalid repeat count")
+        }
+        return (0..<Int(n)).map { _ in SequenceValue(omitted: true) }
+    }
+
+    let (base, rest) = try parseDurationPrefix(item)
+    if rest.isEmpty {
+        return [SequenceValue(value: Double(base))]
+    }
+    if rest.hasPrefix("x") {
+        guard let n = UInt64(rest.dropFirst()) else {
+            throw STParseError("invalid repeat count")
+        }
+        return (0...Int(n)).map { _ in SequenceValue(value: Double(base)) }
+    }
+    guard rest.hasPrefix("+") || rest.hasPrefix("-") else {
+        throw STParseError("unexpected character \"\(rest.first!)\" after duration")
+    }
+    let negative = rest.hasPrefix("-")
+    let (deltaMagnitude, rest2) = try parseDurationPrefix(String(rest.dropFirst()))
+    let delta = negative ? -deltaMagnitude : deltaMagnitude
+    guard rest2.hasPrefix("x") else {
+        throw STParseError("expected 'x<count>' after step duration")
+    }
+    guard let n = UInt64(rest2.dropFirst()) else {
+        throw STParseError("invalid repeat count")
+    }
+    var out: [SequenceValue] = []
+    var offset = base
+    for _ in 0...Int(n) {
+        out.append(SequenceValue(value: Double(offset)))
+        offset += delta
+    }
+    return out
+}
+
+/// Go: `parseSTSequence`.
+func parseSTSequence(_ input: String) throws -> [SequenceValue] {
+    var out: [SequenceValue] = []
+    for item in input.split(whereSeparator: { $0 == " " || $0 == "\t" }) {
+        out.append(contentsOf: try parseSTItem(String(item)))
+    }
+    return out
+}
+
+/// The runner's own errors for a malformed `@st` block. Not byte-exact against Go: these reach a test
+/// report rather than a user, and `promqltest`'s own messages are `raise(line, ...)`-formatted with a
+/// line number the port supplies separately.
+struct STParseError: Error, CustomStringConvertible {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var description: String { text }
 }
