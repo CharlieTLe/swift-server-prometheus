@@ -173,9 +173,20 @@ struct BlockSeriesSetTests {
                     } else {
                         p = try postingsForMatchers(ix, ms)
                     }
-                    let ss = BlockBaseSeriesSet(
-                        index: ix, postings: p, mint: q.mint, maxt: q.maxt,
-                        disableTrimming: q.disableTrimming)
+                    // Through `blockSelect`, not `BlockBaseSeriesSet` directly — because the Go side drives
+                    // `blockQuerier.Select` with `SelectHints`, so routing the port the same way pins the
+                    // HINT handling (the range override and `DisableTrimming`) with no new corpus. `p` above
+                    // is still computed for the label-set pass, which uses the all-postings key when a query
+                    // has no matchers; `Select` cannot express that without the `{""=""}` matcher, which is
+                    // what the oracle substitutes.
+                    _ = p
+                    let selectMs =
+                        ms.isEmpty ? [try Matcher(.equal, "", "")] : ms
+                    let (ss, _) = try blockSelect(
+                        index: ix, chunks: source, mint: q.mint, maxt: q.maxt,
+                        matchers: selectMs, sortSeries: false,
+                        hints: BlockSelectHints(
+                            start: q.mint, end: q.maxt, disableTrimming: q.disableTrimming))
                     var sets: [String] = []
                     var ranges: [[[Int64]]] = []
                     var times: [[Int64]] = []

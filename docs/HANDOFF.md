@@ -2257,9 +2257,35 @@ load-bearing only for the Head where the chunk is open and `copyHeadChunk` inter
 is upstream's shape and because the Head will need it. The bytes stay in the corpus — they are the strongest
 assertion in this suite, and they now also pin the re-encoder itself.
 
-**Next in Phase 6:** `blockQuerier.Select` — `selectSeriesSet`'s hint handling (`Start`/`End` overriding the
-querier's range, `DisableTrimming`, `Func == "series"` substituting a nop chunk reader) and
-`blockChunkQuerier`. Then Phase 6's read path is closed. Two gaps stay open past it by construction and are
+### 6v. `blockQuerier.Select` — LANDED, with one gap declared
+
+`Sources/PromBlock/BlockQuerier.swift`: `selectSeriesSet`, the shared body of both queriers. Phase 6's read
+path now runs end to end — matchers in, samples or chunks out.
+
+**No new corpus.** The port's sample pass in `block/seriesset.jsonl` was rerouted through `blockSelect`
+instead of constructing `BlockBaseSeriesSet` directly, because the Go side already drives
+`blockQuerier.Select` with `SelectHints` — so the existing corpus pins the hint handling for free. The
+`DisableTrimming` hint is pinned (perturbing it breaks).
+
+Three behaviours worth carrying:
+
+- **The hints OVERRIDE the querier's own range.** A querier built for [0,100] and selected with hints of
+  [200,300] reads [200,300], so the constructor's range is a DEFAULT, not a bound — the opposite of what its
+  signature suggests. **This one is not pinned:** the corpus passes hints equal to the querier's range, so
+  overriding and not overriding are identical. Closing it needs one query per case whose hints DIFFER — two
+  fields on `seriesSetQuery` (`hintStart`/`hintEnd`) and the same on the port side. Declared in the file
+  header too.
+- **`Func == "series"` swaps in a chunk reader returning an EMPTY chunk**, not nil and not an error. A
+  metadata-only query still yields series whose chunks iterate to nothing, rather than series with no chunks —
+  which `blockBaseSeriesSet` would have skipped (quirk 166's rule 2). That is the whole reason it is a nop
+  reader rather than a nil one.
+- **`sortSeries` is honoured by doing nothing**, correctly: `Reader.SortedPostings` is the identity for a
+  block, since postings are in ref order and refs are assigned in label order. `ShardedPostings` needs the
+  label hash and throws rather than silently returning unsharded results — Phase 7's.
+
+**Next in Phase 6:** the `hintStart`/`hintEnd` fields above, which is the last closable gap in the read path.
+Then Phase 6 is done bar `blockChunkQuerier`, which is `blockSelect` plus §6u's iterator and has no logic of
+its own. Two gaps stay open past it by construction and are
 Phase 7's: `Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes in a
 fixture input, which no block the port can currently write contains.
 
