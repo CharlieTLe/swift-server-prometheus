@@ -496,9 +496,21 @@ final class Evaluator {
             }
             defer { subqueryCleanup?() }
             switch (e.function?.name ?? "") {
-            case "label_replace", "label_join", "info":
+            case "label_join":
+                // Works on SERIES, so the evaluator reaches it directly rather than through
+                // `functionCalls` (quirk 62).
+                return try evalLabelJoin(self, ctx, e.args, &ws)
+            case "label_replace":
+                // Blocked on `PromRegex`: `FindStringSubmatchIndex` + `ExpandString` need capture
+                // tracking, and the Pike VM is deliberately boolean-only
+                // (`RegexCompiler.swift`'s header says so). That is a PromRegex slice, not an
+                // evaluator one.
                 throw EvaluatorNotPorted(
-                    nodeType: "Call", detail: "\((e.function?.name ?? "")) works on series")
+                    nodeType: "Call",
+                    detail: "label_replace needs Pike VM capture tracking in PromRegex")
+            case "info":
+                throw EvaluatorNotPorted(
+                    nodeType: "Call", detail: "info works on series")
             default:
                 break
             }
@@ -881,6 +893,9 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     /// Go: `count_values`' `invalid label name %s`, where `%s` is the string LITERAL's rendering —
     /// so it arrives quoted and escaped, not bare.
     case invalidLabelName(String)
+    /// Go: `evalLabelJoin`'s two panics. `%s` on a bare Go `string`, so unquoted.
+    case invalidSourceLabelNameInLabelJoin(String)
+    case invalidDestinationLabelNameInLabelJoin(String)
 
     public var description: String {
         switch self {
@@ -925,6 +940,10 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
             return "Scalar value \(GoFloat.formatG(v)) overflows int64"
         case .invalidLabelName(let s):
             return "invalid label name \(s)"
+        case .invalidSourceLabelNameInLabelJoin(let s):
+            return "invalid source label name in label_join(): \(s)"
+        case .invalidDestinationLabelNameInLabelJoin(let s):
+            return "invalid destination label name in label_join(): \(s)"
         case .modifierNotSafeForFunction(let modifier, let permitted, let function):
             var s = "\(modifier) modifier can only be used with: "
             s += permitted.joined(separator: ", ")

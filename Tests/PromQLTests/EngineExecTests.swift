@@ -156,10 +156,10 @@ struct EngineExecInvariantTests {
         // implement says which one it is. The list has shrunk each slice, and this is what is
         // left: subqueries, the three series-shaped functions, and the binop fill modifiers.
         for query in [
-            // What is left: the three series-shaped functions and the binop fill modifiers.
-            // Everything else in `promql` now evaluates.
+            // What is left: `label_replace` (blocked on Pike VM capture tracking in PromRegex),
+            // `info`, the binop fill modifiers and `smoothSeries`.
             "label_replace(foo, \"a\", \"b\", \"c\", \"d\")",
-            "label_join(foo, \"a\", \",\", \"b\")",
+            "info(foo)",
         ] {
             let res = try run(query)
             guard let err = res.error as? EvaluatorNotPorted else {
@@ -194,6 +194,7 @@ struct EngineExecInvariantTests {
             // Subqueries, as a value and as a function argument.
             "foo[5m:1m]", "rate(foo[5m:1m])", "max_over_time(foo[10m:1m])",
             "sum_over_time(sum(foo)[5m:1m])", "rate(foo[5m:])",
+            "label_join(foo, \"a\", \",\", \"b\")",
         ] {
             let res = try run(query)
             #expect(

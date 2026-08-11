@@ -1151,7 +1151,12 @@ func genPromQLExec(e *emitter) {
 		{`min_over_time(sq[2m:1m])`, sqSeries, 180_000},
 		{`avg_over_time(sq[2m:1m])`, sqSeries, 180_000},
 		{`count_over_time(sq[2m:1m])`, sqSeries, 180_000},
-		{`sum_over_time(sq[2m:1m])`, sqSeries, 180_000},
+		// `sort_by_label`, not a bare `sum_over_time`: `sq` has two series, and an UNSORTED
+		// `Select` has no contractual order (PORTING.md exception 11) — the head returns append
+		// order, which is not a promise. A bare version of this case was stable for many
+		// regenerations and then flipped. Every multi-series case in these suites is exposed to
+		// that; see HANDOFF §4.
+		{`sort_by_label(sum_over_time(sq[2m:1m]), "job")`, sqSeries, 180_000},
 		{`last_over_time(sq[2m:1m])`, sqSeries, 180_000},
 		{`quantile_over_time(0.5, sq[2m:1m])`, sqSeries, 180_000},
 		{`absent_over_time(sq[2m:1m])`, sqSeries, 180_000},
@@ -1191,6 +1196,84 @@ func genPromQLExec(e *emitter) {
 				MaxSamples: maxSamples, Series: sqSeries,
 			})
 		}
+	}
+
+	// --- label_join. Works on SERIES, so the evaluator reaches it directly rather than through
+	// `FunctionCalls` — its table entry is nil (quirk 62).
+	//
+	// It is also the first caller that can reach `mergeSeriesWithSameLabelset`: joining a
+	// *differing* label away is exactly the collision quirk 78 said needed `label_replace` or an
+	// aggregation, and here it is.
+	// TWO samples each, so `rate` produces output — with one sample it produces none, and the
+	// `__name__`-resets-DropName case was silently degenerate.
+	ljSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "lj", "a", "1", "b", "x"}, [2]int64{0, 10}, [2]int64{60_000, 20}),
+		fs([]string{"__name__", "lj", "a", "2", "b", "y"}, [2]int64{0, 20}, [2]int64{60_000, 40}),
+		fs([]string{"__name__", "lj", "a", "3"}, [2]int64{0, 30}, [2]int64{60_000, 60}),
+	}
+	// Two series differing in ONE label, so joining that label away makes them identical — which
+	// is `mergeSeriesWithSameLabelset`'s first reachable caller, and at equal timestamps its
+	// duplicate-point error.
+	ljCollide := []memSeriesInJSON{
+		fs([]string{"__name__", "lj2", "a", "1"}, [2]int64{0, 1}),
+		fs([]string{"__name__", "lj2", "a", "2"}, [2]int64{0, 2}),
+	}
+	ljCollideCases := []string{
+		// Joining the only distinguishing label away: both series become `{__name__="lj2"}`, and
+		// two points at the SAME timestamp is the merge's duplicate error rather than a sum.
+		`label_join(lj2, "a", "-", "nosuch")`,
+		`label_join(lj2, "a", "-")`,
+		// ...and the same shape where the join keeps them distinct, for the pair.
+		`label_join(lj2, "d", "-", "a")`,
+		`label_join(lj2, "a", "-", "a")`,
+	}
+	for _, q := range ljCollideCases {
+		emit(execIn{
+			Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)), Series: ljCollide,
+		})
+	}
+
+	ljCases := []string{
+		// A single source, several sources, and a separator.
+		`label_join(lj, "d", "-", "a")`,
+		`label_join(lj, "d", "-", "a", "b")`,
+		`label_join(lj, "d", "", "a", "b")`,
+		`label_join(lj, "d", "::", "a", "b")`,
+		// A source the series does not have joins as the EMPTY string, so the separator survives.
+		`label_join(lj, "d", "-", "a", "nosuch")`,
+		`label_join(lj, "d", "-", "nosuch", "a")`,
+		`label_join(lj, "d", "-", "nosuch")`,
+		// NO sources at all: the destination is set to the empty string, which DELETES it.
+		`label_join(lj, "d", "-")`,
+		`label_join(lj, "a", "-")`,
+		// Overwriting an existing label, including one of the sources.
+		`label_join(lj, "a", "-", "a", "b")`,
+		`label_join(lj, "b", "-", "a")`,
+		// Writing `__name__`, which resets DropName — visible through a rate, whose name is
+		// otherwise dropped.
+		`label_join(lj, "__name__", "-", "a")`,
+		`label_join(rate(lj[5m]), "__name__", "", "a")`,
+		`label_join(rate(lj[5m]), "d", "", "a")`,
+		// A UTF8-only destination and source name.
+		`label_join(lj, "a.b", "-", "a")`,
+		`label_join(lj, "d", "-", "a.b")`,
+		// Invalid names, each with its own message.
+		`label_join(lj, "", "-", "a")`,
+		// COLLISION: joining `a` away makes two series identical, which is
+		// `mergeSeriesWithSameLabelset`'s first reachable caller.
+		`label_join(lj, "a", "-", "nosuch")`,
+		`sort_by_label(label_join(lj, "a", "-", "nosuch"), "b")`,
+		`label_join(rate(lj[5m]), "d", "-", "a")`,
+		`label_join(rate(lj[5m]), "__name__", "-", "b")`,
+		// Nested, and over an aggregation.
+		`label_join(label_join(lj, "d", "-", "a"), "e", "-", "d", "b")`,
+		`label_join(sum by (a) (lj), "d", "-", "a")`,
+		`sum by (d) (label_join(lj, "d", "-", "b"))`,
+	}
+	for _, q := range ljCases {
+		emit(execIn{
+			Query: q, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)), Series: ljSeries,
+		})
 	}
 
 	// A query that fails to build still comes back through Exec's Result, not as a panic.

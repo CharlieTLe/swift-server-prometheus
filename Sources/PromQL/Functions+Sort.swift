@@ -51,6 +51,7 @@ internal import GoCompat
 internal import PromAnnotations
 internal import PromLabels
 internal import PromQLParser
+internal import PromModel
 
 /// Go: `filterFloats` — histogram samples removed.
 ///
@@ -171,4 +172,61 @@ func funcSortByLabelDesc(_ v: [Vector], _: Matrix, _ args: [any Expr], _: EvalNo
     -> (Vector, Annotations)
 {
     sortByLabel(v, args, sign: -1)
+}
+
+// MARK: - label_join
+
+/// Go: `evalLabelJoin` (functions.go:2431) — concatenate several labels' values into one.
+///
+/// Not a `FunctionCalls` entry: it works on **series**, not samples, so the evaluator reaches it
+/// directly (quirk 62's `nil` entries). It never looks at a timestamp or a value.
+///
+/// Three details, and the third is the one worth knowing:
+///
+///   * a source label the series does not have contributes the **empty string**, so the separator
+///     still appears — `label_join(x, "d", "-", "a", "nosuch")` gives `"1-"`;
+///   * every name is validated with **UTF8** rules, so `a.b` is a legal destination;
+///   * writing to `__name__` resets `DropName` to **false**, where any other destination
+///     *preserves* it. So `label_join(rate(x[5m]), "__name__", "", "job")` gives the result a name
+///     back, and the delayed-name-removal cleanup will not strip it.
+///
+/// `mergeSeriesWithSameLabelset` runs afterwards, and this is the first caller that can actually
+/// reach it: joining a *differing* label away is exactly the collision quirk 78 said needed
+/// `label_replace` or an aggregation.
+func evalLabelJoin(
+    _ ev: Evaluator, _ ctx: GoContext, _ args: [any Expr], _ ws: inout Annotations
+) throws -> any Value {
+    let dst = stringFromArg(args[1])
+    let sep = stringFromArg(args[2])
+    var srcLabels = [String]()
+    srcLabels.reserveCapacity(Swift.max(args.count - 3, 0))
+    for i in 3..<args.count {
+        let src = stringFromArg(args[i])
+        if !ValidationScheme.utf8.isValidLabelName(src) {
+            throw EvaluationError.invalidSourceLabelNameInLabelJoin(src)
+        }
+        srcLabels.append(src)
+    }
+    if !ValidationScheme.utf8.isValidLabelName(dst) {
+        throw EvaluationError.invalidDestinationLabelNameInLabelJoin(dst)
+    }
+
+    let val = try ev.evalNode(ctx, args[0], &ws)
+    guard var matrix = val as? Matrix else {
+        throw EvaluatorNotPorted(nodeType: "Call", detail: "label_join input is not a matrix")
+    }
+
+    var lb = LabelsBuilder(Labels.empty)
+    for i in matrix.series.indices {
+        let el = matrix.series[i]
+        // A missing source label joins as the empty string, so the separator survives.
+        let strval = srcLabels.map { el.metric[$0] }.joined(separator: sep)
+        lb.reset(el.metric)
+        lb.set(dst, strval)
+        matrix.series[i].metric = lb.labels()
+        // Writing `__name__` RESETS DropName; any other destination preserves it.
+        matrix.series[i].dropName = dst == LabelName.metricName ? false : el.dropName
+    }
+
+    return try ev.mergeSeriesWithSameLabelset(matrix)
 }
