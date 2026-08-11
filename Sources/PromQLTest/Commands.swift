@@ -407,28 +407,83 @@ extension PromQLTestRunner {
             return .failed(
                 "\(loc): \(cmd.expr): expected \(expected.count) series, got \(mat.series.count)")
         }
+        // Go: `assertMatrixSorted` (test.go:1454) — a range result is contractually sorted by
+        // labels, so a correct-but-unsorted matrix is a failure rather than a pass.
+        if mat.series.count > 1 {
+            for j in 0..<(mat.series.count - 1)
+            where Labels.compare(mat.series[j].metric, mat.series[j + 1].metric) > 0 {
+                return .failed(
+                    "\(loc): \(cmd.expr): matrix results should always be sorted by labels, but"
+                        + " matrix is not sorted: series at index \(j + 1) with labels"
+                        + " \(mat.series[j + 1].metric) sorts before series at index \(j) with"
+                        + " labels \(mat.series[j].metric)")
+            }
+        }
         for e in expected {
             guard let s = mat.series.first(where: { $0.metric == e.labels }) else {
                 return .failed("\(loc): \(cmd.expr): missing series \(e.labels)")
             }
-            // A series carrying histograms cannot be index-compared against a float expectation
-            // list, because the two point slices are separate and interleave by timestamp — the
-            // same limitation the instant path declines by name.
-            if !s.histograms.isEmpty || e.values.contains(where: { $0.histogram != nil }) {
-                return .skipped("histogram-valued assertions")
-            }
-            // An omitted value in a range expectation is a HOLE, so the points are compared
-            // against the non-omitted ones in order.
-            let wanted = e.values.filter { !$0.omitted }
-            let got = s.floats.map(\.f)
-            if wanted.count != got.count {
-                return .failed(
-                    "\(loc): \(cmd.expr): \(e.labels): expected \(wanted.count) points, got \(got.count)")
-            }
-            for (j, w) in wanted.enumerated() where w.histogram == nil {
-                if !almostEqual(w.value, got[j]) {
+            // **The expectation list is INDEXED BY STEP, and that is what makes a histogram-valued
+            // range assertion comparable at all.** Go times value `i` at `start + i*step` and then
+            // splits the list into a float list and a histogram list, each of which lines up
+            // element-wise with the series' own two point slices. The runner previously declined
+            // these 22 assertions because it compared the flat expectation list against `floats`
+            // alone, which cannot work once the two kinds interleave — the timestamps are the
+            // missing join key, not extra strictness.
+            //
+            // An OMITTED value is a hole and contributes to neither list; a histogram value is
+            // never omitted.
+            var wantFloats: [(t: Int64, f: Double)] = []
+            var wantHists: [(t: Int64, h: FloatHistogram, hintSet: Bool)] = []
+            for (j, v) in e.values.enumerated() {
+                let t = cmd.from + Int64(j) * cmd.step
+                if t > cmd.to {
                     return .failed(
-                        "\(loc): \(cmd.expr): \(e.labels): point \(j) expected \(w.value), got \(got[j])")
+                        "\(loc): \(cmd.expr): expected \(e.values.count) points for \(e.labels), but"
+                            + " query time range cannot return this many points")
+                }
+                if let h = v.histogram {
+                    wantHists.append((t, h, v.counterResetHintSet))
+                } else if !v.omitted {
+                    wantFloats.append((t, v.value))
+                }
+            }
+
+            if wantFloats.count != s.floats.count || wantHists.count != s.histograms.count {
+                return .failed(
+                    "\(loc): \(cmd.expr): expected \(wantFloats.count) float points and"
+                        + " \(wantHists.count) histogram points for \(e.labels), but got"
+                        + " \(s.floats.count) and \(s.histograms.count)")
+            }
+            for (j, w) in wantFloats.enumerated() {
+                let a = s.floats[j]
+                if w.t != a.t {
+                    return .failed(
+                        "\(loc): \(cmd.expr): expected float value at index \(j) for \(e.labels) to"
+                            + " have timestamp \(w.t), but it had timestamp \(a.t)")
+                }
+                if !almostEqual(a.f, w.f) {
+                    return .failed(
+                        "\(loc): \(cmd.expr): expected float value at index \(j) (t=\(a.t)) for"
+                            + " \(e.labels) to be \(w.f), but got \(a.f)")
+                }
+            }
+            for (j, w) in wantHists.enumerated() {
+                let a = s.histograms[j]
+                if w.t != a.t {
+                    return .failed(
+                        "\(loc): \(cmd.expr): expected histogram value at index \(j) for"
+                            + " \(e.labels) to have timestamp \(w.t), but it had timestamp \(a.t)")
+                }
+                var wc = w.h
+                var ac = a.h
+                if !compareNativeHistogram(
+                    wc.compact(maxEmptyBuckets: 0), ac.compact(maxEmptyBuckets: 0),
+                    counterResetHintSet: w.hintSet)
+                {
+                    return .failed(
+                        "\(loc): \(cmd.expr): expected histogram value at index \(j) (t=\(a.t)) for"
+                            + " \(e.labels) to be \(hDetail(w.h)), but got \(hDetail(a.h))")
                 }
             }
         }
@@ -452,18 +507,17 @@ extension PromQLTestRunner {
             // failures, and it was the COMPARISON rather than `compact` or `mul` — the corpus
             // addition proved Go's `Compact(0)` and the port's already agree.
             //
-            // `counterResetHintSet` is passed as FALSE, deliberately and temporarily. Upstream
-            // passes `exp0.CounterResetHintSet` (test.go:1362) and `SequenceValue` already carries
-            // the flag — but turning it on today fails 6 assertions for one reason that is not the
-            // engine's: `MemStorage` does not derive counter-reset hints on append, where upstream's
-            // Head does. Measured, not assumed: with the flag on, the gate reports 8 failures all
-            // of the form `want hint=notCounterReset, got hint=unknownCounterReset`. The flag goes
-            // on in the commit that ports `chunkenc`'s `appendable` and the chunk-position rule.
+            // The hint is compared exactly when the expectation WROTE one — test.go:1362 passes
+            // `exp0.CounterResetHintSet`, and `SequenceValue` carries the flag. This was hard-coded
+            // to `false` until `MemStorage` learnt to DERIVE counter-reset hints (quirk 102): with
+            // the flag on and the storage carrying stored hints unchanged, 8 assertions failed with
+            // `want hint=notCounterReset, got hint=unknownCounterReset`. Now that the storage plans
+            // chunks, an assertion that writes `counter_reset_hint:` actually checks the hint.
             var wantC = wantH
             var gotC = gotH
             return compareNativeHistogram(
                 wantC.compact(maxEmptyBuckets: 0), gotC.compact(maxEmptyBuckets: 0),
-                counterResetHintSet: false)
+                counterResetHintSet: want.counterResetHintSet)
                 ? nil
                 : .failed(
                     "\(loc): \(cmd.expr): \(s.metric): histogram mismatch:\n"

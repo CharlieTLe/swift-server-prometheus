@@ -213,6 +213,7 @@ var suites = map[string]func(*emitter){
 	// and pure, so it is driven directly. Worth ~195 exit-gate assertions. See
 	// oracle/suites_convertnhcb.go.
 	"histogram/convertnhcb": genConvertNHCB,
+	"chunkenc/chunkmeta":    genChunkMeta,
 }
 
 func main() {
