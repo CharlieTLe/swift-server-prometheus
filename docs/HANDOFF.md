@@ -1607,6 +1607,52 @@ an XOR2 chunk of ST-less samples is not an XOR chunk with a spare byte, it is a 
 with one extra byte. The `@st`-free assertions in the gate currently pass through `EncXOR`, so this
 must not change them.
 
+#### Four things read out of `Append` that the grammar comment does not tell you
+
+Read after the scoping above, from `xor2.go:144-400`. These are the parts that will cost a day if
+discovered during the port rather than before it.
+
+**1. `Appender()` restores the bit position from the READER.** After replaying, it does:
+
+```go
+c.b.count = it.br.valid
+```
+
+`bstream.count` is free bits in the last byte and `bstreamReader.valid` is unread bits in the buffer —
+different quantities with the same units, and XOR2 relies on them coinciding at end-of-stream. XOR's
+appender needs no such line because its `Append` only ever writes whole bytes or bit-aligned runs from a
+known state; XOR2's fused writes do not. **`Bstream.count` is `private(set)` in the port** (that is what
+forced `putBigEndianUInt16(at:)` in §6a), so this needs a second named mutation — do not widen the
+property.
+
+**2. There are THREE encoding paths in `default`, not one, and they must agree bit for bit.**
+
+* *no-ST fast path* — `firstSTChangeOn == 0 && st == a.st && numTotal != maxFirstSTChangeOn`. Inlines
+  two cases (dod=0 with unchanged value; 13-bit dod with unchanged value) and returns EARLY, skipping
+  the shared tail;
+* *active-ST fast path* — `firstSTChangeOn > 0`. Same two cases, each **fusing the T/V trailing bit with
+  the ST delta into one `writeBitsFast`** — so `0b10<<3 | ...` is written as **6** bits here and **5**
+  bits in the `default` sub-case, because one of them carries the extra T/V zero bit. Getting that
+  6-versus-5 wrong is a silent one-bit shift of everything after it;
+* *full slow path* — `encodeJoint` then maybe an ST delta.
+
+Each fast path duplicates `a.t`/`a.tDelta`/`numTotal` updates and its own header write before returning.
+A port that factors them into one shared tail changes nothing *observable* — but only if every duplicated
+line is reproduced exactly, and there are three copies of the `numTotal++` plus header rewrite.
+
+**3. `numTotal == maxFirstSTChangeOn` forces the slow path even when nothing about ST changed.**
+Upstream's comment: "Must use the slow path at maxFirstSTChangeOn so the header remains valid even if ST
+changes on a later sample (index > maxFirstSTChangeOn)." So sample 127 is special *regardless of its
+data*, and `st != a.st || a.numTotal == maxFirstSTChangeOn` is the condition that writes the header.
+This is why §6b's corpus plan calls for ST first appearing across the `0x7F` boundary — that case is not
+an edge case, it is a distinct branch.
+
+**4. A stale NaN does NOT update `a.v`.** Every path guards with `if !value.IsStaleNaN(v) { a.v = v }`,
+so the baseline value for the next XOR is the last *non-stale* value. The iterator mirrors this with a
+separate `baselineV` field — which is why `Appender()` reads `it.baselineV` and not `it.val`. A port that
+keeps one value field will encode correctly until the first stale sample and then diverge on every
+sample after it.
+
 #### How to pin it
 
 Mirror `chunkenc/xor.jsonl`: append a sample sequence, compare `Bytes()` hex, `NumSamples`, the samples
@@ -1655,8 +1701,17 @@ and reviewed line by line" and had a crashing bug the moment a corpus reached it
 * the sample count is stored in the header and an iterator's `numTotal` is fixed at creation
   (quirk 118), so append-while-reading tests read only the pre-append samples;
 * `Appender()` replays the whole chunk to recover encoder state (quirk 119). XOR2's replay has **more**
-  state to recover — the ST bookkeeping as well as the leading/trailing window — so the replay check
-  in the corpus matters more here, not less.
+  state to recover — the ST bookkeeping, the bit position, and `baselineV` as well as the
+  leading/trailing window — so the replay check in the corpus matters more here, not less.
+
+#### Still to read before starting
+
+`encodeJoint` (`:398`), `writeVDelta` (`:438`), `writeVDeltaKnownNonZero` (`:482`), and the decoder half:
+`Next` (`:591`), `readDod` (`:740`), `decodeValue` (`:768`), `decodeValueKnownNonZero` (`:888`),
+`decodeNewLeadingTrailing` (`:947`). Roughly 590 lines, and the two `KnownNonZero` variants exist because
+the dod=0 path has already established that the value changed — so they encode one fewer control bit
+than their general twins. That asymmetry is the decoder counterpart of the 6-versus-5 bit fusing above,
+and it is the other place a one-bit shift can hide.
 
 * ~~`histogram_quantile`'s monotonicity info does not fire~~ — **FIXED, and it was the RUNNER.** The
   info fired all along, with text matching to the character. The line scanner split on the first `#`
