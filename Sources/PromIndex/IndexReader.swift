@@ -281,6 +281,11 @@ public enum SeriesDecodeError: Error, CustomStringConvertible, Equatable, Sendab
     case readMetaForChunk(Int, String)
     /// Go: `fmt.Errorf("read series: %w", err)` — `Reader.Series` wraps whatever `Decoder.Series` returns.
     case readSeries(String)
+    /// Go: `fmt.Errorf("get buffer for series: %w", err)` — **`LabelNamesFor`'s wrapper, which is NOT
+    /// prefixed with "read series:"**. Reusing `readSeries` here double-wraps, and two corpus cases said
+    /// so: the same underlying `invalid checksum` reaches the caller with a different prefix depending on
+    /// which reader method asked.
+    case getBufferForSeries(String)
     /// Go: `unexpected postings length, should be %d bytes for %d postings, got %d bytes`.
     case unexpectedPostingsLength(expectedBytes: Int, postings: Int, gotBytes: Int)
 
@@ -291,6 +296,7 @@ public enum SeriesDecodeError: Error, CustomStringConvertible, Equatable, Sendab
         case .lookupLabelValue(let e): return "lookup label value: \(e)"
         case .readMetaForChunk(let i, let e): return "read meta for chunk \(i): \(e)"
         case .readSeries(let e): return "read series: \(e)"
+        case .getBufferForSeries(let e): return "get buffer for series: \(e)"
         case .unexpectedPostingsLength(let exp, let n, let got):
             return
                 "unexpected postings length, should be \(exp) bytes for \(n) postings, got \(got) bytes"
@@ -656,4 +662,97 @@ public func indexPostings(
         }
     }
     return res
+}
+
+// MARK: - Label values and names
+
+/// Go: `Reader.LabelValues` for format v2 — every value of one label, in table order.
+///
+/// **The traversal's stop condition is `val != lastVal`, and `lastVal` comes from the SPARSE index's final
+/// entry.** That works only because the sparse index always includes each name's last value (quirk 136):
+/// without it there would be no reliable sentinel and the walk would run into the next label name, whose
+/// entries the `skip` optimisation would then mis-parse (quirk 135). The three pieces are one mechanism.
+///
+/// `hints.limit` truncates, and it is checked BEFORE appending, so a limit of `n` yields at most `n`
+/// values. Go returns `nil, nil` for an unknown name — not an empty slice — which the port models as an
+/// empty array since nothing distinguishes them downstream.
+public func indexLabelValues(
+    _ bs: ByteSlice, postingsTable tableOff: UInt64, sparse: [String: [PostingOffset]],
+    name: String, limit: Int = 0
+) throws -> [String] {
+    guard let e = sparse[name], !e.isEmpty else {
+        return []
+    }
+    var values: [String] = []
+    var capacity = e.count * symbolFactor
+    if limit > 0 && capacity > limit {
+        capacity = limit
+    }
+    values.reserveCapacity(capacity)
+    let lastVal = e[e.count - 1].value
+    try traversePostingOffsets(bs, postingsTable: tableOff, from: e[0].off) { val, _ in
+        if limit > 0 && values.count >= limit {
+            return false
+        }
+        values.append(val)
+        // Stop when the name's final value has been seen.
+        return val != lastVal
+    }
+    return values
+}
+
+/// Go: `Reader.LabelNames` — every label name, sorted, **excluding the all-postings key**.
+///
+/// That exclusion is the thing to notice: the table contains an entry for `("", "")`
+/// (`allPostingsKey`), which is how "every series" is stored, and it is not a real label. Go skips it by
+/// name; a port that returns the map's keys verbatim reports an empty-string label name.
+///
+/// The sort is Go's byte ordering (ADR-10), matching `slices.Sort`.
+public func indexLabelNames(_ sparse: [String: [PostingOffset]]) -> [String] {
+    let allKey = allPostingsKey().name
+    return sparse.keys.filter { $0 != allKey }.sorted { goStringLess($0, $1) }
+}
+
+/// Go: `Decoder.LabelNamesOffsetsFor` — the label-NAME symbol offsets of one series record, skipping the
+/// values.
+///
+/// Returned in stored order, which upstream's comment says "should be sorted lexicographically" — a
+/// statement about the writer, not a guarantee the reader enforces.
+public func labelNamesOffsetsFor(_ b: ByteSlice) throws -> [UInt32] {
+    var d = Decbuf(b)
+    let k = d.uvarint()
+    var offsets: [UInt32] = []
+    offsets.reserveCapacity(k)
+    for _ in 0..<k {
+        offsets.append(UInt32(truncatingIfNeeded: d.uvarint()))
+        _ = d.uvarint()  // The label value's offset, skipped.
+    }
+    if let e = d.err { throw e }
+    return offsets
+}
+
+/// Go: `Reader.LabelNamesFor` — the union of label names across a set of series, sorted.
+///
+/// Collects symbol OFFSETS into a set first and resolves them once at the end, so a name shared by a
+/// thousand series costs one symbol lookup rather than a thousand. The sort is Go's byte ordering.
+public func indexLabelNamesFor(
+    _ bs: ByteSlice, version: Int, seriesIDs: [UInt64], lookupSymbol: (UInt32) throws -> String
+) throws -> [String] {
+    var offsetsSet = Set<UInt32>()
+    for id in seriesIDs {
+        let offset = version == indexFormatV1 ? id : id * UInt64(seriesByteAlign)
+        let d = Decbuf.uvarintAt(bs, Int(offset))
+        if let e = d.err {
+            throw SeriesDecodeError.getBufferForSeries(String(describing: e))
+        }
+        for off in try labelNamesOffsetsFor(d.b) {
+            offsetsSet.insert(off)
+        }
+    }
+    var names: [String] = []
+    names.reserveCapacity(offsetsSet.count)
+    for off in offsetsSet {
+        names.append(try lookupSymbol(off))
+    }
+    return names.sorted { goStringLess($0, $1) }
 }

@@ -2105,6 +2105,21 @@ changing behaviour.
     pass. The leading discard loop — values below the table's first entry — exists so the first binary
     search's step-back is reached by construction rather than by luck.
 
+138. **`LabelValues`' traversal stops on `val != lastVal`, and that only works because the sparse index
+    includes each name's LAST value.** Quirks 135, 136 and 138 are one mechanism read three ways: the walk
+    needs a sentinel because the `skip` optimisation would mis-parse the next label name's entries, the
+    sentinel is the sparse index's final entry, and the sparse index exists in that shape to provide it.
+    Change any one and the other two break.
+
+139. **`LabelNames` excludes the all-postings key.** The offset table holds an entry for `("", "")` — how
+    "every series" is stored — and it is not a real label name. A port returning the map's keys verbatim
+    reports an empty-string label.
+
+140. **The same underlying error reaches the caller with a different prefix depending on which reader
+    method asked.** `Reader.Series` wraps with `read series: %w`; `LabelNamesFor` wraps the *same*
+    `NewDecbufUvarintAt` failure with `get buffer for series: %w` and no `read series:` prefix. Two corpus
+    cases caught the port double-wrapping.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

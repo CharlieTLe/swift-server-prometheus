@@ -46,6 +46,10 @@ type indexReaderIn struct {
 	SeriesIDs []uint64 `json:"seriesIDs"`
 	// `Postings(name, values...)` queries to run, each a name followed by its values.
 	PostingsQueries [][]string `json:"postingsQueries"`
+	// `LabelValues(name)` queries, each a name and a limit (0 = unlimited).
+	LabelValueQueries [][2]string `json:"labelValueQueries"`
+	// Series ID sets for `LabelNamesFor`.
+	LabelNamesForIDs [][]uint64 `json:"labelNamesForIDs"`
 	// Chunk metas to attach to each generated series, as (mint, maxt, ref) triples. The writer requires
 	// them ordered, so the generator sorts nothing and the cases supply them ordered.
 	ChunkMetas [][3]int64 `json:"chunkMetas"`
@@ -90,6 +94,13 @@ type indexReaderOut struct {
 	// Per query, the expanded postings and any error.
 	QueryResults [][]uint64 `json:"queryResults"`
 	QueryErrs    []string   `json:"queryErrs"`
+	// LabelNames() over the whole file, and per-query LabelValues / LabelNamesFor.
+	LabelNames      []string   `json:"labelNames"`
+	LabelNamesErr   string     `json:"labelNamesErr"`
+	LabelValues     [][]string `json:"labelValues"`
+	LabelValuesErrs []string   `json:"labelValuesErrs"`
+	NamesFor        [][]string `json:"namesFor"`
+	NamesForErrs    []string   `json:"namesForErrs"`
 }
 
 // `realByteSlice` is unexported, but `index.ByteSlice` is an exported interface with two methods — so the
@@ -108,6 +119,8 @@ func genIndexReader(e *emitter) {
 			SeriesLabels: [][]string{}, SeriesChunks: [][][3]int64{}, SeriesErrs: []string{},
 			TableNames: []string{}, TableValues: []string{}, TableOffs: []uint64{},
 			TableEntryAt: []int{}, QueryResults: [][]uint64{}, QueryErrs: []string{},
+			LabelNames: []string{}, LabelValues: [][]string{}, LabelValuesErrs: []string{},
+			NamesFor: [][]string{}, NamesForErrs: []string{},
 		}
 
 		dir, err := os.MkdirTemp("", "index")
@@ -333,8 +346,83 @@ func genIndexReader(e *emitter) {
 			}
 		}
 
+		// LabelNames, LabelValues and LabelNamesFor, through the real reader.
+		{
+			r3, rerr := index.NewReader(bs, index.DecodePostingsRaw)
+			if rerr != nil {
+				out.LabelNamesErr = rerr.Error()
+			} else {
+				names, nerr := r3.LabelNames(context.Background())
+				if nerr != nil {
+					out.LabelNamesErr = nerr.Error()
+				} else {
+					out.LabelNames = names
+				}
+				for _, q := range in.LabelValueQueries {
+					limit := 0
+					fmt.Sscanf(q[1], "%d", &limit)
+					var hints *storage.LabelHints
+					if limit > 0 {
+						hints = &storage.LabelHints{Limit: limit}
+					}
+					vals, verr := r3.LabelValues(context.Background(), q[0], hints)
+					if vals == nil {
+						vals = []string{}
+					}
+					out.LabelValues = append(out.LabelValues, vals)
+					if verr != nil {
+						out.LabelValuesErrs = append(out.LabelValuesErrs, verr.Error())
+					} else {
+						out.LabelValuesErrs = append(out.LabelValuesErrs, "")
+					}
+				}
+				for _, ids := range in.LabelNamesForIDs {
+					refs := make([]storage.SeriesRef, 0, len(ids))
+					for _, id := range ids {
+						refs = append(refs, storage.SeriesRef(id))
+					}
+					nm, ferr := r3.LabelNamesFor(context.Background(), index.NewListPostings(refs))
+					if nm == nil {
+						nm = []string{}
+					}
+					out.NamesFor = append(out.NamesFor, nm)
+					if ferr != nil {
+						out.NamesForErrs = append(out.NamesForErrs, ferr.Error())
+					} else {
+						out.NamesForErrs = append(out.NamesForErrs, "")
+					}
+				}
+				_ = r3.Close()
+			}
+		}
+
 		e.emit(fmt.Sprintf("indexreader/%d", n), in, out)
 		n++
+	}
+
+	// --- LabelValues, LabelNames and LabelNamesFor.
+	//
+	// `LabelValues`' traversal stops on `val != lastVal`, where `lastVal` is the SPARSE index's final
+	// entry — which works only because the sparse index always includes each name's last value. So a name
+	// with more than 32 values is the case that matters, and a limit that cuts the walk short is the other.
+	emit(indexReaderIn{
+		Symbols:           []string{"a", "b", "c"},
+		LabelValueQueries: [][2]string{{"l", "0"}, {"l", "2"}, {"l", "1"}, {"nosuch", "0"}, {"", "0"}},
+		LabelNamesForIDs:  [][]uint64{{1}, {1, 2}, {1, 2, 3}, {}, {99999}},
+	})
+	{
+		syms := []string{}
+		for i := range 70 {
+			syms = append(syms, fmt.Sprintf("u%03d", i))
+		}
+		emit(indexReaderIn{
+			Symbols: syms,
+			LabelValueQueries: [][2]string{
+				{"l", "0"}, {"l", "1"}, {"l", "32"}, {"l", "33"}, {"l", "69"}, {"l", "70"},
+				{"l", "1000"},
+			},
+			LabelNamesForIDs: [][]uint64{{1}, {1, 35, 70}},
+		})
 	}
 
 	// --- The postings offset table and `Postings()` queries.
