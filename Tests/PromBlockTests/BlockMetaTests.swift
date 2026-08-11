@@ -90,4 +90,28 @@ struct BlockMetaTests {
                 jsonHex: hexB(m.encodeJSON()), ulidString: m.ulid.description)
         }
     }
+
+    /// The READING half, driven by the same corpus from the other end.
+    ///
+    /// The input is Go's own marshalled bytes, so this is differential rather than a self-round-trip: every
+    /// `omitempty` shape a real `meta.json` can have — absent stats, absent `sources`, a `compaction` that is
+    /// `{}`, an escaped hint — is a case Go produced, and the parser has to accept all of them and land on a
+    /// value that re-marshals identically. That is what says the permissive parser (which exists because
+    /// `Unmarshal` is lenient where `Codable` is not) is lenient in the right places and not in the wrong
+    /// ones: dropping a field it should keep changes the bytes back.
+    @Test("every meta Go marshalled parses back and re-marshals to the same bytes")
+    func readsBackWhatGoWrote() throws {
+        var checked = 0
+        for c in try Fixtures.load(
+            "block/meta.jsonl", FixtureCase<BlockMetaIn, BlockMetaOut>.self)
+        {
+            guard !c.out.jsonHex.isEmpty else { continue }
+            let bytes = unhexB(c.out.jsonHex)
+            let parsed = try BlockMeta(json: bytes)
+            #expect(hexB(parsed.encodeJSON()) == c.out.jsonHex, "\(c.id): re-marshal differs")
+            #expect(parsed.ulid.description == c.out.ulidString, "\(c.id): ULID")
+            checked += 1
+        }
+        #expect(checked > 0, "no comparable cases — the corpus shape changed")
+    }
 }
