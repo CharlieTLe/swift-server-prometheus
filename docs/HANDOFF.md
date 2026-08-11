@@ -21,7 +21,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **1,886 of 2,221 assertions pass (85%)** with only **4 failures**, all four of which are real engine findings named in §5e — one of them the blind spot quirk 59 predicted, and one ADR-9's open question. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
+| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **1,887 of 2,221 assertions pass (85%)** with only **3 failures**, all three real engine findings named in §5e — one of them the blind spot quirk 59 predicted. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
@@ -1180,7 +1180,7 @@ Phases 6-7 dependency, so they cannot pass until then whatever the runner does.
 
 #### (a) `promqltest` — LANDED, and here is what it says
 
-**1,886 of 2,221 assertions pass (85%), 4 fail, 331 skip.** `swift test --filter PromQLTestTests` prints the
+**1,887 of 2,221 assertions pass (85%), 3 fail, 331 skip.** `swift test --filter PromQLTestTests` prints the
 per-file tally and itemises every skip. There is no differential corpus, by design: the `.test`
 files *are* the comparison, so a failure here is an engine bug and the number is the headline
 metric. The test carries a **ratchet** (`promqlTestAllowedFailures = 0`) and a **floor**
@@ -1205,9 +1205,12 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   could never make `counterResetSeen && notCounterResetSeen` both true — and `native_histograms.test`
   has the shape that can. The corpus lesson predicted its own blind spot and the gate found it.
 * `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
-* `count_values` accepts an invalid UTF-8 label name (`"a\xc5z"`) that Go rejects — **ADR-9's open
-  question, reached at last.** `Labels` is `String`-backed, so the raw bytes arrive as U+FFFD and
-  pass validation. §6 has been saying the deciding moment is Phase 8; the exit gate says it is now.
+* ~~`count_values` accepts an invalid UTF-8 label name~~ — **FIXED**, and it is the first piece of
+  ADR-9 closed on the byte side rather than deferred. `ValidationScheme` now has a `[UInt8]`
+  overload that checks UTF-8 validity properly (overlongs, surrogates, above U+10FFFF), and the
+  caller validates `StringLiteral.val` instead of a decoded `String` — decoding substitutes U+FFFD,
+  after which the check *cannot* fail. The pattern generalises to every remaining ADR-9 site:
+  **validate on the bytes, decode afterwards.**
 
 **The ~30 histogram failures are fixed, and the cause was the comparison rather than the port.**
 test.go:1323 is `compareNativeHistogram(expected.H.Compact(0), actual.H.Compact(0), …)` — **both
@@ -1328,8 +1331,11 @@ ranges, and `useStartTimestamps` both ways. Sample-limit boundaries per shape, a
 
 ## 6. Open decisions and risks
 
-**`Labels` may need to become byte-backed (ADR-9).** Currently `String`-backed. The deciding moment is
-Phase 8 (`PromTextParse`) — the first point where arbitrary bytes can enter from a scraped target.
+**`Labels` may need to become byte-backed (ADR-9).** Currently `String`-backed. **One instance is now
+closed**: `ValidationScheme.isValidLabelName` has a `[UInt8]` overload, because a decoded `String` is
+valid UTF-8 by construction and the check could not fail — `count_values("a\xc5z", …)` was accepted
+where Go errors, and the exit gate found it. The pattern for the rest: **validate on the bytes,
+decode afterwards.** The deciding moment for `Labels` itself is still Phase 8 (`PromTextParse`) — the first point where arbitrary bytes can enter from a scraped target.
 Decide deliberately then: byte-backed `Labels` (`ContiguousArray<UInt8>` + offsets), or validate and
 reject at ingest. Do not let whichever code is written first settle it by accident.
 

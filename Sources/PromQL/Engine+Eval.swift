@@ -412,7 +412,10 @@ final class Evaluator {
                         nodeType: "AggregateExpr", detail: "count_values parameter is not a string")
                 }
                 let name = String(decoding: valueLabel.val, as: UTF8.self)
-                if !ValidationScheme.utf8.isValidLabelName(name) {
+                // Validated on the RAW BYTES, not on `name`: decoding substitutes U+FFFD, after
+                // which every name is valid UTF-8 and `count_values("a\xc5z", …)` would be
+                // accepted where Go rejects it. ADR-9, reached through the exit gate.
+                if !ValidationScheme.utf8.isValidLabelName(valueLabel.val) {
                     // `%s` on the *expression*, so the message carries the quoted literal.
                     throw EvaluationError.invalidLabelName(valueLabel.description)
                 }
