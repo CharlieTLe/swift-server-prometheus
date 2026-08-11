@@ -1649,9 +1649,40 @@ corpus is **four files rather than one**, because `Fixtures.check` decodes every
 single `In`/`Out` pair; mixing shapes would need an id filter in shared test infrastructure, and four
 files is the cheaper seam.
 
-**Next in Phase 6:** `tsdb/index/index.go` (1874 lines, the index file format — symbol table, postings
-offsets, series records; its `Reader` works on a `ByteSlice` so much of it is pinnable without files), or
-the filesystem ADR that unblocks the writers. `MemPostings` waits for the Head in Phase 7.
+### 6f. ADR-15 and the index file's header, TOC and symbol table — LANDED
+
+**The filesystem ADR is written** (`docs/DECISIONS.md` ADR-15). It was the thing §6e deferred, and it
+decides for the whole TSDB: a narrow `PromFS` protocol with an in-memory implementation for corpora and a
+`FileManager`-backed one for real use, modelled on the seam `Queryable` already provides. Three things it
+deliberately excludes, each with a reason — **no `mmap`** (recorded as a documented exception, since
+upstream can read a 512 MiB index without resident memory and the port cannot), no pre-allocation, and no
+directory `Sync`.
+
+**14 differential cases, and the corpus contains real index files.** `Sources/PromIndex/IndexReader.swift`
+ports the header constants, `NewTOCFromByteSlice` and `Symbols` — all of which take a `ByteSlice`, so the
+reading side needs no filesystem at all even before ADR-15 is implemented.
+
+**The seam is the reusable part.** The oracle writes each index file with Go's own `index.Writer`, then
+puts the file's BYTES in the fixture's *input*. The port parses them. So the reader is pinned against
+upstream's serialiser without the port owning a writer — §6a's principle ("pin the exported behaviour")
+applied to a whole file format. Note the bytes must be **input**: on the output side the port would be
+comparing against itself, which is how the first version of this suite was wrong.
+
+Quirks 129-130 record what a straight reading misses: the TOC lives at the END so a truncated file fails
+there rather than at the magic header, and `Lookup`'s argument is a **byte offset in v1 and an ordinal in
+v2** — with `ReverseLookup` mirroring the split. The sparse index records one offset per 32 symbols, and
+its binary search must use **Go's byte ordering** (ADR-10) or it searches a differently-sorted array; the
+corpus includes symbols where byte order and collation disagree.
+
+One corpus-generation flaw worth the note: a case with a duplicated symbol made Go's *writer* fail
+("out-of-order series added"), so no file existed for the port to parse and the fixture carried a writer
+error the port could never produce. The generator de-duplicates the SERIES list now, while still feeding
+the duplicates to `AddSymbol` so the symbol table case survives.
+
+**Next in Phase 6:** the rest of the index reader — the postings offset table, series records (which carry
+chunk metas, so §6e's work feeds in) and label indices, all on the same `ByteSlice` seam and all reachable
+with the corpus generator that now exists. Then `PromFS` from ADR-15, which unblocks the writers.
+`MemPostings` waits for the Head in Phase 7.
 
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 

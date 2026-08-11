@@ -112,6 +112,7 @@ var suites = map[string]func(*emitter){
 	"chunks/blockref":           genChunksBlockRef,
 	"chunks/framing":            genChunksFraming,
 	"chunks/batch":              genChunksBatch,
+	"index/reader":              genIndexReader,
 	"gocompat/time-rfc3339":     genGoTimeRFC3339,
 	"gocompat/time-unixmilli":   genGoTimeUnixMilli,
 	"storage/buffer":            genStorageBuffer,

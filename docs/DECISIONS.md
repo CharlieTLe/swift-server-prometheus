@@ -278,3 +278,55 @@ first attempt split the `(doe - doe/1460 + doe/36524 - doe/146096) / 365` divisi
 instead of dividing the whole numerator, and every one of the 136 failing annotation cases reported
 `1881-1051-12` where Go said `1970-01-01`.
 
+
+## ADR-15 — The TSDB's filesystem is a protocol, and the port defers `mmap` rather than emulating it
+
+Phase 6's chunk-file slice (HANDOFF §6e) stopped at the format's pure half because everything past it
+touches a disk: `chunks.Writer` holds an `*os.File` for the directory *and* one per segment,
+`fileutil.BufWriter` wraps the tail, `cutSegmentFile` pre-allocates with `fallocate`/`ftruncate` and
+`Sync`s the directory handle, and `NewDirReader` **mmaps** every segment so a `ByteSlice` can be handed
+out without copying. Phase 7's Head does the same for the WAL and the on-disk head chunks, so whatever
+this port decides here it decides for the rest of the TSDB.
+
+Three candidates were considered.
+
+**`FileManager`/`Data` directly.** Shortest path, and wrong for the same reason `MemStorage` exists: it
+would make every TSDB slice untestable without a real directory. The corpora in this project run to
+hundreds of thousands of cases and `swift test` is hermetic by contract (CLAUDE.md) — a fixture that
+needs a scratch directory is a fixture that fails differently on CI.
+
+**NIO non-blocking file I/O.** The wrong shape for this workload and a dependency the package does not
+otherwise need. Prometheus' TSDB writes are sequential and blocking by design; the concurrency that
+matters is "an appender writes while a querier reads the same chunk", which is a *memory* ordering
+question (quirk 120) rather than an I/O one.
+
+**Decision: a narrow protocol, `PromFS`, with an in-memory implementation for tests and a
+`FileManager`-backed one for real use.** Modelled on the seam `Queryable` already provides: the port
+depends on the protocol, the corpora drive the in-memory implementation, and the real one is pinned
+separately and thinly.
+
+The protocol is deliberately smaller than `os`:
+
+```
+directory create/open/sync, list
+file      create, open-for-read, append, sync, close, size, truncate
+region    read(offset, length) -> [UInt8]
+```
+
+Three things it does **not** get, each for a reason:
+
+- **No `mmap`.** `ByteSlice` is already an abstraction upstream (`realByteSlice` wraps a plain
+  `[]byte`), so the port implements `ByteSlice` over a fully-read file and over an in-memory buffer. That
+  is a real behavioural difference — upstream can read a 512 MiB index without resident memory and the
+  port cannot — and it is recorded as a **documented exception**, not hidden. Revisit it when a
+  benchmark, not a hunch, says to.
+- **No pre-allocation.** `cutSegmentFile`'s `allocSize` affects fragmentation and nothing observable;
+  `Fixtures/chunks/batch.jsonl` pins the segment *boundaries*, which is the part that shows.
+- **No directory `Sync`.** Durability across a crash is untestable in this harness and unobservable in
+  a corpus. The calls stay as no-ops with a comment, so the call sites match upstream's shape (PORTING.md
+  §4) and a later durability slice has somewhere to put the real thing.
+
+**What this buys immediately:** `chunks.Writer` and `NewDirReader` become portable and pinnable, because
+the oracle can write real segment files while the port writes to memory and the two byte strings are
+compared. That is the same trick §6e already used for the batching arithmetic, generalised — and the same
+principle as §5e(c) and §6a: pin the exported behaviour, and pick the seam so the corpus can reach it.

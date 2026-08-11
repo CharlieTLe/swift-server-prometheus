@@ -2040,6 +2040,25 @@ changing behaviour.
     already holds more than a header, the comparison is against bytes-already-written rather than against
     `SegmentHeaderSize`. That is what tops up a partially filled segment instead of abandoning it.
 
+129. **The index file's TOC is at the END, and its CRC covers only itself.** Six big-endian `uint64`
+    offsets plus a four-byte CRC32-C in the last 52 bytes, so reading an index starts at the tail. A
+    truncated file therefore fails on the TOC rather than on the magic header.
+
+130. **`Symbols.Lookup`'s argument means different things in format v1 and v2.** In v1 it is a BYTE
+    OFFSET, used directly as `d.Skip(int(o))`; in v2 it is an ORDINAL resolved through the sparse offset
+    table. `ReverseLookup` mirrors it — v1 returns `bs.Len() - lastLen`, a byte position, where v2 returns
+    a count. A port that treats the value as one kind throughout reads v1 files as garbage.
+
+    The sparse table records one offset every `symbolFactor` = **32** symbols, so a lookup walks at most
+    31 symbols forward, and `ReverseLookup` binary-searches the sparse offsets before walking. The
+    `if i > 0 { i-- }` after the search is what turns an upper bound into a lower one; without it a symbol
+    landing exactly on a sparse boundary is missed. The walk's termination is `res <= s.seen`, inclusive,
+    so the last symbol is reachable.
+
+    **And the search must use Go's byte ordering** (ADR-10): the table is sorted by `sort.Strings`, so
+    binary-searching it with Swift's collation searches a differently-ordered array. `Fixtures/index/
+    reader.jsonl` includes symbols where the two orders disagree.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
