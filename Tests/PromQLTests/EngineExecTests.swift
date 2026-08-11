@@ -160,13 +160,11 @@ struct EngineExecInvariantTests {
     @Test("an unported expression names itself rather than answering wrongly")
     func unportedArmsAreLoud() throws {
         // A silent zero would be far worse than an error, so every arm this slice does not
-        // implement says which one it is. The list has shrunk each slice, and this is what is
-        // left: subqueries, the three series-shaped functions, and the binop fill modifiers.
+        // implement says which one it is. The list has shrunk each slice and is now down to ONE:
+        // `label_replace`, blocked on Pike VM capture tracking in `PromRegex` — a regex slice rather
+        // than an evaluator one. `info` came off it when `Engine+Info.swift` landed.
         for query in [
-            // What is left: `label_replace` (blocked on Pike VM capture tracking in PromRegex),
-            // `info`, the binop fill modifiers and `smoothSeries`.
-            "label_replace(foo, \"a\", \"b\", \"c\", \"d\")",
-            "info(foo)",
+            "label_replace(foo, \"a\", \"b\", \"c\", \"d\")"
         ] {
             let res = try run(query)
             guard let err = res.error as? EvaluatorNotPorted else {

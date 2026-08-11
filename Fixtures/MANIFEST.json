@@ -130,6 +130,7 @@
     "promql/valuetype.jsonl": { "sha256": "8e88774d31523dd070292896a9cb48347951da0621363d99da7d66a1fb06d2f0", "lines": 8 },
     "regex/match.jsonl": { "sha256": "38844cdb215d414acb495c9195fcbda5783502711a0ebe31fcb94b0648d6897e", "lines": 40768 },
     "regex/parse.jsonl": { "sha256": "221411ba2bacbd9a1ea86dd1a6e67bd6dfdf08a0f07c4e62fa85826f6547c22c", "lines": 4221 },
+    "regex/quotemeta.jsonl": { "sha256": "434296bcdf58874bd962f92fadc59d462d7becb36870e7f5cff671ece3f67c2d", "lines": 62 },
     "regex/setmatches.jsonl": { "sha256": "d0f09f1ddaade4bc4eaab8246b399ff9f0d01504eacf75a085e665c7507d1743", "lines": 675 },
     "regex/simplefold.jsonl": { "sha256": "b240b1de6eb59059e86e3a64887e1958dfda7286bbbd33a6b117999dc1310c5f", "lines": 2047 },
     "regex/unicodetable.jsonl": { "sha256": "48d9ef43dc955239ee5f447ea96a2a067bc7f716f3c91823a13cfe7f1cabd6a9", "lines": 159 },

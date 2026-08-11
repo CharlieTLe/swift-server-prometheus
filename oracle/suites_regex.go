@@ -5,6 +5,10 @@ import (
 	"math/rand"
 	"regexp/syntax"
 	"unicode"
+
+	// The SAME regexp package Prometheus uses — `github.com/grafana/regexp`, not the stdlib's. They
+	// agree on `QuoteMeta`, but pinning against the one the caller actually imports is the point.
+	"github.com/grafana/regexp"
 )
 
 // ----------------------------------------------------------------- simplefold
@@ -125,5 +129,37 @@ func genUnicodeTable(e *emitter) {
 		}
 		e.emit(fmt.Sprintf("ut/%d", i), nameIn{Name: pat}, out)
 		i++
+	}
+}
+
+// QuoteMeta, which `promql/info.go` uses to build its info-series selector from label values.
+//
+// The escape set is `\.+*?()|[]{}^$` and the test is per BYTE: `special` checks `b < utf8.RuneSelf`
+// first, so a metacharacter byte inside a multi-byte sequence is never escaped. The corpus therefore
+// includes multi-byte input whose continuation bytes collide with metacharacter values.
+func genQuoteMeta(e *emitter) {
+	n := 0
+	emit := func(s string) {
+		e.emit(fmt.Sprintf("quotemeta/%d", n), map[string]string{"s": s},
+			map[string]string{"out": regexp.QuoteMeta(s)})
+		n++
+	}
+	for _, s := range []string{
+		"", "a", "abc", "a.b", ".", "\\", "+", "*", "?", "(", ")", "|", "[", "]", "{", "}", "^", "$",
+		`\.+*?()|[]{}^$`, "a\\b", "...", "a|b|c", "^abc$", "[a-z]+", "{1,2}", "(x)",
+		// Not special, so untouched: these are the near-misses.
+		"-", "_", ":", "/", "#", "!", "<", ">", "=", ",", ";", "%", "&", "@", "~", "`", "'", "\"",
+		// A real instance label, which is the actual caller.
+		"localhost:9090", "1.2.3.4:9100", "host-1.example.com:80",
+		// Multi-byte, including sequences whose continuation bytes are >= 0x80 and so never escaped.
+		"é", "日本語", "café.au", "→|←", " .", "𝄞", "á.b",
+		// Control bytes and NUL, which are not in the special set.
+		"\x00", "a\x00b", "\t", "\n", "\r",
+		// Long, so the "no metacharacter found, return the original" fast path and the slow path both
+		// run on inputs of the same shape.
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa.",
+		".aaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	} {
+		emit(s)
 	}
 }

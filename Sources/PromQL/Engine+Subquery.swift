@@ -155,7 +155,7 @@ extension Evaluator {
             noStepSubqueryIntervalFn: noStepSubqueryIntervalFn,
             enableDelayedNameRemoval: enableDelayedNameRemoval,
             enableTypeAndUnitLabels: enableTypeAndUnitLabels,
-            useStartTimestamps: useStartTimestamps)
+            useStartTimestamps: useStartTimestamps, querier: querier)
 
         if subqStart != startTimestamp {
             // The `@` rewrite is measured from the evaluator's start time, and this evaluator has

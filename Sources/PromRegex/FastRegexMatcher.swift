@@ -253,3 +253,41 @@ public struct FastRegexMatcher: Sendable {
         !re.flags.contains(.foldCase)
     }
 }
+
+/// Go: `regexp.QuoteMeta` — escape every regex metacharacter so the result matches `s` literally.
+///
+/// `promql/info.go` builds its info-series selector by joining `QuoteMeta`ed label values with `|`,
+/// so this is on the correctness path for `info(...)` rather than a convenience: an unescaped `.` in
+/// an `instance` label would silently widen the selector.
+///
+/// **The escape set is `\.+*?()|[]{}^$` and it is a BYTE test, not a character one.** Go's `special`
+/// checks `b < utf8.RuneSelf` first, so a metacharacter byte inside a multi-byte UTF-8 sequence can
+/// never be escaped — continuation bytes are all >= 0x80. Iterating Swift `Character`s would agree
+/// here by luck, but iterating bytes is what upstream does and what the corpus pins.
+public func goQuoteMeta(_ s: String) -> String {
+    // Go: `specialBytes`, spelled as a set because 16 bytes of bitmap buys nothing here.
+    func special(_ b: UInt8) -> Bool {
+        switch b {
+        case UInt8(ascii: "\\"), UInt8(ascii: "."), UInt8(ascii: "+"), UInt8(ascii: "*"),
+            UInt8(ascii: "?"), UInt8(ascii: "("), UInt8(ascii: ")"), UInt8(ascii: "|"),
+            UInt8(ascii: "["), UInt8(ascii: "]"), UInt8(ascii: "{"), UInt8(ascii: "}"),
+            UInt8(ascii: "^"), UInt8(ascii: "$"):
+            return true
+        default:
+            return false
+        }
+    }
+    let bytes = Array(s.utf8)
+    var out: [UInt8] = []
+    out.reserveCapacity(bytes.count)
+    for b in bytes {
+        if special(b) {
+            out.append(UInt8(ascii: "\\"))
+        }
+        out.append(b)
+    }
+    // Every escape inserts a `\` before an ASCII byte, so the result is still valid UTF-8 and the
+    // decode cannot lose anything — which is why this one surface may return a `String` despite
+    // ADR-9.
+    return String(decoding: out, as: UTF8.self)
+}
