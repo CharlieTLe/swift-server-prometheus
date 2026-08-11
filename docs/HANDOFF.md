@@ -2203,14 +2203,31 @@ label sets, the per-chunk trimmed ranges, and the flat sample timestamps. The Go
 what closes the gaps §6s declared: spot-checked, `trimming flags never set` and `the back trim interval starts
 at maxt not maxt+1` both now break.
 
-Two things are deliberately still open, and naming them is the point of this entry:
+**`controls-populate.sh` is now written** — 14 controls, 6 broke. Three results are worth carrying:
 
-1. **The populate sweep is not written.** Three controls were spot-checked by hand (the two above, plus the
-   overlap filter). A full `controls-populate.sh` is the immediate next step, and the controls it needs are
-   already identifiable: hoisting the interval list out of the per-chunk loop; `currDelIter` nil-ness; the
-   `i >= metas.count - 1` bound with its -1 start; `Seek` resuming before advancing and calling the exported
-   `next()` rather than the generic one; and `Err`'s generic-first ordering.
-2. **`populateWithDelChunkSeriesIterator` is not ported.** The port derives a trimmed chunk's RANGE from its
+- **The interval-hoist control needed a different shape than expected.** Hoisting the list in Swift only drops
+  the overlap filter, because `[DeletionInterval]` is a value type and the copy per chunk is implicit. The
+  consumption leak quirk 167 is really about needs a shared REFERENCE, so the control that catches it reuses one
+  `DeletedIterator` across chunks — which is exactly what Go does when `bufIter.Intervals` is not reset. That
+  control breaks; the naive hoist survives as an optimisation.
+- **A mislabelled control was caught by its own verdict.** One was named "(equivalence probe)" with a comment
+  claiming `> count-1` and `>= count-1` were the same predicate. They are not — they differ at `i == count-1`,
+  one extra chunk per series — and it broke. The label is corrected and the mistake left on the record: it is
+  quirk 160's failure mode in reverse, where a wrong tautology claim would have excused a BREAK rather than a
+  survival.
+- **Two survivors expose one precise gap: the corpus never calls `seek`.** Both sides drain the sample iterator
+  with `Next` only, so every `Seek` path in `PopulateWithDelSeriesIterator` is unexercised. Closing it means
+  adding an op-script (`"n"` / `"sN"`) to `block/seriesset.jsonl`'s sample pass, exactly the shape
+  `block/deletediter.jsonl` already uses. **That is the cheapest outstanding coverage win in Phase 6** and
+  should be taken before `blockQuerier.Select`.
+
+Three further survivors are declared gaps with their closing slice named: `currDelIter` nil-ness (load-bearing
+only once `populateWithDelChunkSeriesIterator` uses it to decide whether to re-encode), `Err` ordering and the
+undecodable-encoding path (both need malformed chunk bytes in a fixture input — §6r's gap too).
+
+One thing is still open:
+
+1. **`populateWithDelChunkSeriesIterator` is not ported.** The port derives a trimmed chunk's RANGE from its
    first and last surviving sample, which is what that iterator does to set a rewritten meta's bounds — but
    the re-encoded chunk BYTES are what it additionally produces, and they are unpinned. That is the slice
    that also closes §6r's erroring-chunk gap, since its error wrapping needs a malformed chunk.
@@ -2219,7 +2236,8 @@ One argued survivor recorded in quirk 167: the `OverlapsClosedInterval` filter i
 correctness rule. Passing every interval gives the same samples, because the consumption handles
 before-and-after intervals and the list is rebuilt per chunk anyway.
 
-**Next in Phase 6:** `controls-populate.sh`, then `populateWithDelChunkSeriesIterator`, then
+**Next in Phase 6, in this order:** the `seek` op-script for `block/seriesset.jsonl` (cheap, closes two live
+controls), then `populateWithDelChunkSeriesIterator` (closes three more plus §6r's), then
 `blockQuerier.Select` — and Phase 6's read path is closed.
 
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
