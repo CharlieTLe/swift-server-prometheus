@@ -20,12 +20,9 @@
 // this — `Select` is called once per selector with per-selector hints — but it means the querier's range is a
 // DEFAULT rather than a bound, which is the opposite of what the constructor's signature suggests.
 //
-// **This override is NOT yet pinned, and the reason is precise.** `block/seriesset.jsonl` builds each
-// querier for `[q.Mint, q.Maxt]` and passes hints of exactly the same range, so overriding and not overriding
-// are indistinguishable. Removing the two assignments survives; removing `disableTrimming = hints
-// .DisableTrimming` breaks. Closing it needs one query per case whose hints DIFFER from the querier's range —
-// a two-field addition to `seriesSetQuery` (`hintStart`/`hintEnd`) and the same on the port side. Declared
-// here rather than left implicit, in the shape §6s used for its trimming gaps.
+// The override IS pinned: `block/seriesset.jsonl` carries queries whose `hintStart`/`hintEnd` differ from the
+// querier's range, and removing the two assignments breaks them. Closing that gap also exposed a HARNESS bug
+// worth knowing about — see §6v.
 //
 // ## `Func == "series"` swaps in a chunk reader that returns an empty chunk
 //
