@@ -110,30 +110,26 @@ struct PromQLTestTests {
 /// Where the remaining failures live is recorded in `docs/HANDOFF.md` §5e; the ones that are known
 /// *gaps* rather than bugs are counted as skips instead, so this number is bugs plus
 /// runner-incompleteness and nothing else.
-// The 39 remaining failures, categorised so the next slice has targets rather than a list:
+// The 4 remaining failures, all of them REAL engine findings rather than runner gaps:
 //
-//   ~30  histogram comparison where the two RENDERINGS ARE IDENTICAL. Diagnosed: Go's `Compact(0)`
-//        KEEPS all-zero buckets and the port's strips them, so `hrhs.Copy().Mul(0).Compact(0)`
-//        leaves `pSpans=(0,3) pB=[0,0,0]` upstream and nothing here. The failure message prints the
-//        fields `String()` omits, which is what made this a one-look diagnosis. `PromHistogram`'s
-//        `compact` is pinned by twelve suites, so suspect a CORPUS GAP — an all-zero histogram —
-//        before a transcription error. See HANDOFF §5e.
-//     2  `expect warn: conflicting counter resets during histogram aggregation` not firing for
-//        `sum_over_time`/`avg_over_time` over a mixed-hint matrix. A REAL engine finding: quirk 59
-//        says the corpus for that warning could never make `counterResetSeen &&
-//        notCounterResetSeen` both true, and this is the shape that can.
-//     1  `histogram_quantile`'s monotonicity info not firing.
-//     1  `count_values` accepting an invalid UTF-8 label name (`"a\xc5z"`) that Go rejects — ADR-9's
-//        open question, reached at last: `Labels` is String-backed, so the bytes arrive as U+FFFD
-//        and validate.
-//   rest scattered.
-let promqlTestAllowedFailures = 39
+//   2  `expect warn: conflicting counter resets during histogram aggregation` does not fire for
+//      `sum_over_time`/`avg_over_time` over a mixed-hint matrix. Quirk 59 wrote down that the
+//      `functions-*` corpus could never make `counterResetSeen && notCounterResetSeen` both true;
+//      `native_histograms.test`'s `mixed` series is the shape that can. The documented blind spot,
+//      found.
+//   1  `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
+//   1  `count_values` accepts an invalid UTF-8 label name (`"a\xc5z"`) that Go rejects. **ADR-9's
+//      open question, reached**: `Labels` is String-backed, so the raw bytes arrive as U+FFFD and
+//      pass validation. §6 has said the deciding moment is Phase 8; the gate says it is now.
+//
+let promqlTestAllowedFailures = 4
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 1,851 of 2,221 (83%). The 331 skips are itemised by the run itself and every one names a known
-// gap: 214 depend on `load_with_nhcb` or `@st` (Phases 6-7), 58 are `info`/`label_replace`, and the
-// rest are `expect … regex:` and the two `expect range vector`/`expect string` directives.
-let promqlTestMinimumPasses = 1_851
+// 1,886 of 2,221 (85%), with only 4 failures. The 331 skips are itemised by the run itself and
+// every one names a known gap: 228 depend on `load_with_nhcb` or `@st` (Phases 6-7), 60 are
+// `info`/`label_replace`, and the rest are `expect … regex:` and the two `expect range
+// vector`/`expect string` directives.
+let promqlTestMinimumPasses = 1_886
 
 extension String {
     fileprivate func padded(to n: Int) -> String {

@@ -24,6 +24,36 @@ import (
 // tests use, plus the float-specific values an integer histogram cannot reach.
 func floatStructuralHistograms() []*histogram.FloatHistogram {
 	return []*histogram.FloatHistogram{
+		// ALL-ZERO buckets, which the exit gate found nothing covers: `Compact(0)` KEEPS them in
+		// Go (`hrhs.Copy().Mul(0).Compact(0)` leaves `(0,3) [0,0,0]`), and ~30 of the gate's
+		// assertions turn on it. Quirk 59's lesson in a third setting — a corpus built from
+		// interesting *values* never builds an uninteresting one.
+		{
+			Schema: 0, ZeroThreshold: 0.001, ZeroCount: 0, Count: 0, Sum: 0,
+			PositiveSpans:   []histogram.Span{{Offset: 0, Length: 3}},
+			PositiveBuckets: []float64{0, 0, 0},
+			NegativeSpans:   []histogram.Span{{Offset: 0, Length: 3}},
+			NegativeBuckets: []float64{0, 0, 0},
+		},
+		// Zeros with a GAP, so span merging and zero-stripping are separable.
+		{
+			Schema: 0, ZeroThreshold: 0.001, Count: 0, Sum: 0,
+			PositiveSpans:   []histogram.Span{{Offset: 0, Length: 2}, {Offset: 3, Length: 2}},
+			PositiveBuckets: []float64{0, 0, 0, 0},
+		},
+		// Leading and trailing zeros around a real bucket.
+		{
+			Schema: 0, ZeroThreshold: 0.001, Count: 5, Sum: 3,
+			PositiveSpans:   []histogram.Span{{Offset: 0, Length: 5}},
+			PositiveBuckets: []float64{0, 0, 5, 0, 0},
+		},
+		// An all-zero CUSTOM-buckets histogram, since compaction differs for those.
+		{
+			Schema: -53, Count: 0, Sum: 0,
+			PositiveSpans:   []histogram.Span{{Offset: 0, Length: 3}},
+			PositiveBuckets: []float64{0, 0, 0},
+			CustomValues:    []float64{1, 2, 5},
+		},
 		{},
 		// float_histogram_test.go TestFloatHistogramString.
 		{

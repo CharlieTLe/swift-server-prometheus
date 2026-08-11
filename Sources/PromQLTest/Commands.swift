@@ -354,11 +354,22 @@ extension PromQLTestRunner {
             guard let gotH = s.h else {
                 return .failed("\(loc): \(cmd.expr): \(s.metric): expected a histogram, got a float")
             }
+            // **BOTH SIDES ARE COMPACTED FIRST** — test.go:1323 is
+            // `compareNativeHistogram(expected.H.Compact(0), actual.H.Compact(0), …)`. Without it
+            // `histogram_mul_div * 0` fails: the file writes `buckets:[0 0 0]` and the engine's
+            // answer is already compacted to nothing, so the spans differ while the two
+            // `String()` renderings are identical. That accounted for ~30 of the gate's 39
+            // failures, and it was the COMPARISON rather than `compact` or `mul` — the corpus
+            // addition proved Go's `Compact(0)` and the port's already agree.
+            //
             // `counterResetHintSet` is false: a `.test` expectation that does not write a hint
             // means "don't care", and the series-description parser has no way to say which it
-            // was — so the hint is never compared. That is a documented narrowing of the check,
-            // not an accident; upstream compares it only when the file set one.
-            return compareNativeHistogram(wantH, gotH, counterResetHintSet: false)
+            // was — a documented narrowing, since upstream compares it only when the file set one.
+            var wantC = wantH
+            var gotC = gotH
+            return compareNativeHistogram(
+                wantC.compact(maxEmptyBuckets: 0), gotC.compact(maxEmptyBuckets: 0),
+                counterResetHintSet: false)
                 ? nil
                 : .failed(
                     "\(loc): \(cmd.expr): \(s.metric): histogram mismatch:\n"
