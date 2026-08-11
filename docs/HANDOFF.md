@@ -1540,9 +1540,98 @@ free low bits of the final partial byte — so copy and live byte agree on every
 The copy prevents a **data race**, which has no defined value to compare against. Pinning it needs a
 concurrent appender and querier, which is Phase 7's Head (quirk 120).
 
-**Next: `EncXOR2`** — the start-timestamp-aware encoding, whose control-prefix readers were deliberately
-left out of `Bstream.swift` because they are XOR2's grammar rather than the stream's. It is what the
-exit gate's last 23 skips wait on.
+### 6b. `EncXOR2`, scoped from the pinned source
+
+Written the way §5c was for `matrixSelector`, because that plan was executed straight out of the doc.
+**This is the slice that closes Phase 5's last 23 skips**, since `@st` lines in the `.test` files need
+the start-timestamp-aware encoding.
+
+**It is TWO files, not one, and the second is the surprise.** `xor2.go` is 991 lines and calls
+`putVarbitIntFast`/`readVarbitInt` from `varbit.go` (263 lines) for every start-timestamp delta. Both
+are unexported, so both are pinnable only through the same seam §6a used —
+`NewXOR2Chunk`/`Appender`/`Bytes`/`Iterator`. `varbit.go` is also what `histogram.go` and
+`float_histogram.go` need, so porting it here pays for the histogram chunks later.
+
+Order: `varbit.go` first (it has no dependencies beyond `Bstream`), then `xor2.go` on top.
+
+#### The grammar, copied from the source comment so it is not re-derived
+
+Control prefix for samples >= 2 — note it is a **joint** timestamp+value code, which is what makes XOR2
+different from XOR rather than merely extended:
+
+```
+0     -> dod=0 AND value unchanged              (1 bit)
+10    -> dod=0, value changed                   (2 bits, then a value field)
+110   -> dod!=0, 13-bit signed [-4096, 4095]    (prefix+dod packed into 2 BYTES)
+1110  -> dod!=0, 20-bit signed [-524288, 524287] (prefix+dod packed into 3 BYTES)
+11110 -> dod!=0, 64-bit escape                  (5+64 bits, then a value field)
+11111 -> dod=0, STALE NaN                       (5 bits, and NO value field at all)
+```
+
+The dod bins are widened *specifically so prefix+dod lands on a byte boundary*, which is why the 13-
+and 20-bit cases are `writeByte` rather than `writeBits`. That is the same shape XOR's 14-bit case has
+(quirk 117's neighbour) and it means the bin edges are **not** the ones a "smallest sufficient width"
+reading would pick — `bitRange(dod, 13)` after a 3-bit prefix, not `bitRange(dod, 14)`.
+
+Two value encodings, and which one applies depends on the prefix:
+
+```
+after a dod!=0 prefix:   0 unchanged | 10 reuse window | 110 new window | 111 stale NaN
+after the dod=0 prefix:  0 reuse window | 1 new window          (value is known to have changed)
+```
+
+So **stale NaN is representable in two different places** — as a whole-sample prefix (`11111`) and as a
+value code (`111`) — and which one is used depends on whether the timestamp also moved.
+
+#### The ST header, which is the point of the encoding
+
+One byte at `b[chunkHeaderSize]`, i.e. between the sample count and the data:
+
+```
+bit 7 (0x80): firstSTKnown    — an ST for the first sample is present in the stream
+bits 6-0:     firstSTChangeOn — the sample INDEX at which the first ST change begins
+```
+
+`maxFirstSTChangeOn` is `0x7F`, and `writeHeaderFirstSTChangeOn` **silently returns** when the index
+exceeds it rather than erroring — upstream's comment says "this should never happen, would cause
+corruption". Reproduce the silent return; a port that throws diverges on a chunk that upstream would
+write (badly) rather than reject.
+
+`readSTHeader` has two fast paths before the mask (`0x00` and `0x80` exactly), which matter only for
+speed but are worth keeping so the two implementations read alike.
+
+When no ST is ever supplied the header stays `0x00` and **the chunk carries no ST bits at all** — so
+an XOR2 chunk of ST-less samples is not an XOR chunk with a spare byte, it is a different byte string
+with one extra byte. The `@st`-free assertions in the gate currently pass through `EncXOR`, so this
+must not change them.
+
+#### How to pin it
+
+Mirror `chunkenc/xor.jsonl`: append a sample sequence, compare `Bytes()` hex, `NumSamples`, the samples
+read back, and the append-while-reading behaviour. Add on top of that:
+
+* `AtST()` per sample, which is the whole reason the encoding exists;
+* cases with **no** ST, ST constant from sample 0, ST first appearing at sample k for k across the
+  0..0x7F boundary, and ST changing every sample;
+* `firstSTChangeOn > 0x7F`, to pin the silent return;
+* both stale-NaN paths, with the timestamp moving and not moving;
+* the 13/20/64-bit dod bin edges, both signs, both sides — the same asymmetry trap as quirk 117.
+
+`varbit.go` gets its own corpus through the same chunk seam: its buckets are exercised by ST deltas, so
+a case per bucket edge (`val == 0`, then `bitRange(val, 3)`, and each widening branch) belongs in the
+XOR2 corpus rather than in a separate one, since that is the only way to reach it.
+
+#### What §6a already proved that applies here
+
+* the `(1 << 64) - 1` trap (quirk 116) is in code XOR2 also calls — it is fixed, but any *new* mask
+  arithmetic needs `&-`;
+* `GoVarint.putUvarint`/`putVarint` **append**, they do not write into a pre-sized buffer. That cost a
+  bug in §6a that was nearly invisible because the varint of `0` is `0x00`;
+* the sample count is stored in the header and an iterator's `numTotal` is fixed at creation
+  (quirk 118), so append-while-reading tests read only the pre-append samples;
+* `Appender()` replays the whole chunk to recover encoder state (quirk 119). XOR2's replay has **more**
+  state to recover — the ST bookkeeping as well as the leading/trailing window — so the replay check
+  in the corpus matters more here, not less.
 
 * ~~`histogram_quantile`'s monotonicity info does not fire~~ — **FIXED, and it was the RUNNER.** The
   info fired all along, with text matching to the character. The line scanner split on the first `#`
