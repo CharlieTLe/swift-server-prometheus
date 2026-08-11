@@ -29,6 +29,7 @@ let package = Package(
         .library(name: "PromPosRange", targets: ["PromPosRange"]),
         .library(name: "PromAnnotations", targets: ["PromAnnotations"]),
         .library(name: "PromChunkEnc", targets: ["PromChunkEnc"]),
+        .library(name: "PromIndex", targets: ["PromIndex"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -87,6 +88,10 @@ let package = Package(
         // XOR2 and histogram encodings arrive with Phases 6–7.
         .target(name: "PromChunkEnc", dependencies: ["PromHistogram", "PromModel", "GoCompat"]),
         .target(name: "PromChunks", dependencies: ["PromChunkEnc", "PromHistogram"]),
+
+        // Phase 6: `tsdb/index`'s postings algebra. `MemPostings` is deliberately not here — that is
+        // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
+        .target(name: "PromIndex", dependencies: ["PromStorage", "PromLabels", "GoCompat"]),
         .target(
             name: "PromStorage",
             dependencies: [
@@ -223,6 +228,10 @@ let package = Package(
                 "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "PromPosRange",
                 "PromStorage", "GoCompat", "GoOracleSupport",
             ]
+        ),
+        .testTarget(
+            name: "PromIndexTests",
+            dependencies: ["PromIndex", "PromStorage", "GoOracleSupport", "GoCompat"]
         ),
         .testTarget(
             name: "PromChunkEncTests",
