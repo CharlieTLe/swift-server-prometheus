@@ -47,6 +47,12 @@ import (
 
 type execIn struct {
 	Query string `json:"query"`
+	// `EnableDelayedNameRemoval`, which `promqltest` sets TRUE (test.go:111) — so it is what the
+	// exit gate runs, and the server's default of false is the *other* case. It changes the result
+	// of every function that drops `__name__`: with it on, the labels survive until
+	// `cleanupMetricLabels` at the top of `Eval`, so an intermediate result keeps its name and a
+	// nested expression can still match on it.
+	Delayed bool `json:"delayed"`
 	// Milliseconds.
 	Ts string `json:"ts"`
 	// Nanoseconds.
@@ -80,6 +86,7 @@ func runExecCase(in execIn) execOut {
 		LookbackDelta:            time.Duration(parseI64(in.Lookback)),
 		EnableAtModifier:         true,
 		EnableNegativeOffset:     true,
+		EnableDelayedNameRemoval: in.Delayed,
 		NoStepSubqueryIntervalFn: func(int64) int64 { return int64(time.Minute / time.Millisecond) },
 		Parser: parser.NewParser(parser.Options{
 			EnableExperimentalFunctions: true,
@@ -558,6 +565,14 @@ func genPromQLExec(e *emitter) {
 		fs([]string{"__name__", "m", "job", "a", "extra", "p"}, [2]int64{0, 1}),
 		fs([]string{"__name__", "m", "job", "a", "extra", "q"}, [2]int64{0, 2}),
 		fs([]string{"__name__", "one", "job", "a", "extra", "x"}, [2]int64{0, 99}),
+	}
+
+	// All three schema metadata labels, so "drops the name" and "drops the metadata" are separable.
+	metaSeries := []memSeriesInJSON{
+		fs([]string{"__name__", "meta", "__type__", "counter", "__unit__", "seconds", "job", "a"},
+			[2]int64{0, 10}, [2]int64{60_000, 20}),
+		fs([]string{"__name__", "meta", "__type__", "gauge", "__unit__", "bytes", "job", "b"},
+			[2]int64{0, 30}, [2]int64{60_000, 60}),
 	}
 
 	binopCases := []struct {
@@ -1354,6 +1369,63 @@ func genPromQLExec(e *emitter) {
 			Query: c.query, Ts: i64(c.ts), Lookback: i64(int64(5 * time.Minute)),
 			Series: c.series,
 		})
+	}
+
+	// --- The DELAYED-name-removal axis, which is what `promqltest` runs with and therefore what
+	// the exit gate exercises. Every case above ran with it OFF (the server's default), where each
+	// body strips the three schema metadata labels itself. With it ON the labels survive until
+	// `cleanupMetricLabels` at the top of `Eval`.
+	//
+	// The shapes that separate the two are the ones where an INTERMEDIATE result's name matters:
+	// a nested expression can still match on it, and only the final answer loses it. Plus the two
+	// arms of `cleanupMetricLabels`, which are asymmetric — a Matrix result MERGES colliding series
+	// and a Vector result is REJECTED.
+	delayedQueries := []struct {
+		query  string
+		series []memSeriesInJSON
+	}{
+		// A single name-dropping function, where the two settings agree on the answer.
+		{`abs(-left)`, binL},
+		{`rate(lj[5m])`, ljSeries},
+		{`ceil(left)`, binL},
+		// NESTED name-dropping, where the inner result's name is visible to the outer expression
+		// only with the flag on.
+		{`abs(abs(-left))`, binL},
+		{`sum by (__name__) (abs(-left))`, binL},
+		{`count by (__name__) (rate(lj[5m]))`, ljSeries},
+		{`abs(-left) + on(__name__) abs(-left)`, binL},
+		{`sum(abs(-left))`, binL},
+		{`topk(1, abs(-left))`, binL},
+		// A binop, which drops the name for arithmetic and keeps it for a comparison.
+		{`left + right`, binL},
+		{`left > right`, binL},
+		{`left > bool right`, binL},
+		{`left + 1`, binL},
+		{`left > bool 1`, binL},
+		// A COLLISION that `cleanupMetricLabels` has to resolve: two series differing only in
+		// `__name__`, name-dropped. A vector result is rejected; a matrix result merges.
+		{`abs({__name__=~"n1|n2"})`, aggNames},
+		{`rate({__name__=~"n1|n2"}[5m])`, aggNames},
+		{`-{__name__=~"n1|n2"}`, aggNames},
+		{`sort({__name__=~"n1|n2"} + 0)`, aggNames},
+		// `label_join` writing `__name__`, which RESETS DropName — so the deferred drop must not
+		// happen.
+		{`label_join(rate(lj[5m]), "__name__", "-", "a")`, ljSeries},
+		{`label_join(rate(lj[5m]), "d", "-", "a")`, ljSeries},
+		// The three metadata labels, not just `__name__`.
+		{`abs(-meta)`, metaSeries},
+		{`rate(meta[5m])`, metaSeries},
+		{`sum by (__type__) (abs(-meta))`, metaSeries},
+	}
+	// A series carrying all three schema metadata labels, so "drops the name" versus "drops the
+	// metadata" is separable.
+	for _, delayed := range []bool{false, true} {
+		for _, c := range delayedQueries {
+			emit(execIn{
+				Query: c.query, Ts: i64(0), Lookback: i64(int64(5 * time.Minute)),
+				Series: c.series, Delayed: delayed,
+			})
+		}
 	}
 
 	// A query that fails to build still comes back through Exec's Result, not as a panic.

@@ -506,6 +506,15 @@ where I had written a plausible expectation and the fixture proved the implement
   exceptions then changed nothing, which read like a corpus gap and was actually dead code. Deleting
   it was the fix. Quirk 47, which also records that `dateToAbsDays`'s `(979*amonth - 2919) >> 5` has
   genuine slack — 2918 is invisible — so *that* surviving perturbation is not a gap either.
+- **A corpus AXIS that is not plumbed through the harness reports 99.8% agreement.** The
+  `delayed` axis (`EnableDelayedNameRemoval`, which is what `promqltest` runs with) was added to
+  the oracle and to the wire type, and the Swift harness silently never passed it to `EngineOpts` —
+  a `python` replacement whose pattern did not match. **987 of 989 cases still agreed**, because
+  with the flag off each function body drops the metadata labels itself and the *final answer* is
+  usually the same either way; only two cases could tell. So the failure looked like two ordinary
+  divergences rather than a dead axis, and half an hour went into diagnosing the implementation
+  before the harness. When adding an axis, **assert that it changes something**: pick one case
+  whose two settings must differ and check the pair before trusting the other 987.
 - **A `--filter` that matches nothing reports success, and a negative-control harness cannot tell the
   difference.** `swift test --filter "promql/functions"` matched no tests — Swift Testing filters on
   the *type* name, and the `/` in the suite's display string is not it — so twelve controls came back
@@ -1117,7 +1126,81 @@ Order after that, from the phase table: XOR2, the histogram encodings, then `tsd
 itself. `PromTestStorage`'s in-memory `Queryable` (#20) is already pinned against a real
 `tsdb.DB`, so it can act as the differential reference for block reads as they land.
 
-### 5c. The next slice, scoped: `matrixSelector` / `matrixIterSlice`
+### 5e. The next two slices, scoped
+
+Read once so the next session does not spend context re-deriving them. `docs/HANDOFF.md` §5c did
+this for `matrixSelector` and the plan was executed straight out of the doc; these are written the
+same way.
+
+**Every arm of the evaluator now runs except two.** `label_replace` and `info` are all that stand
+between the engine and `promqltest`, and the count is small: of the 2,183 `eval` assertions in
+`Fixtures/promql/testdata/`, **36 mention `label_replace`** (in `at_modifier.test`,
+`functions.test`, `name_label_dropping.test`) and **42 mention `info(`**. So ~96% of the exit gate
+is reachable *now*, and the right order is `promqltest` **first**.
+
+#### (a) `promqltest` — the exit gate, and do this one first
+
+The runner turns the committed `.test` files into the assertion set Phase 5 is measured by. Its
+patterns are already reproduced in `oracle/corpus.go`, and the testdata is already committed and
+sha256-pinned.
+
+Two things to get right at the start rather than retrofit:
+
+1. **Give it a storage factory**, not a hard-wired `MemStorage`. Upstream's signature is
+   `RunBuiltinTestsWithStorage(t, engine, newStorage func(testing.TB) storage.Storage)`, and it is
+   how Phases 6-7 re-run the same assertions against the real Head for free.
+2. **`promqltest` sets `EnableDelayedNameRemoval` true** (test.go:111) and
+   `FloatChunkEncoding = chunkenc.EncXOR2` in its own `init()`. The first used to make the port
+   throw; `cleanupMetricLabels` is **now ported** and `promql/exec` carries a `delayed` axis, so the
+   runner can use the setting the exit gate needs. `EncXOR2` is still Phases 6-7's (quirk 36).
+
+Expect the first run to fail widely and to be *informative*: the assertions carry exact
+annotation text, which is already byte-exact (4,118 pinned cases), so a failure is a real
+divergence rather than a formatting difference.
+
+#### (b) `label_replace`, which is a `PromRegex` slice and not an evaluator one
+
+`evalLabelJoin` landed in #49; `evalLabelReplace` is 20 lines of evaluator around two `regexp`
+calls the port does not have:
+
+```go
+regex, err := regexp.Compile("^(?s:" + regexStr + ")$")   // anchored, DOTALL
+indexes := regex.FindStringSubmatchIndex(srcVal)          // needs CAPTURE TRACKING
+res := regex.ExpandString([]byte{}, repl, srcVal, indexes) // needs Go's template syntax
+```
+
+`Sources/PromRegex/RegexCompiler.swift`'s header says the Pike VM "is boolean-only and needs no
+capture tracking. That is not a shortcut" — and it was right for `Matcher`, which asks a
+language-membership question. `label_replace` asks a different question, so the note needs
+revisiting rather than working around.
+
+What that slice actually needs, in order:
+
+1. **Capture slots on each thread.** `2 * (ncap + 1)` positions; the `capture` instruction writes
+   the current position into slot `n`. The compiler already emits `capInst(cap << 1)` and
+   `cap << 1 | 1` (RegexCompiler.swift:128-131), so the *program* is already capture-aware — only
+   the simulation is not.
+2. **Leftmost-first priority.** Go's non-POSIX `regexp` is leftmost-first, which a Pike VM gets by
+   processing threads in priority order and **cutting off lower-priority threads when a match is
+   found**. The current `matches` returns as soon as it reaches a `match` instruction, which is
+   correct for a boolean answer and *not* enough to decide which submatch wins. This is the part
+   to be careful about, and Go's own `TestFind`/`TestFindSubmatch` tables are the corpus.
+3. **`Expand`'s template syntax** — `$1`, `$name`, `${1}`, `${name}`, `$$`, and the rule that a
+   bare `$1x` parses the name as `1x` (so `${1}x` is needed to append a literal). Go's
+   `extract`/`expand` in regexp.go, ~60 lines.
+
+Do it as a `PromRegex` slice with its own corpus (`gocompat/regexp-submatch`, driven from Go's
+`FindStringSubmatchIndex` over the existing 40,768-case pattern set), and land `evalLabelReplace`
+on top in the same PR or the next. **Do not** shortcut it with `NSRegularExpression`: ADR-6 exists
+because these patterns come from user queries and need linear-time matching.
+
+### 5c. LANDED in #43/#44: `matrixSelector` / `matrixIterSlice`
+
+**Kept as a record of what the scoping got right and wrong**, because §5e is written the same way.
+Every trap it named was real and every one was hit. What it did *not* predict: the reachable
+`extendFloats` panic (quirk 84), that the querier's hints hide the window boundaries so the tests
+belong a level down (`MatrixIterSliceTests`), and that `FunctionCall` would have to become
+`throws`. Scoping finds the traps in the code; it does not find the ones in the corpus.
 
 Read once so the next session does not spend context re-deriving it. Everything it needs on the
 Swift side already exists: `BufferedSeriesIterator` + `newBuffer` (PromStorage/Buffer.swift),

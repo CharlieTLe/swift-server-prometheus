@@ -178,13 +178,14 @@ final class Evaluator {
     func eval(_ ctx: GoContext, _ expr: any Expr) throws -> (any Value, Annotations) {
         var ws = Annotations()
         do {
-            let v = try evalNode(ctx, expr, &ws)
-            // `cleanupMetricLabels` belongs to the delayed-name-removal path, which arrives
-            // with the aggregations that need it.
+            var v = try evalNode(ctx, expr, &ws)
+            // With delayed name removal on, every body left `__name__` in place and recorded the
+            // intent in `DropName`. This is where that intent is finally applied — ONCE, at the
+            // top, after the whole expression has been evaluated. That is the point of deferring
+            // it: an intermediate result keeps its name, so a nested expression can still match on
+            // it, and only the answer loses it.
             if enableDelayedNameRemoval {
-                throw EvaluatorNotPorted(
-                    nodeType: "enableDelayedNameRemoval",
-                    detail: "cleanupMetricLabels lands with the aggregations")
+                v = try cleanupMetricLabels(v)
             }
             return (v, ws)
         } catch let e as ErrWithWarnings {
@@ -1356,6 +1357,42 @@ extension Evaluator {
             }
         }
         return mat
+    }
+
+    /// Go: `cleanupMetricLabels` — apply every deferred `DropName` and then re-check for
+    /// collisions.
+    ///
+    /// Only reached when `enableDelayedNameRemoval` is on, which is what `promqltest` runs with
+    /// (test.go:111) and therefore what the exit gate exercises. The server defaults it off, so
+    /// each function body strips the labels itself instead.
+    ///
+    /// The two arms are **not** symmetric, and the asymmetry is the interesting part:
+    ///
+    ///   * a `Matrix` goes through `mergeSeriesWithSameLabelset`, which *combines* colliding series
+    ///     and errors only on two points at one timestamp;
+    ///   * a `Vector` is checked with `ContainsSameLabelset` and **errors outright**.
+    ///
+    /// So dropping the name can merge a matrix and reject a vector, for the same collision. A
+    /// vector has one point per series by construction, so there is nothing to merge — the merge
+    /// would immediately hit its own duplicate-timestamp error anyway.
+    func cleanupMetricLabels(_ v: any Value) throws -> any Value {
+        if var mat = v as? Matrix {
+            for i in mat.series.indices where mat.series[i].dropName {
+                mat.series[i].metric = mat.series[i].metric.dropReserved(isMetadataLabel)
+            }
+            return try mergeSeriesWithSameLabelset(mat)
+        }
+        if var vec = v as? Vector {
+            for i in vec.samples.indices where vec.samples[i].dropName {
+                vec.samples[i].metric = vec.samples[i].metric.dropReserved(isMetadataLabel)
+            }
+            if vec.containsSameLabelset {
+                throw EvaluationError.duplicateLabelset
+            }
+            return vec
+        }
+        // A String, which has no labels.
+        return v
     }
 
     /// Go: `mergeSeriesWithSameLabelset` — combine series whose label sets became equal.
