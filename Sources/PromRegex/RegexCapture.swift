@@ -502,3 +502,15 @@ public struct CompiledRegex: Sendable {
         regexExpand(dst, template, src, match, names)
     }
 }
+
+/// Go: `regexp.MatchString` — an **unanchored** search, which is what `promqltest`'s
+/// `expect fail regex:` and `expect … regex:` lines mean.
+///
+/// The capture VM gives this for free: `findSubmatchIndex` re-seeds the start state at every position
+/// while it has not matched, which is exactly an unanchored search. And this is the caller that makes
+/// the first-match cut load-bearing — with an unanchored pattern a lower-priority thread really can
+/// match further right, which is the case quirk 115 says the cut exists for.
+public func regexMatchesUnanchored(_ pattern: String, _ subject: String) throws -> Bool {
+    let re = try CompiledRegex(pattern: pattern)
+    return re.findSubmatchIndex(Array(subject.utf8)) != nil
+}

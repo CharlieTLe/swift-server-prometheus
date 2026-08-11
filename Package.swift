@@ -148,6 +148,9 @@ let package = Package(
             dependencies: [
                 "PromQL", "PromQLParser", "PromTestStorage", "PromStorage",
                 "PromChunks", "PromHistogram", "PromConvertNHCB", "PromLabels", "PromModel",
+                // `expect fail regex:` and `expect … regex:` need an unanchored search, which the
+                // capture VM provides.
+                "PromRegex",
                 "GoCompat",
             ]
         ),
