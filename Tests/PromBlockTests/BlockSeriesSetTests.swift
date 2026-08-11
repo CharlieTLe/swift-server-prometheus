@@ -38,6 +38,16 @@ struct SeriesSetQuery: Codable, Sendable {
     var maxt: Int64
     var matchers: [[String]]?
     var disableTrimming: Bool
+    /// The `SelectHints` range when it differs from the querier's; 0/0 means "same as mint/maxt". These are
+    /// what pin `selectSeriesSet`'s range OVERRIDE — see §6v.
+    var hintStart: Int64
+    var hintEnd: Int64
+
+    /// Go: `hintStartOf` / `hintEndOf`.
+    var effectiveHints: (start: Int64, end: Int64) {
+        if hintStart == 0 && hintEnd == 0 { return (mint, maxt) }
+        return (hintStart, hintEnd)
+    }
 }
 
 struct SeriesSetIn: Codable, Sendable {
@@ -173,20 +183,28 @@ struct BlockSeriesSetTests {
                     } else {
                         p = try postingsForMatchers(ix, ms)
                     }
-                    // Through `blockSelect`, not `BlockBaseSeriesSet` directly — because the Go side drives
-                    // `blockQuerier.Select` with `SelectHints`, so routing the port the same way pins the
-                    // HINT handling (the range override and `DisableTrimming`) with no new corpus. `p` above
-                    // is still computed for the label-set pass, which uses the all-postings key when a query
-                    // has no matchers; `Select` cannot express that without the `{""=""}` matcher, which is
-                    // what the oracle substitutes.
-                    _ = p
-                    let selectMs =
-                        ms.isEmpty ? [try Matcher(.equal, "", "")] : ms
-                    let (ss, _) = try blockSelect(
+                    // **Two passes with DIFFERENT ranges, because the oracle uses two entry points.** The
+                    // label-set and chunk-meta pass goes through `NewBlockChunkSeriesSet` on the Go side,
+                    // which takes the range directly; the sample and seek passes go through
+                    // `blockQuerier.Select`, which OVERRIDES that range with the hints'. Applying the hints
+                    // to both made 1 of 8 cases mismatch the moment differing-hint cases were added — which
+                    // is the gap §6v declared doing its job, on the harness rather than the port.
+                    let ss = BlockBaseSeriesSet(
+                        index: ix, postings: p, mint: q.mint, maxt: q.maxt,
+                        disableTrimming: q.disableTrimming)
+                    // The hint-driven set, used for the sample and seek passes below.
+                    let selectMs = ms.isEmpty ? [try Matcher(.equal, "", "")] : ms
+                    let (hintSet, _) = try blockSelect(
                         index: ix, chunks: source, mint: q.mint, maxt: q.maxt,
                         matchers: selectMs, sortSeries: false,
                         hints: BlockSelectHints(
-                            start: q.mint, end: q.maxt, disableTrimming: q.disableTrimming))
+                            start: q.effectiveHints.start, end: q.effectiveHints.end,
+                            disableTrimming: q.disableTrimming))
+                    var hintSeries: [SeriesData] = []
+                    while hintSet.next() {
+                        if let c = hintSet.current { hintSeries.append(c) }
+                    }
+                    var hintIndex = 0
                     var sets: [String] = []
                     var ranges: [[[Int64]]] = []
                     var times: [[Int64]] = []
@@ -215,36 +233,41 @@ struct BlockSeriesSetTests {
                         ranges.append(rs)
                         allBytes.append(bs)
 
-                        // The SAMPLE view, over all of the series' chunks at once.
+                        _ = 0
+                    }
+                    // The sample and seek passes, as their own loop over the HINT-driven series — the hint
+                    // range can select a DIFFERENT NUMBER of series than the querier's range, so they cannot
+                    // be nested inside the label loop. That is what made 1 of 8 cases mismatch until the two
+                    // passes were separated; the gap §6v declared caught a harness bug, not a port bug.
+                    for hintCur in hintSeries {
                         let flat = PopulateWithDelSeriesIterator(
-                            blockID: "", source: source, metas: cur.chunks,
-                            intervals: cur.intervals)
+                            blockID: "", source: source, metas: hintCur.chunks,
+                            intervals: hintCur.intervals)
                         var ts: [Int64] = []
                         while flat.next() != .none { ts.append(flat.atT()) }
                         times.append(ts)
 
-                        // The SEEK script, on a fresh iterator — the one above is exhausted. Fixed rather
-                        // than input-driven, matching the oracle: next, then seeks landing before, inside
-                        // and after the current position, each followed by a next.
                         let sk = PopulateWithDelSeriesIterator(
-                            blockID: "", source: source, metas: cur.chunks,
-                            intervals: cur.intervals)
+                            blockID: "", source: source, metas: hintCur.chunks,
+                            intervals: hintCur.intervals)
                         var res: [Int64] = []
-                        let mid = q.mint + (q.maxt - q.mint) / 2
+                        let hs = q.effectiveHints
+                        let mid = hs.start + (hs.end - hs.start) / 2
                         func record(_ vt: ValueType) {
                             res.append(vt == .none ? -(1 << 62) : sk.atT())
                         }
                         record(sk.next())
-                        record(sk.seek(q.mint))
+                        record(sk.seek(hs.start))
                         record(sk.next())
                         record(sk.seek(mid))
                         record(sk.next())
-                        record(sk.seek(q.maxt))
+                        record(sk.seek(hs.end))
                         record(sk.next())
-                        record(sk.seek(q.maxt + 1))
+                        record(sk.seek(hs.end + 1))
                         record(sk.next())
                         seeks.append(res)
                     }
+
                     out.labelSets.append(sets)
                     out.chunkRanges.append(ranges)
                     out.sampleTimes.append(times)

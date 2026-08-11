@@ -68,6 +68,13 @@ type seriesSetQuery struct {
 	Matchers [][3]string `json:"matchers"`
 	// Both settings are run for every query; this field selects which one this entry records.
 	DisableTrimming bool `json:"disableTrimming"`
+	// The SelectHints range, when it differs from the querier's. Zero means "same as mint/maxt".
+	//
+	// These exist because `selectSeriesSet` OVERRIDES the querier's range with the hints', and every earlier
+	// case passed hints equal to that range — so a port that ignored the override was indistinguishable. §6v
+	// declared that gap; these two fields close it.
+	HintStart int64 `json:"hintStart"`
+	HintEnd   int64 `json:"hintEnd"`
 }
 
 type seriesSetOut struct {
@@ -313,6 +320,19 @@ func genBlockSeriesSet(e *emitter) {
 		)})
 	}
 
+	// HINTS THAT DIFFER FROM THE QUERIER'S RANGE — the cases that pin the override. The querier is built for
+	// one range and selected with another; upstream reads the HINTS' range, so a port that kept the
+	// querier's returns different samples.
+	emit(seriesSetIn{Series: base, Queries: both(
+		seriesSetQuery{Mint: 0, Maxt: 100, HintStart: 0, HintEnd: 25},
+		seriesSetQuery{Mint: 0, Maxt: 25, HintStart: 0, HintEnd: 100},
+		seriesSetQuery{Mint: 0, Maxt: 100, HintStart: 55, HintEnd: 100},
+		seriesSetQuery{Mint: 55, Maxt: 100, HintStart: 0, HintEnd: 20},
+		seriesSetQuery{Mint: 0, Maxt: 100, HintStart: 30, HintEnd: 50},
+		// A hint range that excludes everything the querier's range included.
+		seriesSetQuery{Mint: 0, Maxt: 20, HintStart: 200, HintEnd: 300},
+	)})
+
 	// A single series with ONE chunk, and a query that lands entirely inside it — so trimming is needed at
 	// both ends at once.
 	emit(seriesSetIn{
@@ -334,6 +354,22 @@ func genBlockSeriesSet(e *emitter) {
 			Queries: both(q(0, 1000), q(250, 650), q(120, 120), q(115, 125), q(950, 2000)),
 		})
 	}
+}
+
+// hintStartOf and hintEndOf default the hint range to the querier's own, so only the cases that deliberately
+// differ have to say so.
+func hintStartOf(q seriesSetQuery) int64 {
+	if q.HintStart == 0 && q.HintEnd == 0 {
+		return q.Mint
+	}
+	return q.HintStart
+}
+
+func hintEndOf(q seriesSetQuery) int64 {
+	if q.HintStart == 0 && q.HintEnd == 0 {
+		return q.Maxt
+	}
+	return q.HintEnd
 }
 
 // selectMatchers builds the matcher list for a query, substituting the ALL-POSTINGS matcher when a query has
@@ -398,7 +434,7 @@ func runSeriesSet(
 	if bq, qerr := tsdb.NewBlockQuerier(b, q.Mint, q.Maxt); qerr == nil {
 		ms := selectMatchers(q)
 		hints := &storage.SelectHints{
-			Start: q.Mint, End: q.Maxt, DisableTrimming: q.DisableTrimming,
+			Start: hintStartOf(q), End: hintEndOf(q), DisableTrimming: q.DisableTrimming,
 		}
 		sset := bq.Select(context.Background(), false, hints, ms...)
 		for sset.Next() {
@@ -416,10 +452,11 @@ func runSeriesSet(
 	if bq, qerr := tsdb.NewBlockQuerier(b, q.Mint, q.Maxt); qerr == nil {
 		ms := selectMatchers(q)
 		hints := &storage.SelectHints{
-			Start: q.Mint, End: q.Maxt, DisableTrimming: q.DisableTrimming,
+			Start: hintStartOf(q), End: hintEndOf(q), DisableTrimming: q.DisableTrimming,
 		}
 		sset := bq.Select(context.Background(), false, hints, ms...)
-		mid := q.Mint + (q.Maxt-q.Mint)/2
+		hs, he := hintStartOf(q), hintEndOf(q)
+		mid := hs + (he-hs)/2
 		for sset.Next() {
 			s := sset.At()
 			it := s.Iterator(nil)
@@ -434,13 +471,13 @@ func runSeriesSet(
 				}
 			}
 			record(it.Next())
-			record(it.Seek(q.Mint))
+			record(it.Seek(hs))
 			record(it.Next())
 			record(it.Seek(mid))
 			record(it.Next())
-			record(it.Seek(q.Maxt))
+			record(it.Seek(he))
 			record(it.Next())
-			record(it.Seek(q.Maxt + 1))
+			record(it.Seek(he + 1))
 			record(it.Next())
 			seeks = append(seeks, res)
 		}

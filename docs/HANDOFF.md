@@ -2271,10 +2271,20 @@ Three behaviours worth carrying:
 
 - **The hints OVERRIDE the querier's own range.** A querier built for [0,100] and selected with hints of
   [200,300] reads [200,300], so the constructor's range is a DEFAULT, not a bound — the opposite of what its
-  signature suggests. **This one is not pinned:** the corpus passes hints equal to the querier's range, so
-  overriding and not overriding are identical. Closing it needs one query per case whose hints DIFFER — two
-  fields on `seriesSetQuery` (`hintStart`/`hintEnd`) and the same on the port side. Declared in the file
-  header too.
+  signature suggests. **Now pinned:** `hintStart`/`hintEnd` were added to `seriesSetQuery`, six queries per
+  case use them, and removing the two assignments breaks the corpus.
+
+  **Closing that gap immediately caught a bug — in the HARNESS, not the port**, and it is the most useful
+  thing in this slice. The oracle uses TWO entry points: `NewBlockChunkSeriesSet` for the label sets and chunk
+  metas, which takes the range directly, and `blockQuerier.Select` for the samples and seeks, which overrides
+  it with the hints'. The port applied the hints to both, and 1 of 8 cases mismatched the moment
+  differing-hint cases existed. Worse, the sample pass had been NESTED inside the label loop — which is only
+  valid while the two ranges agree, because a different hint range can select a different NUMBER of series.
+  Separating them into independent loops fixed it.
+
+  The lesson generalises past this suite: **when a corpus drives one behaviour through two upstream entry
+  points, the port has to mirror the split, not the result.** A harness that collapses them passes for as long
+  as the two happen to agree.
 - **`Func == "series"` swaps in a chunk reader returning an EMPTY chunk**, not nil and not an error. A
   metadata-only query still yields series whose chunks iterate to nothing, rather than series with no chunks —
   which `blockBaseSeriesSet` would have skipped (quirk 166's rule 2). That is the whole reason it is a nop
@@ -2283,9 +2293,14 @@ Three behaviours worth carrying:
   block, since postings are in ref order and refs are assigned in label order. `ShardedPostings` needs the
   label hash and throws rather than silently returning unsharded results — Phase 7's.
 
-**Next in Phase 6:** the `hintStart`/`hintEnd` fields above, which is the last closable gap in the read path.
-Then Phase 6 is done bar `blockChunkQuerier`, which is `blockSelect` plus §6u's iterator and has no logic of
-its own. Two gaps stay open past it by construction and are
+**Next in Phase 6:** only `blockChunkQuerier` remains, and it is `blockSelect` plus §6u's iterator with no
+logic of its own — the corpus already drives both halves. After that Phase 6's read path is closed, and the two
+gaps that stay open are Phase 7's by construction (`Err` ordering and the undecodable-encoding path both need
+malformed or non-XOR chunk bytes, which no block the port can currently write contains).
+
+**Phase 6 write path, for whoever picks it up:** nothing here touches `compact.go`, `head.go` or the WAL. The
+read path being closed means a block Prometheus wrote can be queried; it does not mean the port can produce
+one outside a test. Two gaps stay open past it by construction and are
 Phase 7's: `Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes in a
 fixture input, which no block the port can currently write contains.
 
