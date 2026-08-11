@@ -23,7 +23,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 4 — `PromQLParser` | done |
 | 5 — engine + storage protocols | **in progress** — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
-| 7–10 | not started |
+| 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
 Green as of this commit: **349,577 committed differential cases, 504 tests**, on both Swift 6.4
 (Xcode 27) and the Swift 6.1 floor.
@@ -1132,11 +1132,45 @@ Read once so the next session does not spend context re-deriving them. `docs/HAN
 this for `matrixSelector` and the plan was executed straight out of the doc; these are written the
 same way.
 
-**Every arm of the evaluator now runs except two.** `label_replace` and `info` are all that stand
-between the engine and `promqltest`, and the count is small: of the 2,183 `eval` assertions in
-`Fixtures/promql/testdata/`, **36 mention `label_replace`** (in `at_modifier.test`,
-`functions.test`, `name_label_dropping.test`) and **42 mention `info(`**. So ~96% of the exit gate
-is reachable *now*, and the right order is `promqltest` **first**.
+**Every arm of the evaluator now runs except two**, and the exit gate is measured per file so the
+payoff of each remaining slice is known rather than guessed. `eval` assertions, and how many of
+each file's are blocked:
+
+```
+                          eval  label_replace  info(  load_with_nhcb
+aggregators.test           160        0           0        0
+at_modifier.test            71        3           0        0
+collision.test               2        0           0        0
+duration_expression.test    59        0           0        0
+extended_vectors.test      169        0           0        0
+fill-modifier.test          46        0           0        0
+functions.test             427       15           0        0
+histograms.test            185        0           0       32
+info.test                   42        0          42        0
+limit.test                  37        0           0        0
+literals.test               25        0           0        0
+name_label_dropping.test    30        3           0        0
+native_histograms.test     522        0           0        0
+operators.test             213        0           0        1
+range_queries.test          18        0           0        0
+selectors.test              31        0           0        0
+staleness.test              17        0           0        0
+start_timestamps.test       18        0           0        0
+subquery.test               34        0           0        0
+trig_functions.test         19        0           0        0
+type_and_unit.test          58        0           0        0
+TOTAL                    2,183       21          42       33
+```
+
+So **2,120 of 2,183 (97%) are reachable with the evaluator as it stands** — `label_replace` blocks
+21, `info` blocks 42 (all of them in `info.test`), and `load_with_nhcb` gates 33 more at the
+*loader* rather than the evaluator. That inverts the order: **write `promqltest` first.** Doing
+`label_replace` first buys 21 assertions and cannot run any of them until the runner exists.
+
+Two more things the table settles. `native_histograms.test` is the single biggest file at 522, and
+it needs **no** blocked feature — so histogram support in the runner's loader is worth more than
+either remaining function. And `start_timestamps.test`'s 18 need `EncXOR2`, which is quirk 36's
+Phases 6-7 dependency, so they cannot pass until then whatever the runner does.
 
 #### (a) `promqltest` — the exit gate, and do this one first
 
