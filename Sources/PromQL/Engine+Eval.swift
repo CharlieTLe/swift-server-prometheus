@@ -451,6 +451,11 @@ final class Evaluator {
             currentSamples = originalNumSamples + result.totalSamples
             return result
 
+        case let e as SubqueryExpr:
+            // The subquery's own result, on its own step grid. `StepInvariantExpr` returns this
+            // unduplicated, like a matrix selector, because the timestamps are the subquery's.
+            return try runSubquery(ctx, e, &ws)
+
         case let e as MatrixSelector:
             // A range selector carries its own timestamps, so it is only ever evaluated once —
             // `StepInvariantExpr` returns its result unduplicated for exactly that reason, and
@@ -476,11 +481,20 @@ final class Evaluator {
             let matrixArgIndex = e.args.firstIndex {
                 $0 is MatrixSelector || $0 is SubqueryExpr
             }
-            if let i = matrixArgIndex, e.args[i] is SubqueryExpr {
-                throw EvaluatorNotPorted(
-                    nodeType: "Call",
-                    detail: "\((e.function?.name ?? "")) over a subquery needs evalSubquery")
+            // A subquery argument is REPLACED IN THE AST by the equivalent range selector, so
+            // the rest of the arm treats it as an ordinary one. The mutation is visible through
+            // `Statement()` after `Exec`: the argument renders as a nameless range selector.
+            var subqueryCleanup: (() -> Void)? = nil
+            if let i = matrixArgIndex, let subq = e.args[i] as? SubqueryExpr {
+                let (ms, totalSamples) = try evalSubquery(ctx, subq, &ws)
+                e.args[i] = ms
+                // Go's `defer`: the subquery's samples stay in memory until the call returns.
+                subqueryCleanup = {
+                    (ms.vectorSelector as? VectorSelector)?.series = []
+                    self.currentSamples -= totalSamples
+                }
             }
+            defer { subqueryCleanup?() }
             switch (e.function?.name ?? "") {
             case "label_replace", "label_join", "info":
                 throw EvaluatorNotPorted(

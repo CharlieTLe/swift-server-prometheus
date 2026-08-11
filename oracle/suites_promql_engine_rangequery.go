@@ -807,6 +807,72 @@ func genPromQLExecRange(e *emitter) {
 		})
 	}
 
+	// --- SUBQUERIES over a range query. Two things exist only here: the parent's end being
+	// snapped DOWN to the parent's step grid before the subquery offset is applied, and
+	// `setOffsetForAtModifier` being re-run against the subquery's own start.
+	sqRange := []memSeriesInJSON{
+		fs([]string{"__name__", "sr", "job", "a"},
+			[2]int64{0, 1}, [2]int64{30_000, 2}, [2]int64{60_000, 4}, [2]int64{90_000, 8},
+			[2]int64{120_000, 16}, [2]int64{150_000, 32}, [2]int64{180_000, 64},
+			[2]int64{210_000, 128}, [2]int64{240_000, 256}),
+	}
+	sqRangeCases := []struct {
+		query            string
+		start, end, step int64
+	}{
+		{`sr[2m:1m]`, 120_000, 240_000, minute},
+		{`rate(sr[2m:1m])`, 120_000, 240_000, minute},
+		{`max_over_time(sr[2m:30s])`, 120_000, 240_000, minute},
+		{`sum_over_time(sr[2m:1m])`, 120_000, 240_000, minute},
+		{`count_over_time(sr[2m:30s])`, 120_000, 240_000, minute},
+		// A parent END that is NOT step-aligned, which is the only shape where the parent's
+		// snap-down matters: 0..150000 at a 60s step really ends at 120000, and without the
+		// snap the subquery would run 30s past any parent step.
+		{`rate(sr[2m:1m])`, 0, 150_000, minute},
+		{`max_over_time(sr[2m:30s])`, 0, 150_000, minute},
+		{`sr[2m:1m]`, 0, 150_000, minute},
+		{`rate(sr[2m:1m])`, 0, 170_000, minute},
+		{`rate(sr[2m:1m])`, 10_000, 155_000, minute},
+		// A NEGATIVE offset with a non-step-aligned end, which is the only shape where the
+		// parent's snap-down changes an answer: the outer window then reaches PAST the last parent
+		// step, so subquery points beyond it are readable rather than filtered.
+		{`rate(sr[2m:1m] offset -1m)`, 0, 150_000, minute},
+		{`max_over_time(sr[2m:30s] offset -1m)`, 0, 150_000, minute},
+		{`count_over_time(sr[1m:30s] offset -2m)`, 0, 150_000, minute},
+		{`last_over_time(sr[2m:1m] offset -1m)`, 0, 170_000, minute},
+		// A step SMALLER than the subquery range, so consecutive parent steps share subquery
+		// iterations.
+		{`rate(sr[2m:1m])`, 120_000, 240_000, 30 * int64(time.Second)},
+		// A step LARGER than the subquery range, so there are gaps between the windows.
+		{`rate(sr[1m:30s])`, 120_000, 240_000, 2 * minute},
+		// `@` on the subquery and on the inner selector, across steps.
+		{`rate(sr[2m:1m] @ 180)`, 120_000, 240_000, minute},
+		{`rate(sr @ 120 [2m:1m])`, 120_000, 240_000, minute},
+		{`max_over_time(sr @ 120 [2m:30s])`, 120_000, 240_000, minute},
+		// `offset`, which shifts the grid without pinning it.
+		{`rate(sr[2m:1m] offset 1m)`, 120_000, 240_000, minute},
+		// An aggregation and a nested subquery inside one.
+		{`sum(rate(sr[2m:1m]))`, 120_000, 240_000, minute},
+		{`sum_over_time(sum(sr)[2m:1m])`, 120_000, 240_000, minute},
+		{`max_over_time(max_over_time(sr[1m:30s])[2m:1m])`, 120_000, 240_000, minute},
+		// A one-step range query, for the pair.
+		{`rate(sr[2m:1m])`, 180_000, 180_000, minute},
+	}
+	for _, c := range sqRangeCases {
+		emit(execRangeIn{
+			Query: c.query, Start: i64(c.start), End: i64(c.end), Step: i64(c.step),
+			Lookback: i64(5 * minute), Series: sqRange,
+		})
+	}
+	for _, maxSamples := range []int{2, 4, 6, 8, 10, 14, 18, 24, 30, 40} {
+		for _, q := range []string{`rate(sr[2m:1m])`, `sr[2m:1m]`, `sum(rate(sr[2m:1m]))`} {
+			emit(execRangeIn{
+				Query: q, Start: i64(120_000), End: i64(240_000), Step: i64(minute),
+				Lookback: i64(5 * minute), MaxSamples: maxSamples, Series: sqRange,
+			})
+		}
+	}
+
 	// A NESTED aggregation under a limit, which is the only shape that can see the
 	// `ev.currentSamples = originalNumSamples + result.TotalSamples()` at the end of the
 	// `AggregateExpr` arm — the same mechanism as quirk 81's `rangeEval` tail.
