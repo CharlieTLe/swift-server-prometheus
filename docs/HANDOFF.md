@@ -1223,15 +1223,32 @@ ratchet. Three of them are **real engine findings** and worth naming here:
 
   The annotation return path was then checked and is also correct: `Annotations.add` is `mutating`,
   the collision is added to the same `annos` the histogram branch returns, and the `failed` arm that
-  replaces it cannot be taken here. **So the only thing left is the window contents** — whether the
-  `[2m]` window at `11m` holds the two samples whose hints conflict. The test's own comment says the
-  point is the conflict "between the first two samples", and the first two samples of the *series*
-  are at 0m and 1m, which a window of `(9m, 11m]` does not contain. **Read the `mixed` load in
-  `native_histograms.test` first**: the likely answer is that the port's window is off by one sample
-  at the bottom, or that `mixed`'s hints are not where this reading assumes.
+  replaces it cannot be taken here.
 
-  Three hypotheses, two refuted with tests left behind, one narrowed to a single question. That is
-  the state to start from.
+  **And here is the localisation that matters:** the *same* warning at a *wider* window **passes** —
+  `histogram_count(sum_over_time(mixed[10m]))` at `14m` is green, and only the `[2m]` pair at `11m`
+  fails. So the collision detection works; what differs is which samples are in the window and what
+  hints they carry.
+
+  The `mixed` load is a **`+`/`x` EXPANSION**:
+
+  ```
+  mixed {{sum:6 count:5 buckets:[2 2 1]}}+{{sum:2 count:3 buckets:[1 1 1]}}x4
+        {{sum:4 count:4 counter_reset_hint:gauge buckets:[1 2 1]}}
+        {{sum:6 count:5 buckets:[2 2 1]}}+{{sum:2 count:3 buckets:[1 1 1]}}x4
+        {{sum:4 count:4 buckets:[1 2 1]}}+{{sum:2 count:3 buckets:[1 1 1]}}x5
+  ```
+
+  At `11m` the `(9m, 11m]` window holds the sample at 10m (the end of the second `x4` run, counting
+  up) and the sample at 11m (a fresh literal whose count DROPS back to 4). The test says those two
+  are hinted `not_reset` and `reset` — so **the hints on `+`/`x`-EXPANDED histogram samples are the
+  remaining suspect**, and `counterResetHintCarriage` only pinned an *explicit* literal's hint. A
+  wider window happens to include a differently-hinted sample and passes by luck.
+
+  First step, and it is small: extend `counterResetHintCarriage` to parse
+  `mixed {{count:5 …}}+{{count:3 …}}x2 {{count:4 …}}` and assert the hint on each expanded sample
+  against Go. Four hypotheses now: three refuted with tests left behind, one localised to a single
+  parser behaviour.
 
   The lesson worth keeping regardless: **the two refuted hypotheses left two permanent tests
   behind.** Neither link had ever been pinned, both were plausible, and finding out cost less than
