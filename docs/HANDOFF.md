@@ -1695,9 +1695,26 @@ Two writer constraints came out of the same experiment and are worth having writ
 generator: chunk ranges must satisfy `mint > prev.maxt` **strictly**, and chunk references must increase
 **globally across series**, not just within one.
 
-**Next in Phase 6:** the postings OFFSET TABLE and label indices (the remaining `ByteSlice` readers, and
-`Reader.Postings`/`LabelValues`/`LabelNames` on top of them), then `PromFS` from ADR-15 to unblock the
-writers. `MemPostings` waits for the Head in Phase 7.
+**The postings offset table and `Reader.Postings` are in as well** — 26 cases now, all matching on the
+first run, which included the 100-value sparse index, the "plus the last value" rule, queries below and
+above the table's range, and unsorted query input. Quirks 134-137:
+
+* the offset table is read **without checksum verification, on purpose** — a nil CRC table, with
+  upstream's comment saying the full-table CRC is too slow. Every other `NewDecbufAt` in the file
+  verifies, so a port that verifies here diverges on a corrupt file by erroring where upstream reads on;
+* `traversePostingOffsets`' `skip` optimisation assumes the label NAME does not change, which is only true
+  within one name's run — so the **callback protocol** (returning `false`, driven by comparing against the
+  next sparse entry) is what keeps it correct, not a convenience;
+* the sparse index keeps every name but only every 32nd value **plus the first and last of each name**, and
+  the "last" is appended when the next name begins. Without it a lookup for a name's largest value
+  traverses from the wrong place;
+* `Reader.Postings` sorts its values with Go's byte ordering and walks the table forward **once**, because
+  it cannot re-read backwards.
+
+**Next in Phase 6:** `Reader.LabelValues`/`LabelNames`/`LabelNamesFor` and the label-indices table, all on
+the same `ByteSlice` seam and reachable with the generator that now exists — then `PromFS` from ADR-15,
+which unblocks the writers and is the last thing standing between Phase 6 and a real on-disk block.
+`MemPostings` waits for the Head in Phase 7.
 
 A note for whoever writes the next generator: put anything the port cannot compute in the fixture's
 **input**, not its output. The file bytes were on the output side first, which had the port comparing

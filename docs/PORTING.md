@@ -2081,6 +2081,30 @@ changing behaviour.
     `seriesByteAlign`, so `Reader.Series` multiplies the ID back up; in v1 the ID *is* the position. The
     same split as quirk 130, on a different field.
 
+134. **The postings offset table is read WITHOUT checksum verification, on purpose.**
+    `traversePostingOffsets` builds its decoder with a **nil** CRC table, and upstream's comment says why:
+    "Don't Crc32 the entire postings offset table, this is very slow so hope any issues were caught at
+    startup." Every other `NewDecbufAt` in the file verifies. A port that verifies here is correct and
+    slow, and diverges on a corrupt file by erroring where upstream reads on.
+
+135. **`traversePostingOffsets`' `skip` optimisation assumes the label NAME does not change.** It measures
+    how many bytes the first entry's key-count-plus-name occupies and skips exactly that many for every
+    later entry — valid only within one name's run. What keeps it correct is the callback returning
+    `false`, which the caller drives by comparing the wanted value against the *next* sparse entry's. So
+    the callback protocol is load-bearing, not a convenience.
+
+136. **The sparse postings index keeps every label NAME but only every 32nd VALUE — plus the first and
+    last of each name.** The "last" is appended when the *next* name begins (and again after the loop for
+    the final name), carried in `lastName`/`lastValue`/`lastOff`. Without it a lookup for a name's largest
+    value has no entry at or before it and the binary search traverses from the wrong place. `lastName` is
+    cleared whenever a value IS recorded, so a value landing exactly on the sparse boundary is not
+    appended twice.
+
+137. **`Reader.Postings` sorts its input values and walks forward once.** The table is on disk and cannot
+    be re-read backwards, so the values are sorted with Go's byte ordering (ADR-10) and consumed in one
+    pass. The leading discard loop — values below the table's first entry — exists so the first binary
+    search's step-back is reached by construction rather than by luck.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five
