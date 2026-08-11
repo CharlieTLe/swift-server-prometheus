@@ -46,7 +46,14 @@
 // ## Start timestamps
 //
 // `enh.StartTimestamps` is nil until Phases 6-7 bring the ST-aware selectors, so
-// every `ST` here is 0 and `isStartTimestampReset` returns false on its first line.
+// the ST arrives from `enh.startTimestamps`, which the `Call` arm populates only for the four ST-aware
+// functions. When the engine has `useStartTimestamps` off, or for `idelta`, that is nil — every `ST` is
+// then 0 and `isStartTimestampReset` returns false on its first line.
+//
+// This comment previously claimed the ST was *always* 0, which was true only because nothing enabled
+// `useStartTimestamps` yet: the two loops below never read `enh.startTimestamps` at all. Two of
+// `start_timestamps.test`'s `irate` assertions failed the moment the flag went on. A comment that
+// describes the current state rather than the intended contract ages into a bug.
 // The helper is ported in full anyway — it is small, it is read by `resets` and
 // `changes` too, and porting it later against a live caller is how the `quantile`
 // bug happened (PORTING.md quirk 52).
@@ -113,10 +120,17 @@ func instantValue(
         return (out, Annotations())
     }
 
-    // The last two floats, in order.
+    // The last two floats, in order, each carrying its START TIMESTAMP.
+    //
+    // Note the index: `sts.floats[i]` uses `i` from the FULL array, not a 0-or-1 position in `ss`, so
+    // the two STs read are the last two of the window. Getting that wrong reads the first sample's ST
+    // for the second-to-last sample.
     for i in max(0, samples.floats.count - 2)..<samples.floats.count {
-        ss.append(
-            SampleWithST(sample: Sample(t: samples.floats[i].t, f: samples.floats[i].f)))
+        var s = SampleWithST(sample: Sample(t: samples.floats[i].t, f: samples.floats[i].f))
+        if let sts = enh.startTimestamps, i < sts.floats.count {
+            s.st = sts.floats[i]
+        }
+        ss.append(s)
     }
 
     // The last two histograms, merged in by timestamp. See the file header for why
@@ -124,6 +138,9 @@ func instantValue(
     for i in max(0, samples.histograms.count - 2)..<samples.histograms.count {
         var s = SampleWithST(sample: Sample(t: samples.histograms[i].t))
         s.sample.h = samples.histograms[i].h
+        if let sts = enh.startTimestamps, i < sts.histograms.count {
+            s.st = sts.histograms[i]
+        }
         if ss.isEmpty {
             ss.append(s)
         } else if ss.count == 1 {
