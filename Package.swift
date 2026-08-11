@@ -30,6 +30,7 @@ let package = Package(
         .library(name: "PromAnnotations", targets: ["PromAnnotations"]),
         .library(name: "PromChunkEnc", targets: ["PromChunkEnc"]),
         .library(name: "PromIndex", targets: ["PromIndex"]),
+        .library(name: "PromFS", targets: ["PromFS"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -92,6 +93,11 @@ let package = Package(
             // Phase 6 added `ChunkFormat.swift`, which needs the Castagnoli CRC and varints.
             dependencies: ["PromChunkEnc", "PromHistogram", "PromHash", "GoCompat"]
         ),
+
+        // Phase 6: the filesystem seam ADR-15 decided. NOT a port — it stands in for the parts of `os`,
+        // `fileutil` and `mmap` the TSDB reaches for, with an in-memory implementation so corpora need no
+        // scratch directory.
+        .target(name: "PromFS", dependencies: ["PromEncoding"]),
 
         // Phase 6: `tsdb/index`'s postings algebra. `MemPostings` is deliberately not here — that is
         // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
@@ -235,6 +241,10 @@ let package = Package(
                 "PromQLParser", "PromHistogram", "PromLabels", "PromModel", "PromPosRange",
                 "PromStorage", "GoCompat", "GoOracleSupport",
             ]
+        ),
+        .testTarget(
+            name: "PromFSTests",
+            dependencies: ["PromFS", "PromEncoding"]
         ),
         .testTarget(
             name: "PromChunksTests",
