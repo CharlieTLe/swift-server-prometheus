@@ -2215,11 +2215,13 @@ at maxt not maxt+1` both now break.
   one extra chunk per series — and it broke. The label is corrected and the mistake left on the record: it is
   quirk 160's failure mode in reverse, where a wrong tautology claim would have excused a BREAK rather than a
   survival.
-- **Two survivors expose one precise gap: the corpus never calls `seek`.** Both sides drain the sample iterator
-  with `Next` only, so every `Seek` path in `PopulateWithDelSeriesIterator` is unexercised. Closing it means
-  adding an op-script (`"n"` / `"sN"`) to `block/seriesset.jsonl`'s sample pass, exactly the shape
-  `block/deletediter.jsonl` already uses. **That is the cheapest outstanding coverage win in Phase 6** and
-  should be taken before `blockQuerier.Select`.
+- **Two survivors exposed one precise gap, and it is now CLOSED.** The corpus drained the sample iterator with
+  `Next` only, so every `Seek` path in `PopulateWithDelSeriesIterator` was unexercised. `block/seriesset.jsonl`
+  now carries a fixed seek script per series — next, then seeks landing before / inside / after the current
+  position, each followed by a next — derived from the query's own `mint`/`maxt` rather than added as new input
+  plumbing. (`block/deletediter.jsonl` is where free-form op scripts live; duplicating that machinery here
+  would have bought nothing, since what needed reaching was structural rather than case-specific.) Both
+  controls break on it.
 
 Three further survivors are declared gaps with their closing slice named: `currDelIter` nil-ness (load-bearing
 only once `populateWithDelChunkSeriesIterator` uses it to decide whether to re-encode), `Err` ordering and the
@@ -2236,9 +2238,10 @@ One argued survivor recorded in quirk 167: the `OverlapsClosedInterval` filter i
 correctness rule. Passing every interval gives the same samples, because the consumption handles
 before-and-after intervals and the list is rebuilt per chunk anyway.
 
-**Next in Phase 6, in this order:** the `seek` op-script for `block/seriesset.jsonl` (cheap, closes two live
-controls), then `populateWithDelChunkSeriesIterator` (closes three more plus §6r's), then
-`blockQuerier.Select` — and Phase 6's read path is closed.
+**Next in Phase 6, in this order:** `populateWithDelChunkSeriesIterator` — which closes three of this sweep's
+remaining declared gaps (`currDelIter` nil-ness, `Err` ordering, the undecodable-encoding path) and §6r's
+erroring-chunk gap at the same time, since all four need malformed or non-XOR chunk bytes in a fixture input.
+Then `blockQuerier.Select`, and Phase 6's read path is closed.
 
 ### 6b (scoping, retained). `EncXOR2` from the pinned source
 

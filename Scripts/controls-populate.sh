@@ -58,12 +58,11 @@ perl -0pi -e 's/        i \+= 1\n        let meta = metas\[i\]/        let meta 
 echo "=== Next resumes before advancing; Seek uses the exported next ==="
 perl -0pi -e 's/        if let curr \{\n            let vt = curr\.next\(\)\n            if vt != \.none \{ return vt \}\n        \}\n        while generic\.next/        while generic.next/' "$P"; run "Next does not resume the current chunk"
 perl -0pi -e 's/        if let curr \{\n            let vt = curr\.seek\(t\)\n            if vt != \.none \{ return vt \}\n        \}\n        while next\(\)/        while next()/' "$P"; run "Seek does not resume the current chunk"
-# ^ SURVIVES, and so does the control below it, for ONE reason: **the corpus never calls `seek`.** Both the
-# Go side and the port drain the sample iterator with `Next` only, so every `Seek` path in
-# `PopulateWithDelSeriesIterator` is unexercised. A DECLARED corpus gap, and a precise one — closing it means
-# adding a seek op-script to `block/seriesset.jsonl`'s sample pass, exactly the shape
-# `block/deletediter.jsonl` already uses (`"n"` and `"sN"` ops on one iterator). That is the cheapest
-# outstanding coverage win in Phase 6 and it should be taken before `blockQuerier.Select`.
+# ^ BREAKS, and so does the control below it — but both SURVIVED when this sweep was first run, for one
+# reason: the corpus drained the sample iterator with `Next` only, so every `Seek` path was unexercised. The
+# gap was declared here and then closed: `block/seriesset.jsonl` now carries a fixed seek script per series
+# (next, then seeks landing before / inside / after the current position, each followed by a next), derived
+# from the query's own `mint`/`maxt` rather than added as new input plumbing. Both controls break on it.
 perl -0pi -e 's/        while next\(\) != \.none \{\n            if let vt = curr\?\.seek\(t\), vt != \.none \{ return vt \}\n        \}/        while generic.next(copyHeadChunk: false) {\n            if let vt = curr?.seek(t), vt != .none { return vt }\n        }/' "$P"; run "Seek advances CHUNKS instead of samples"
 
 echo "=== error handling and ordering ==="
