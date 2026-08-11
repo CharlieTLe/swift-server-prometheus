@@ -1880,6 +1880,43 @@ changing behaviour.
     insert and continues. So two series with identical rising totals differ on whether they reset,
     decided entirely by whether the vanished bucket was empty. Invisible from the counts.
 
+106. **`info`'s `__name__` matcher is not a data label matcher, and forgetting to strip it inverts the
+    result.** The second argument parses as a `VectorSelector` but is used as a bag of matchers saying
+    which data labels to copy. A `__name__` matcher there means something else — which info *metrics*
+    to consider — so `fetchInfoSeries` removes it from `dataLabelMatchers`, on **both** exits including
+    the early one. Upstream's comment says why: left in, `combineWithInfoVector` reads it as "the only
+    data label asked for" and excludes every series instead of enriching them.
+
+107. **With only NEGATIVE `__name__` matchers, `info` prepends a synthetic `__name__=~".+_info"`.**
+    Exclusions alone would otherwise select every series in the store. `.+`, not `.*`: a metric named
+    exactly `_info` is not an info metric.
+
+108. **An info series' sample TIMESTAMP rides in its float value.** `fetchInfoSeries` evaluates the
+    info matrix with `recordOrigT: true`, so `F` holds the sample's original timestamp rather than its
+    value, and `combineWithInfoVector` reads `int64(s.F)` back out to break ties between two info
+    series with the same signature — newest wins, and an exact tie is a **query error**. An info
+    metric's actual value is never read.
+
+109. **`info`'s select hints are derived from the FIRST vector selector only.** `parser.Inspect` is
+    stopped by returning an error, so in a multi-selector argument the leftmost selector's `@` and
+    `offset` are the ones that shape the info window.
+
+    Two consequences worth knowing before touching it. The window is *narrower* than the querier's own
+    whenever the argument has more than one selector, which is the only situation in which the hints
+    are observable at all — `getTimeRangesForSelector` applies the same `@`/offset/lookback arithmetic
+    to the querier's range, so a single-selector argument makes the two coincide exactly and any
+    difference is clipped away before it can matter. And the `- 1` in `start -= lookbackDelta - 1` is
+    *redundant* against `vectorSelectorSingle`'s half-open lookback window: the only sample it excludes
+    is one at exactly `startTimestamp - lookbackDelta`, which every step's own lookback excludes too.
+    Its control survives and that is the argument.
+
+110. **The identifying-label alternation is a prefilter, so widening it cannot produce a wrong join.**
+    `QuoteMeta`ing the values and skipping ignored series both only narrow the selector; the join
+    compares signatures **exactly**, so any extra info series fetched fails to match. What an unescaped
+    value can do is make the pattern *invalid* — `a(b` does not compile — which is a query error rather
+    than a wider answer. That is what makes the escaping observable, and it took an unbalanced paren in
+    a test to show it.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

@@ -151,12 +151,24 @@ final class Evaluator {
     let enableDelayedNameRemoval: Bool
     let enableTypeAndUnitLabels: Bool
     let useStartTimestamps: Bool
+    /// Go: `ev.querier`. Only `evalInfo` reads it: every other selector is populated up front by
+    /// `populateSeries`, so nothing else needs the storage during evaluation.
+    ///
+    /// **Every derived evaluator copies it** — Go does so at all four construction sites
+    /// (`engine.go:819`, `:880`, `:1975`, `:2577`), which is to say the subquery evaluator and the
+    /// `StepInvariantExpr` one as well. Leaving it out of the step-invariant copy is what made
+    /// `info(metric @ 60)` the one failing assertion of `info.test`: `@` makes the expression
+    /// step-invariant, that arm builds a fresh evaluator, and an `info` inside it silently found
+    /// nothing to enrich from. Optional only because the `promqltest` runner and the unit tests build
+    /// evaluators with no storage at all.
+    let querier: (any Querier)?
 
     init(
         startTimestamp: Int64, endTimestamp: Int64, interval: Int64, currentSamples: Int = 0,
         maxSamples: Int, lookbackDelta: GoDuration,
         noStepSubqueryIntervalFn: (@Sendable (Int64) -> Int64)?,
-        enableDelayedNameRemoval: Bool, enableTypeAndUnitLabels: Bool, useStartTimestamps: Bool
+        enableDelayedNameRemoval: Bool, enableTypeAndUnitLabels: Bool, useStartTimestamps: Bool,
+        querier: (any Querier)? = nil
     ) {
         self.startTimestamp = startTimestamp
         self.endTimestamp = endTimestamp
@@ -168,6 +180,7 @@ final class Evaluator {
         self.enableDelayedNameRemoval = enableDelayedNameRemoval
         self.enableTypeAndUnitLabels = enableTypeAndUnitLabels
         self.useStartTimestamps = useStartTimestamps
+        self.querier = querier
     }
 
     /// Go: `Eval` — the top level, which recovers panics into an error.
@@ -329,7 +342,7 @@ final class Evaluator {
                 noStepSubqueryIntervalFn: noStepSubqueryIntervalFn,
                 enableDelayedNameRemoval: enableDelayedNameRemoval,
                 enableTypeAndUnitLabels: enableTypeAndUnitLabels,
-                useStartTimestamps: useStartTimestamps)
+                useStartTimestamps: useStartTimestamps, querier: querier)
             let res = try newEv.evalNode(ctx, e.expr, &ws)
             currentSamples = newEv.currentSamples
             if e.expr is MatrixSelector || e.expr is SubqueryExpr {
@@ -514,8 +527,8 @@ final class Evaluator {
                     nodeType: "Call",
                     detail: "label_replace needs Pike VM capture tracking in PromRegex")
             case "info":
-                throw EvaluatorNotPorted(
-                    nodeType: "Call", detail: "info works on series")
+                // Works on SERIES too, like `label_join` above. See `Engine+Info.swift`.
+                return try evalInfo(ctx, e.args, &ws)
             default:
                 break
             }
@@ -901,11 +914,30 @@ public enum EvaluationError: Error, CustomStringConvertible, Equatable, Sendable
     /// Go: `evalLabelJoin`'s two panics. `%s` on a bare Go `string`, so unquoted.
     case invalidSourceLabelNameInLabelJoin(String)
     case invalidDestinationLabelNameInLabelJoin(String)
+    /// Go: `combineWithInfoVector`'s `errors.New("info sample should be float")`. An info metric
+    /// carries metadata in its labels, so a histogram value there is meaningless rather than merely
+    /// unsupported.
+    case infoSampleShouldBeFloat
+    /// Go: `found duplicate series for info metric: existing %s @ %d, new %s @ %d`. The two `%d`s are
+    /// the samples' ORIGINAL timestamps, which ride in the float value (see `Engine+Info.swift`), and
+    /// an exact tie between two info series is unresolvable rather than a choice.
+    case duplicateSeriesForInfoMetric(existing: String, existingT: Int64, new: String, newT: Int64)
+    /// Go: `combineWithInfoVector`'s `fmt.Errorf("conflicting label: %s", l.Name)` — two info series
+    /// joining the same base series disagree on a data label's value.
+    case conflictingLabel(String)
 
     public var description: String {
         switch self {
         case .duplicateLabelset:
             return "vector cannot contain metrics with the same labelset"
+        case .infoSampleShouldBeFloat:
+            return "info sample should be float"
+        case .duplicateSeriesForInfoMetric(let existing, let existingT, let new, let newT):
+            return
+                "found duplicate series for info metric: existing \(existing) @ \(existingT), "
+                + "new \(new) @ \(newT)"
+        case .conflictingLabel(let name):
+            return "conflicting label: \(name)"
         case .infoMetricWithHistogram(let metric):
             return "this should be an info metric, with float samples: \(metric)"
         case .unknownValueType(let t):
@@ -1059,7 +1091,7 @@ extension Engine {
 
         guard Timestamp.fromTime(s.start) == Timestamp.fromTime(s.end) && s.interval.nanoseconds == 0
         else {
-            return try execRangeEvalStmt(ctx, s)
+            return try execRangeEvalStmt(ctx, s, querier)
         }
 
         let start = Timestamp.fromTime(s.start)
@@ -1071,7 +1103,7 @@ extension Engine {
             noStepSubqueryIntervalFn: noStepSubqueryIntervalFn,
             enableDelayedNameRemoval: enableDelayedNameRemoval,
             enableTypeAndUnitLabels: enableTypeAndUnitLabels,
-            useStartTimestamps: useStartTimestamps)
+            useStartTimestamps: useStartTimestamps, querier: querier)
 
         let (val, warnings) = try ev.eval(ctx, s.expr)
 
@@ -1129,7 +1161,9 @@ extension Engine {
     ///     `StepInvariantExpr` advance by.
     ///   * `contextDone` is checked once **after** evaluation and before the sort, so a
     ///     cancellation that arrives during the final assembly is still reported.
-    func execRangeEvalStmt(_ ctx: GoContext, _ s: EvalStmt) throws -> (any Value, Annotations) {
+    func execRangeEvalStmt(
+        _ ctx: GoContext, _ s: EvalStmt, _ querier: any Querier
+    ) throws -> (any Value, Annotations) {
         let ev = Evaluator(
             startTimestamp: Timestamp.fromTime(s.start),
             endTimestamp: Timestamp.fromTime(s.end),
@@ -1138,7 +1172,7 @@ extension Engine {
             noStepSubqueryIntervalFn: noStepSubqueryIntervalFn,
             enableDelayedNameRemoval: enableDelayedNameRemoval,
             enableTypeAndUnitLabels: enableTypeAndUnitLabels,
-            useStartTimestamps: useStartTimestamps)
+            useStartTimestamps: useStartTimestamps, querier: querier)
 
         let (val, warnings) = try ev.eval(ctx, s.expr)
 

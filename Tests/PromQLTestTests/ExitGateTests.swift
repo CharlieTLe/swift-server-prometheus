@@ -7,11 +7,10 @@
 // upstream wrote, copied verbatim and sha256-pinned. So the assertion here is not "matches Go" but
 // "answers correctly", and the number it prints is the project's headline metric.
 //
-// It does **not** yet require zero failures, and says so in one place rather than pretending: the
-// threshold is a recorded number that only moves down. That is the honest shape while
-// `label_replace` (21 assertions) and `info` (42) are unported and `EncXOR2` (23) is a Phase 6-7
-// dependency — and it turns any *new* breakage into a test failure immediately, which a
-// "known failures" list of names would not.
+// The ratchet is now **zero**: every assertion the port can load answers correctly, and any new
+// divergence trips this test immediately. What is left is skips, all named — `label_replace` (21,
+// blocked on Pike VM capture tracking in `PromRegex`), `@st` lines (23, `EncXOR2`, Phases 6-7) and a
+// handful of runner directives.
 //
 // `EnableDelayedNameRemoval` is TRUE, because that is what upstream's own runner sets
 // (test.go:111) and therefore what the gate means.
@@ -133,16 +132,17 @@ let promqlTestAllowedFailures = 0
 // the six were real.
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 2,092 of 2,188 (96%), with ZERO failures — and BOTH are a Phase 6-7 dependency rather than an
-// so the engine has no known divergence left that the gate can see. The 96 skips are itemised by the
-// run itself and every one names a known gap: 63 are `info`/`label_replace`, 23 are `@st` lines
-// (`EncXOR2`, Phases 6-7), and the rest are the `expect range vector`/`expect string` directives.
+// 2,133 of 2,188 (97%), with ZERO failures — and BOTH are a Phase 6-7 dependency rather than an
+// so the engine has no known divergence left that the gate can see. The 55 skips are itemised by the
+// run itself and every one names a known gap: 21 are `label_replace`, 23 are `@st` lines (`EncXOR2`,
+// Phases 6-7), and the rest are the `expect range vector`/`expect string`/`fail regex:` directives.
 //
 // `load_with_nhcb` is no longer among them: porting `util/convertnhcb` and wiring it into the loader
 // moved 170 assertions from skip to pass in one commit, which is what measuring the gap before
 // choosing the work was for (HANDOFF §5e). `native_histograms.test`, the largest file at 522
-// assertions, now passes all 522 with no skips at all.
-let promqlTestMinimumPasses = 2_092
+// assertions, now passes all 522 with no skips at all. `promql/info.go` then took `info.test` from 0
+// of 42 to 41, the one holdout being a `fail regex:` expectation the runner declines.
+let promqlTestMinimumPasses = 2_133
 
 extension String {
     fileprivate func padded(to n: Int) -> String {
