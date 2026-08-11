@@ -183,25 +183,19 @@ struct BlockSeriesSetTests {
                         sets.append(
                             Labels(cur.labels.map { Label($0.name, $0.value) }).description)
 
-                        // The CHUNK view: `populateWithDelChunkSeriesIterator`'s metas. Not ported yet, so
-                        // the trimmed range is derived the way that iterator derives it — from the first and
-                        // last surviving sample of each chunk. That is a deliberate narrowing recorded in
-                        // §6t: the re-encoded BYTES are what the chunk iterator additionally produces, and
-                        // they are pinned when it lands.
+                        // The CHUNK view, through the real `PopulateWithDelChunkSeriesIterator` rather
+                        // than derived from the sample iterator — which is what makes `currDelIter`'s
+                        // nil-ness observable: an undeleted chunk passes its ORIGINAL bytes through, a
+                        // deleted one is re-encoded, and the meta's bounds come from the surviving samples.
                         var rs: [[Int64]] = []
-                        for meta in cur.chunks {
-                            let flat = PopulateWithDelSeriesIterator(
-                                blockID: "", source: source, metas: [meta],
-                                intervals: cur.intervals)
-                            var first: Int64?
-                            var last: Int64 = 0
-                            while flat.next() != .none {
-                                if first == nil { first = flat.atT() }
-                                last = flat.atT()
-                            }
-                            // A chunk whose every sample was deleted yields no meta at all.
-                            if let f = first { rs.append([f, last]) }
+                        let chunkIt = PopulateWithDelChunkSeriesIterator(
+                            blockID: "", source: source, metas: cur.chunks,
+                            intervals: cur.intervals)
+                        while chunkIt.next() {
+                            guard let c = chunkIt.current else { continue }
+                            rs.append([c.meta.minTime, c.meta.maxTime])
                         }
+                        if let e = chunkIt.err() { throw e }
                         ranges.append(rs)
 
                         // The SAMPLE view, over all of the series' chunks at once.

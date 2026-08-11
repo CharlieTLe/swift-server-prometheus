@@ -2227,9 +2227,37 @@ Three further survivors are declared gaps with their closing slice named: `currD
 only once `populateWithDelChunkSeriesIterator` uses it to decide whether to re-encode), `Err` ordering and the
 undecodable-encoding path (both need malformed chunk bytes in a fixture input — §6r's gap too).
 
-One thing is still open:
+### 6u. `populateWithDelChunkSeriesIterator` — LANDED (single-chunk path)
 
-1. **`populateWithDelChunkSeriesIterator` is not ported.** The port derives a trimmed chunk's RANGE from its
+`PopulateIterators.swift`, appended. The chunk view of a series: hand each chunk through untouched when no
+deletion applies, RE-ENCODE it when one does, and set the meta's bounds from the surviving samples.
+
+`block/seriesset.jsonl`'s `chunkRanges` now come from this iterator rather than being derived from the sample
+iterator, so the re-encoding path is pinned: perturbing either `newMeta.minTime = del.atT()` or
+`newMeta.maxTime = t` breaks the corpus.
+
+**Scope: the single-chunk path only.** `populateChunksFromIterable` handles one meta naming several chunks,
+which needs `ChunkOrIterable`'s iterable half — and a block never produces one (ADR-16). It is reachable only
+from the out-of-order head, so it is Phase 7's; the port throws `iterableNotSupported` rather than silently
+returning nothing if an iterable ever arrives.
+
+**The `currDelIter` gap this slice was meant to close is STILL OPEN, and the finding is why.** The
+expectation was that nil-ness becomes observable once something uses it to decide whether to re-encode. It
+does decide that — but for a block the two outcomes look byte-identical, because XOR encoding is
+deterministic over a sample sequence, so re-encoding an undeleted chunk reproduces its original bytes. The
+branch would then be a cost saving here and load-bearing only for the Head, where the chunk is open and
+`copyHeadChunk` interacts with it.
+
+That argument is **reasoning, not evidence**, and quirk 159 is specifically about distrusting this shape. So
+it is recorded as a hypothesis with the experiment that settles it: emit the chunk BYTES on both sides and
+compare, on a corpus with deleted and undeleted chunks side by side. Cheap, and the next thing to do.
+
+**Next in Phase 6, in this order:** the chunk-bytes comparison above (settles the `currDelIter` hypothesis
+either way), then `blockQuerier.Select`, and Phase 6's read path is closed. Two gaps stay open past that by
+construction and are Phase 7's: `Err` ordering and the undecodable-encoding path both need malformed or
+non-XOR chunk bytes in a fixture input, which no block the port can currently write contains.
+
+ The port derives a trimmed chunk's RANGE from its
    first and last surviving sample, which is what that iterator does to set a rewritten meta's bounds — but
    the re-encoded chunk BYTES are what it additionally produces, and they are unpinned. That is the slice
    that also closes §6r's erroring-chunk gap, since its error wrapping needs a malformed chunk.
