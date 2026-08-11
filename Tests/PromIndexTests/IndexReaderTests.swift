@@ -24,6 +24,8 @@ struct IndexReaderIn: Codable, Sendable {
     var seriesIDs: [UInt64]?
     var chunkMetas: [[Int64]]?
     var postingsQueries: [[String]]?
+    var labelValueQueries: [[String]]?
+    var labelNamesForIDs: [[UInt64]]?
     /// The generated file's bytes. INPUT, because the port has no index writer — the oracle writes the
     /// file with Go's own `index.Writer` and hands the bytes over. On the output side this would be the
     /// port comparing against itself.
@@ -60,6 +62,12 @@ struct IndexReaderOut: Decodable, Equatable, Sendable {
     var tableErr: String
     var queryResults: [[UInt64]]
     var queryErrs: [String]
+    var labelNames: [String]
+    var labelNamesErr: String
+    var labelValues: [[String]]
+    var labelValuesErrs: [String]
+    var namesFor: [[String]]
+    var namesForErrs: [String]
 }
 
 private func unhex(_ s: String) -> [UInt8] {
@@ -87,7 +95,9 @@ struct IndexReaderTests {
                 tocErr: "", symbolCount: 0, symbolSize: 0, allSymbols: [], symbolsErr: "",
                 lookedUp: [], lookupErrs: [], reversed: [], reverseErrs: [], seriesLabels: [],
                 seriesChunks: [], seriesErrs: [], tableNames: [], tableValues: [], tableOffs: [],
-                tableEntryAt: [], tableErr: "", queryResults: [], queryErrs: [])
+                tableEntryAt: [], tableErr: "", queryResults: [], queryErrs: [], labelNames: [],
+                labelNamesErr: "", labelValues: [], labelValuesErrs: [], namesFor: [],
+                namesForErrs: [])
 
             // The oracle already wrote the file and handed it over, so the port never writes one — which
             // is the whole point of this seam.
@@ -190,6 +200,36 @@ struct IndexReaderTests {
                             out.queryResults.append([])
                             out.queryErrs.append(String(describing: error))
                         }
+                    }
+                }
+
+                // LabelNames over the whole file, then LabelValues and LabelNamesFor per query.
+                let sparseAll =
+                    (try? buildPostingsOffsetIndex(bs, postingsTable: toc.postingsTable)) ?? [:]
+                out.labelNames = indexLabelNames(sparseAll)
+                for q in input.labelValueQueries ?? [] {
+                    let limit = q.count > 1 ? (Int(q[1]) ?? 0) : 0
+                    do {
+                        out.labelValues.append(
+                            try indexLabelValues(
+                                bs, postingsTable: toc.postingsTable, sparse: sparseAll,
+                                name: q[0], limit: limit))
+                        out.labelValuesErrs.append("")
+                    } catch {
+                        out.labelValues.append([])
+                        out.labelValuesErrs.append(String(describing: error))
+                    }
+                }
+                for ids in input.labelNamesForIDs ?? [] {
+                    do {
+                        out.namesFor.append(
+                            try indexLabelNamesFor(
+                                bs, version: indexFormatV2, seriesIDs: ids,
+                                lookupSymbol: { try sy.lookup($0) }))
+                        out.namesForErrs.append("")
+                    } catch {
+                        out.namesFor.append([])
+                        out.namesForErrs.append(String(describing: error))
                     }
                 }
 

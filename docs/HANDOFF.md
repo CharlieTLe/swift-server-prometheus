@@ -1711,10 +1711,24 @@ above the table's range, and unsorted query input. Quirks 134-137:
 * `Reader.Postings` sorts its values with Go's byte ordering and walks the table forward **once**, because
   it cannot re-read backwards.
 
-**Next in Phase 6:** `Reader.LabelValues`/`LabelNames`/`LabelNamesFor` and the label-indices table, all on
-the same `ByteSlice` seam and reachable with the generator that now exists — then `PromFS` from ADR-15,
-which unblocks the writers and is the last thing standing between Phase 6 and a real on-disk block.
-`MemPostings` waits for the Head in Phase 7.
+**`LabelValues`, `LabelNames` and `LabelNamesFor` are in too** — 28 cases. Quirks 138-140, and the first
+is the one worth internalising:
+
+* **quirks 135, 136 and 138 are one mechanism read three ways.** `LabelValues` walks until it sees the
+  name's last value; it needs that sentinel because `traversePostingOffsets`' `skip` would mis-parse the
+  next label name's entries; and the sparse index is built to always include each name's last value
+  precisely so the sentinel exists. Change any one and the other two break — so treat them as a unit when
+  touching the offset table;
+* `LabelNames` **excludes the all-postings key** `("", "")`, which is how "every series" is stored and is
+  not a real label. Returning the map's keys verbatim reports an empty-string label name;
+* the same underlying failure reaches the caller with a **different prefix depending on which method
+  asked** — `read series:` from `Reader.Series`, `get buffer for series:` from `LabelNamesFor`. Two cases
+  caught the port double-wrapping.
+
+**Next in Phase 6: `PromFS` from ADR-15.** It is now the only thing between the port and a real on-disk
+block: the index and chunk READERS are done and pinned, and both writers are blocked on nothing else.
+ADR-15 already fixes the shape (a narrow protocol, in-memory for corpora, `FileManager` for real use, no
+mmap), so this is implementation rather than design. `MemPostings` waits for the Head in Phase 7.
 
 A note for whoever writes the next generator: put anything the port cannot compute in the fixture's
 **input**, not its output. The file bytes were on the output side first, which had the port comparing
