@@ -9,12 +9,12 @@ cp "$X" /tmp/x2.orig && cp "$V" /tmp/v.orig && cp "$B" /tmp/b2.orig
 restore() { cp /tmp/x2.orig "$X"; cp /tmp/v.orig "$V"; cp /tmp/b2.orig "$B"; }
 trap restore EXIT
 
+# The shared harness: builds, runs the filter under a time budget, prints the verdict. Its header says
+# why that is not three lines inline.
+source "$(dirname "$0")/lib/control-run.sh"
+
 run() {
-  local name="$1"
-  if ! swift build 2>/dev/null >/dev/null; then printf '  %-54s COMPILE\n' "$name"; restore; return; fi
-  local out; out=$(swift test --filter 'XOR2Chunk|Varbit' 2>&1)
-  if grep -qE '✘|error:|signal' <<<"$out"; then printf '  %-54s broke\n' "$name"
-  else printf '  %-54s SURVIVED\n' "$name"; fi
+  control_verdict "$1" 'XOR2Chunk|Varbit' 54
   restore
 }
 

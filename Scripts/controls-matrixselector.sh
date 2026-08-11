@@ -20,6 +20,11 @@ restore() { for i in "${!FILES[@]}"; do cp "${BACKUPS[$i]}" "${FILES[$i]}"; done
 trap restore EXIT
 
 # run <name> <old> <new> [file-index, default 0]
+
+# The shared harness: builds, runs the filter under a time budget, prints the verdict. Its header says
+# why that is not three lines inline.
+source "$(dirname "$0")/lib/control-run.sh"
+
 run() {
   local name="$1" from="$2" to="$3" idx="${4:-0}"
   restore
@@ -32,16 +37,8 @@ if s.count(old) != 1:
     sys.exit(3)
 open(path, "w").write(s.replace(old, new))
 PY2
-  if [ $? -ne 0 ]; then echo "SKIP      $name (patch did not apply)"; return; fi
-  if ! timeout 600 swift build >/dev/null 2>&1; then echo "COMPILE   $name"; return; fi
-  out=$(timeout 600 swift test --filter "EngineExec|MatrixIterSlice" 2>&1)
-  if grep -q "Test run with .* passed" <<<"$out"; then
-    echo "SURVIVED  $name"
-  elif grep -q "Test run with" <<<"$out"; then
-    echo "broke     $name"
-  else
-    echo "broke     $name (trapped)"
-  fi
+  if [ $? -ne 0 ]; then printf '  %-56s SKIP (patch did not apply)\n' "$name"; return; fi
+  control_verdict "$name" 'EngineExec|MatrixIterSlice' 56
 }
 
 # --- the window's bounds
