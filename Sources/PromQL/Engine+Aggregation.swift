@@ -138,6 +138,16 @@ internal import PromModel
 internal import PromPosRange
 internal import PromQLParser
 
+/// Go: `maxInt64` and `minInt64` (engine.go:67, :69) — hand-written float constants, and the
+/// values matter.
+///
+/// `9223372036854774784` is the largest `Int64` **exactly representable as a `Double`**, not
+/// `Int64.max`: `Double(Int64.max)` rounds *up* to 2^63, so comparing against it would admit
+/// values `int64()` cannot represent. `rangeEvalAgg` uses them to reject a `topk` parameter before
+/// `int64(fParam)` saturates silently (HANDOFF §5's third `Int64(Double)` site).
+let maxInt64AsDouble: Double = 9_223_372_036_854_774_784
+let minInt64AsDouble: Double = -9_223_372_036_854_775_808
+
 /// Go: `groupedAggregation` — one output group's running state.
 ///
 /// A `struct` here where Go uses `*groupedAggregation` taken out of a slice; the port writes back
@@ -155,6 +165,10 @@ struct GroupedAggregation {
     /// Go: `heap` — `quantile`'s collected values. Only the floats are needed, since
     /// `promql.quantile` reads `F` alone.
     var heap: [Double] = []
+    /// Go: the same `heap` field, used by `aggregationK` — which needs the whole `Sample`, since
+    /// its output carries the INPUT's labels. One Go field, two Swift ones, because the two
+    /// operator families never share a group.
+    var heapSamples: [Sample] = []
 
     /// Go: `seen` — was this group present in the input **at this timestamp**.
     var seen: Bool = false
@@ -303,11 +317,47 @@ extension Evaluator {
         }
         var groups = [GroupedAggregation](repeating: GroupedAggregation(), count: groupCount)
 
+        // For the four `k` operators the output rows do not exist up front — their labels are the
+        // INPUT's — so a range query accumulates them in `seriess` instead.
+        var seriess: [UInt64: Series] = [:]
+        var seriessOrder: [UInt64] = []
+        let sampler: any RatioSampler = HashRatioSampler()
+
         switch aggExpr.op {
-        case .topk, .bottomk, .limitk, .limitRatio:
-            throw EvaluatorNotPorted(
-                nodeType: "AggregateExpr",
-                detail: "\(aggExpr.op.description) needs aggregationK")
+        case .topk, .bottomk, .limitk:
+            // Return early if every k is below one.
+            if params.max < 1 {
+                return (Matrix(), annos)
+            }
+            if params.hasAnyNaN {
+                throw EvaluationError.parameterValueIsNaN
+            }
+            // The guards use the hand-written float constants at engine.go:67/69 — the largest
+            // `Int64` exactly representable as a `Double` — because `int64(fParam)` below would
+            // otherwise saturate silently (HANDOFF §5).
+            if params.min <= minInt64AsDouble {
+                throw EvaluationError.scalarUnderflowsInt64(params.min)
+            }
+            if params.max >= maxInt64AsDouble {
+                throw EvaluationError.scalarOverflowsInt64(params.max)
+            }
+        case .limitRatio:
+            // Return early if every r is zero. Note it is `max == 0 && min == 0`, not `max == 0`:
+            // a series of ratios that is zero at its maximum but negative elsewhere still runs.
+            if params.max == 0 && params.min == 0 {
+                return (Matrix(), annos)
+            }
+            if params.hasAnyNaN {
+                throw EvaluationError.ratioValueIsNaN
+            }
+            if params.max > 1.0 {
+                _ = annos.add(
+                    newInvalidRatioWarning(params.max, 1.0, aggExpr.param!.positionRange))
+            }
+            if params.min < -1.0 {
+                _ = annos.add(
+                    newInvalidRatioWarning(params.min, -1.0, aggExpr.param!.positionRange))
+            }
         case .quantile:
             // Three separate warnings, and they are not exclusive: a parameter series with a NaN
             // *and* a value above 1 produces both.
@@ -333,18 +383,41 @@ extension Evaluator {
             }
             currentSamples = tempNumSamples
             enh.ts = ts
-            let ws = try aggregation(
-                aggExpr, fParam, &inputMatrix, &result, seriesToResult, &groups, enh)
-            _ = annos.merge(ws)
+            switch aggExpr.op {
+            case .topk, .bottomk, .limitk, .limitRatio:
+                let (stepResult, ws) = try aggregationK(
+                    aggExpr, fParam, &inputMatrix, seriesToResult, &groups, enh, &seriess,
+                    &seriessOrder, sampler)
+                // The instant shortcut, "so as not to change sort order" — the same reasoning as
+                // `rangeEval`'s, and load-bearing for `topk`, whose whole purpose is an order.
+                if startTimestamp == endTimestamp {
+                    _ = annos.merge(ws)
+                    return (stepResult, annos)
+                }
+                _ = annos.merge(ws)
+            default:
+                let ws = try aggregation(
+                    aggExpr, fParam, &inputMatrix, &result, seriesToResult, &groups, enh)
+                _ = annos.merge(ws)
+            }
             if currentSamples > maxSamples {
                 throw QueryError.tooManySamples(evaluationEnv)
             }
             ts += interval
         }
 
-        // Remove the empty rows — a group with no data at any step. Go compacts in place with a
-        // write index; the effect is a filter.
-        result.series = result.series.filter { !$0.floats.isEmpty || !$0.histograms.isEmpty }
+        switch aggExpr.op {
+        case .topk, .bottomk, .limitk, .limitRatio:
+            // Go ranges the map; insertion order is the port's deterministic choice.
+            result = Matrix()
+            for h in seriessOrder {
+                result.series.append(seriess[h]!)
+            }
+        default:
+            // Remove the empty rows — a group with no data at any step. Go compacts in place with
+            // a write index; the effect is a filter.
+            result.series = result.series.filter { !$0.floats.isEmpty || !$0.histograms.isEmpty }
+        }
         return (result, annos)
     }
 
