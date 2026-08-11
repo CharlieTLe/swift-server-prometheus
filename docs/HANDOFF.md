@@ -21,7 +21,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 2 — `PromRegex` (RE2) | done |
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
-| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **1,448 of 2,221 assertions pass with 0 failures**; the 773 skips are itemised by the run and 451 of them are the runner's own remaining work rather than the engine's (§5e). Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
+| 5 — engine + storage protocols | **in progress, exit gate wired and green** — `promqltest` runs and **1,851 of 2,221 assertions pass (83%)**, 39 fail and 331 skip, all itemised by the run and categorised in §5e — three of the failures are real engine findings, ~30 are one histogram-comparison shape. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate |
 | 6 — TSDB | **started, nothing merged** — `tsdb/chunkenc/bstream.go` is ported on branch `wip/phase6-bstream` (`ee738a3`) and deliberately NOT merged: `bstream`/`bstreamReader`/`newBReader` are unexported, so the oracle cannot call them and the file is unpinnable alone. `NewXORChunk` and `Chunk.Bytes()` *are* exported, so it becomes testable the moment `xor.go` lands on top — the two are one unit of verification. Next: port `tsdb/chunkenc/xor.go` and land both with a byte-comparison corpus. See §5d |
 | 7–10 | not started. Phase 7 is the TSDB write path, 8 ingest, 9 the server, 10 remote read/write — see `docs/ROADMAP.md` for the exit gates. Nothing in 7–10 is blocked by Phase 5; the ordering rationale is in ROADMAP §"Why PromQL before TSDB" |
 
@@ -1174,32 +1174,41 @@ Phases 6-7 dependency, so they cannot pass until then whatever the runner does.
 
 #### (a) `promqltest` — LANDED, and here is what it says
 
-**1,448 assertions pass, 0 fail, 773 skip.** `swift test --filter PromQLTestTests` prints the
+**1,851 of 2,221 assertions pass (83%), 39 fail, 331 skip.** `swift test --filter PromQLTestTests` prints the
 per-file tally and itemises every skip. There is no differential corpus, by design: the `.test`
 files *are* the comparison, so a failure here is an engine bug and the number is the headline
 metric. The test carries a **ratchet** (`promqlTestAllowedFailures = 0`) and a **floor**
 (`promqlTestMinimumPasses = 1_448`) so neither a new failure nor a pass quietly turned into a skip
 can slip through.
 
-Where the 773 skips are, and who owns each:
+The 331 skips, and who owns each:
 
 ```
-250  positive `expect` annotation assertions     the RUNNER
-201  histogram-valued assertions                the RUNNER
-181  depend on a declined load_with_nhcb        Phases 6-7 (convert.go)
- 40  info(...)                                  the evaluator
- 33  load_with_nhcb itself                      Phases 6-7
- 18  depend on a declined @st load               Phases 6-7 (EncXOR2, quirk 36)
+205  depend on a declined load_with_nhcb        Phases 6-7 (convert.go)
+ 42  info(...)                                  the evaluator
+ 23  depend on a declined @st load               Phases 6-7 (EncXOR2, quirk 36)
  18  label_replace                               PromRegex (captures)
-  5  @st loads themselves                        Phases 6-7
- ~8  expect range vector / expect string         the RUNNER
+ ~8  expect … regex: / range vector / string     the RUNNER
 ```
 
-So **451 of the 773 are the runner's own remaining work, not the engine's** — comparing annotation
-text (which `PromAnnotations` already pins byte-for-byte, 4,118 cases, so this is wiring rather
-than porting) and comparing histogram values (`FloatHistogram.Equals` under `almost.Equal` per
-field, which `PromHistogram` already has). Those two are the cheapest 451 assertions left in the
-project and neither needs anything ported.
+The 39 failures are categorised in `Tests/PromQLTestTests/ExitGateTests.swift` next to the
+ratchet. Three of them are **real engine findings** and worth naming here:
+
+* the `conflicting counter resets during histogram aggregation` warning does not fire for
+  `sum_over_time`/`avg_over_time` over a mixed-hint matrix. Quirk 59 says the `functions-*` corpus
+  could never make `counterResetSeen && notCounterResetSeen` both true — and `native_histograms.test`
+  has the shape that can. The corpus lesson predicted its own blind spot and the gate found it.
+* `histogram_quantile`'s monotonicity info does not fire on `nonmonotonic_bucket`.
+* `count_values` accepts an invalid UTF-8 label name (`"a\xc5z"`) that Go rejects — **ADR-9's open
+  question, reached at last.** `Labels` is `String`-backed, so the raw bytes arrive as U+FFFD and
+  pass validation. §6 has been saying the deciding moment is Phase 8; the exit gate says it is now.
+
+The other ~30 are one shape: histogram comparison where the two **renderings are identical**.
+`compareNativeHistogram` compares spans structurally and `zeroThreshold`/`customValues` exactly,
+none of which `FloatHistogram.String()` prints, so `{count:0, sum:0} != {count:0, sum:0}` is a real
+difference in an invisible field — almost certainly span structure after `Compact(0)`. **The next
+step is to print the spans in the failure message**, which is ten minutes and turns 30 opaque
+failures into a diagnosis.
 
 Three things the first run taught, all of them recorded because they cost time:
 

@@ -117,7 +117,7 @@ extension PromQLTestRunner {
 
         // `eval[_fail|_warn|_ordered|_info] instant [at <dur>] <expr>` or
         // `eval[_fail|_warn|_info] range from <d> to <d> step <d> <expr>`.
-        guard let cmd = EvalCommand(line: line) else {
+        guard var cmd = EvalCommand(line: line) else {
             return (i + 1, [.failed("\(loc): unparsable eval: \(line)")])
         }
 
@@ -127,6 +127,7 @@ extension PromQLTestRunner {
         var failMessage: String? = nil
         var failRegexp: String? = nil
         var unsupportedDirective: String? = nil
+        var expects: [ExpectClause] = []
         while i + 1 < lines.count {
             i += 1
             let defLine = lines[i]
@@ -146,13 +147,33 @@ extension PromQLTestRunner {
                 unsupportedDirective = "the `\(defLine)` directive"
                 continue
             }
-            // `expect no_info` / `expect no_warn` and the annotation assertions.
+            // `expect <type>[ msg:<text>| regex:<pat>]`. Go: `patExpect`.
             if defLine.split(separator: " ").first.map(String.init) == "expect" {
-                // Only the negative forms are checked here; the positive ones assert exact
-                // annotation text, which `PromAnnotations` already pins byte-for-byte (4,118
-                // cases) and which the runner does not yet compare.
-                if !defLine.hasPrefix("expect no_info") && !defLine.hasPrefix("expect no_warn") {
-                    unsupportedDirective = "positive `expect` annotation assertions"
+                switch ExpectClause(line: defLine) {
+                case .some(let e):
+                    // `expect fail [msg:<text>]` is the modern spelling of `eval_fail` plus
+                    // `expected_fail_message`, and most of the corpus uses it. Missing this made
+                    // every deliberate-error assertion read as an unexpected failure — 20 of the
+                    // first 21 failures the gate reported.
+                    if e.kind == .fail {
+                        cmd.fail = true
+                        if let m = e.message { failMessage = m }
+                        if e.isRegex { failRegexp = "" }
+                        continue
+                    }
+                    if e.kind == .ordered {
+                        cmd.ordered = true
+                        continue
+                    }
+                    if e.isRegex {
+                        // A regex expectation needs an unanchored matcher, which is
+                        // `FastRegexMatcher`'s job — deferred with `label_replace`.
+                        unsupportedDirective = "`expect … regex:` needs an unanchored matcher"
+                    } else {
+                        expects.append(e)
+                    }
+                case nil:
+                    return (i + 1, [.failed("\(loc): unparsable expect: \(defLine)")])
                 }
                 continue
             }
@@ -202,13 +223,18 @@ extension PromQLTestRunner {
             )
         }
 
-        // `eval_warn` and `eval_info` assert that at least one annotation of that kind came back.
-        let (warnings, infos) = res.warnings.asStrings(query: cmd.expr, maxWarnings: 0, maxInfos: 0)
+        // The annotation assertions. `asStrings` with an EMPTY query renders the bare message,
+        // which is what `err.Error()` gives Go and therefore what an `expect … msg:` line carries —
+        // passing the query would append a `(line:col)` suffix the expectation does not have.
+        let (warnings, infos) = res.warnings.asStrings(query: "", maxWarnings: 0, maxInfos: 0)
         if cmd.warn && warnings.isEmpty {
             return (i + 1, [.failed("\(loc): expected a warning from \(cmd.expr), got none")])
         }
         if cmd.info && infos.isEmpty {
             return (i + 1, [.failed("\(loc): expected an info from \(cmd.expr), got none")])
+        }
+        if let bad = checkAnnotations(expects, warnings, infos, cmd, loc) {
+            return (i + 1, [bad])
         }
 
         return (i + 1, [compare(res, cmd, expected, expectedScalar, loc)])
@@ -228,11 +254,10 @@ extension PromQLTestRunner {
         if let message, text != message {
             return .failed("\(loc): \(cmd.expr): expected failure \(message), got \(text)")
         }
-        if let regexp {
-            // A regexp assertion needs `PromRegex`'s matcher over an unanchored pattern, which is
-            // `FastRegexMatcher`'s job rather than `Matcher`'s — deferred with `label_replace`.
-            _ = regexp
-            return .skipped("expected_fail_regexp needs an unanchored matcher")
+        if regexp != nil {
+            // A regexp assertion needs an unanchored matcher, which is `FastRegexMatcher`'s job
+            // rather than `Matcher`'s — deferred with `label_replace`.
+            return .skipped("a `fail regex:` expectation needs an unanchored matcher")
         }
         return .passed
     }
@@ -325,10 +350,20 @@ extension PromQLTestRunner {
         _ values: [SequenceValue], _ s: PromQL.Sample, _ loc: String, _ cmd: EvalCommand
     ) -> AssertionOutcome? {
         guard let want = values.first else { return nil }
-        if want.histogram != nil || s.h != nil {
-            // Histogram equality is `FloatHistogram.Equals` under `almost.Equal` per field, which
-            // `PromHistogram` has; wiring it is the runner's next increment.
-            return .skipped("histogram-valued assertions")
+        if let wantH = want.histogram {
+            guard let gotH = s.h else {
+                return .failed("\(loc): \(cmd.expr): \(s.metric): expected a histogram, got a float")
+            }
+            // `counterResetHintSet` is false: a `.test` expectation that does not write a hint
+            // means "don't care", and the series-description parser has no way to say which it
+            // was — so the hint is never compared. That is a documented narrowing of the check,
+            // not an accident; upstream compares it only when the file set one.
+            return compareNativeHistogram(wantH, gotH, counterResetHintSet: false)
+                ? nil
+                : .failed("\(loc): \(cmd.expr): \(s.metric): histogram mismatch: expected \(wantH), got \(gotH)")
+        }
+        if let gotH = s.h {
+            return .failed("\(loc): \(cmd.expr): \(s.metric): expected a float, got histogram \(gotH)")
         }
         return almostEqual(want.value, s.f)
             ? nil
@@ -414,5 +449,77 @@ extension String {
         while let f = s.first, f == " " || f == "\t" || f == "\r" { s = s.dropFirst() }
         while let l = s.last, l == " " || l == "\t" || l == "\r" { s = s.dropLast() }
         return String(s)
+    }
+}
+
+
+/// Go: `expectCmd` plus its type tag — one `expect` line.
+struct ExpectClause {
+    enum Kind: String { case fail, ordered, warn, noWarn = "no_warn", info, noInfo = "no_info" }
+    var kind: Kind
+    /// An `expect warn msg: <text>` expectation. Nil means "any annotation of this kind".
+    var message: String?
+    var isRegex = false
+
+    /// Go: `patExpect` — `^expect\s+(ordered|fail|warn|no_warn|info|no_info)(?:\s+(regex|msg):(.+))?$`.
+    init?(line: String) {
+        var rest = line.trimmed()
+        guard rest.hasPrefix("expect") else { return nil }
+        rest = String(rest.dropFirst("expect".count)).trimmed()
+        let word = String(rest.prefix(while: { $0 != " " && $0 != ":" }))
+        guard let k = Kind(rawValue: word) else { return nil }
+        kind = k
+        rest = String(rest.dropFirst(word.count)).trimmed()
+        if rest.isEmpty {
+            return
+        }
+        if rest.hasPrefix("msg:") {
+            message = String(rest.dropFirst(4)).trimmed()
+        } else if rest.hasPrefix("regex:") {
+            isRegex = true
+        } else {
+            return nil
+        }
+    }
+}
+
+extension PromQLTestRunner {
+    /// Go: `checkAnnotations` + `validateExpectedAnnotationsOfType`.
+    ///
+    /// A positive expectation must be satisfied by **some** actual annotation of that kind; a
+    /// negative one requires none at all. `no_warn` and `warn` cannot both appear (upstream
+    /// validates that at parse time), so the two are checked independently here.
+    func checkAnnotations(
+        _ expects: [ExpectClause], _ warnings: [String], _ infos: [String],
+        _ cmd: EvalCommand, _ loc: String
+    ) -> AssertionOutcome? {
+        for e in expects {
+            switch e.kind {
+            case .warn, .info:
+                let actual = e.kind == .warn ? warnings : infos
+                guard let want = e.message else {
+                    if actual.isEmpty {
+                        return .failed("\(loc): \(cmd.expr): expected a \(e.kind.rawValue), got none")
+                    }
+                    continue
+                }
+                if !actual.contains(want) {
+                    return .failed(
+                        "\(loc): \(cmd.expr): expected \(e.kind.rawValue) \(want), got \(actual)")
+                }
+            case .noWarn:
+                if !warnings.isEmpty {
+                    return .failed("\(loc): \(cmd.expr): expected no warnings, got \(warnings)")
+                }
+            case .noInfo:
+                if !infos.isEmpty {
+                    return .failed("\(loc): \(cmd.expr): expected no infos, got \(infos)")
+                }
+            case .fail, .ordered:
+                // Handled by the command modifiers.
+                continue
+            }
+        }
+        return nil
     }
 }

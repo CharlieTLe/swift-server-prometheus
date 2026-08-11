@@ -44,7 +44,10 @@ struct PromQLTestTests {
                 enableNegativeOffset: true,
                 // What upstream's runner sets, so it is what the gate means.
                 enableDelayedNameRemoval: true,
-                enableTypeAndUnitLabels: true,
+                // NOT set by upstream's runner (test.go:104-111), and setting it changes which
+                // possible-non-counter info `rate` emits — one assertion asserts `expect no_info`
+                // and got one. The gate has to run the engine upstream's runner builds, not a
+                // more-featureful one.
                 parserOptions: options))
         return PromQLTestRunner(engine: engine, parser: Parser(options: options))
     }
@@ -107,14 +110,29 @@ struct PromQLTestTests {
 /// Where the remaining failures live is recorded in `docs/HANDOFF.md` §5e; the ones that are known
 /// *gaps* rather than bugs are counted as skips instead, so this number is bugs plus
 /// runner-incompleteness and nothing else.
-let promqlTestAllowedFailures = 0
+// The 39 remaining failures, categorised so the next slice has targets rather than a list:
+//
+//   ~30  histogram comparison where the two RENDERINGS ARE IDENTICAL. `compareNativeHistogram`
+//        compares spans structurally and `zeroThreshold`/`customValues` exactly, none of which
+//        `FloatHistogram.String()` prints — so `{count:0, sum:0}` != `{count:0, sum:0}` is a real
+//        difference in a field the message cannot show. Almost certainly span structure after
+//        `Compact(0)`: the next step is to print the spans in the failure message and find out.
+//     2  `expect warn: conflicting counter resets during histogram aggregation` not firing for
+//        `sum_over_time`/`avg_over_time` over a mixed-hint matrix. A REAL engine finding: quirk 59
+//        says the corpus for that warning could never make `counterResetSeen &&
+//        notCounterResetSeen` both true, and this is the shape that can.
+//     1  `histogram_quantile`'s monotonicity info not firing.
+//     1  `count_values` accepting an invalid UTF-8 label name (`"a\xc5z"`) that Go rejects — ADR-9's
+//        open question, reached at last: `Labels` is String-backed, so the bytes arrive as U+FFFD
+//        and validate.
+//   rest scattered.
+let promqlTestAllowedFailures = 39
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 1,448 of 2,221 (65%). The 773 skips are itemised by the run itself, and every one of them names
-// a known gap: 250 positive `expect` annotation assertions and 201 histogram-valued ones are the
-// RUNNER's remaining work, 214 depend on `load_with_nhcb` or `@st` (Phases 6-7), and 58 are
-// `info`/`label_replace`.
-let promqlTestMinimumPasses = 1_448
+// 1,851 of 2,221 (83%). The 331 skips are itemised by the run itself and every one names a known
+// gap: 214 depend on `load_with_nhcb` or `@st` (Phases 6-7), 58 are `info`/`label_replace`, and the
+// rest are `expect … regex:` and the two `expect range vector`/`expect string` directives.
+let promqlTestMinimumPasses = 1_851
 
 extension String {
     fileprivate func padded(to n: Int) -> String {
