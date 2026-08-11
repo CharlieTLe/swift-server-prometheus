@@ -218,13 +218,20 @@ struct MatrixIterSliceTests {
                 == "anchored modifier is not supported with histograms")
     }
 
-    @Test("a histogram's counter reset hint survives the storage and the buffer")
+    @Test("the storage DERIVES a histogram's counter reset hint, and the buffer carries it")
     func counterResetHintCarriage() throws {
-        // The hypothesis HANDOFF §5e records for the exit gate's two remaining warning failures:
-        // the collision warning needs one sample hinted `notCounterReset` and the next
-        // `counterReset`, and the hints may be lost between `MemStorage.load` and
-        // `matrixIterSlice`. The `storage/mem-select` corpus is float-only on purpose, so histogram
-        // HINT carriage has never been pinned anywhere — this is the drop-a-level test for it.
+        // **This test's original assertion was `[.notCounterReset, .counterReset]` — that the hints
+        // written by the load SURVIVE the storage — and it was right about the layer while being
+        // wrong about the behaviour.** It was written to test the first hypothesis for the exit
+        // gate's two warning failures (the hints are lost between `MemStorage.load` and
+        // `matrixIterSlice`), it refuted that hypothesis, and the cause turned out to be one layer
+        // further out: the storage is supposed to DERIVE hints, not carry them (quirk 102).
+        //
+        // So the assertion is now the derivation. Two samples counting up, loaded with whatever hints
+        // the caller likes, come back `unknown` then `not_reset` — because that is what a chunk
+        // read-back produces for the first and second sample of a counter chunk, and the written hint
+        // is discarded. Keeping the test rather than deleting it is the point: it is the only thing
+        // pinning the storage-to-buffer link for histograms, since `storage/mem-select` is float-only.
         func h(_ hint: CounterResetHint, _ count: Double) -> FloatHistogram {
             FloatHistogram(
                 counterResetHint: hint, schema: 0, count: count, sum: count,
@@ -255,15 +262,78 @@ struct MatrixIterSliceTests {
         try ev.matrixIterSlice(it, -1, 60_000, &floats, &hists, &sts)
 
         #expect(hists?.count == 2)
+        // BOTH `unknown`, and the second one is the interesting half: the load hinted it
+        // `counterReset`, `appendable` "always honours" an explicit reset hint, so it CUTS A CHUNK —
+        // and the first sample of a chunk reads back `unknown` whatever the header says. Predicting
+        // `[unknown, not_reset]` here was wrong twice over and the assertion caught it.
         #expect(
-            hists?.map(\.h.counterResetHint) == [.notCounterReset, .counterReset],
-            "the hints must survive: the collision warning is the only thing that reads them")
+            hists?.map(\.h.counterResetHint) == [.unknownCounterReset, .unknownCounterReset],
+            "an explicit reset hint cuts a chunk, and a chunk's first sample reads back unknown")
 
-        // They DO survive, which **refutes** the hypothesis HANDOFF §5e recorded — so the loss is
-        // in the one remaining link, `parseSeriesDesc`'s handling of `counter_reset_hint:`. And
-        // Phase 4's 1,685-case series-description corpus cannot see it: that fixture compares
-        // `String()`, and `FloatHistogram.String()` does not print the hint. Exactly the trap
-        // HANDOFF §3 records for `promql/histogram-stats`, in a corpus that predates the lesson.
+        // The counting-up pair, which is the shape every `.test` load has and the one the collision
+        // warning depends on: no explicit hints, so one chunk, so `unknown` then `not_reset`.
+        let store2 = MemStorage()
+        try store2.load(
+            Labels(strings: ["__name__", "rising"]),
+            [
+                FHSample(st: 0, t: 0, fh: h(.unknownCounterReset, 1)),
+                FHSample(st: 0, t: 60_000, fh: h(.unknownCounterReset, 2)),
+                FHSample(st: 0, t: 120_000, fh: h(.unknownCounterReset, 3)),
+            ])
+        let q2 = try store2.querier(mint: 0, maxt: 120_000)
+        let set2 = q2.select(
+            GoContext.background(), sortSeries: true, hints: SelectHints(start: 0, end: 120_000),
+            matchers: [try Matcher(.equal, "__name__", "rising")])
+        var series2: [any PromStorage.Series] = []
+        while set2.next() { series2.append(try #require(set2.at())) }
+        let it2 = newBuffer(delta: 180_000)
+        it2.reset(series2[0].iterator(nil))
+        var f2: [FPoint]? = nil
+        var h2: [HPoint]? = nil
+        var st2: StartTimestamps? = nil
+        try ev.matrixIterSlice(it2, -1, 120_000, &f2, &h2, &st2)
+        #expect(
+            h2?.map(\.h.counterResetHint)
+                == [.unknownCounterReset, .notCounterReset, .notCounterReset])
+
+        // A FLOAT sample between two histograms starts a fresh chunk, so the histogram after it is
+        // back to `unknown` instead of continuing the `not_reset` run. Upstream gets this from the
+        // encoding — a float goes in an XOR chunk, so the next histogram cannot share the previous
+        // histogram chunk — and no `.test` file has a series shaped like this, so the control for it
+        // survived until this assertion existed.
+        let store3 = MemStorage()
+        try store3.load(
+            Labels(strings: ["__name__", "interrupted"]),
+            [
+                FHSample(st: 0, t: 0, fh: h(.unknownCounterReset, 1)),
+                FHSample(st: 0, t: 60_000, fh: h(.unknownCounterReset, 2)),
+                FSample(st: 0, t: 120_000, f: 3),
+                FHSample(st: 0, t: 180_000, fh: h(.unknownCounterReset, 4)),
+                FHSample(st: 0, t: 240_000, fh: h(.unknownCounterReset, 5)),
+            ])
+        let q3 = try store3.querier(mint: 0, maxt: 240_000)
+        let set3 = q3.select(
+            GoContext.background(), sortSeries: true, hints: SelectHints(start: 0, end: 240_000),
+            matchers: [try Matcher(.equal, "__name__", "interrupted")])
+        var series3: [any PromStorage.Series] = []
+        while set3.next() { series3.append(try #require(set3.at())) }
+        let it3 = newBuffer(delta: 300_000)
+        it3.reset(series3[0].iterator(nil))
+        var f3: [FPoint]? = nil
+        var h3: [HPoint]? = nil
+        var st3: StartTimestamps? = nil
+        try ev.matrixIterSlice(it3, -1, 240_000, &f3, &h3, &st3)
+        #expect(f3?.count == 1)
+        #expect(
+            h3?.map(\.h.counterResetHint)
+                == [.unknownCounterReset, .notCounterReset, .unknownCounterReset, .notCounterReset],
+            "the float restarts the chunk, so the histogram after it is unknown again")
+
+        // And the link the original hypothesis suspected is still pinned, separately:
+        // `parseSeriesDesc` DOES carry `counter_reset_hint:`. Phase 4's 1,685-case
+        // series-description corpus cannot see it — that fixture compares `String()`, and
+        // `FloatHistogram.String()` does not print the hint. Exactly the trap HANDOFF §3 records for
+        // `promql/histogram-stats`, in a corpus that predates the lesson.
         let parsed = try Parser(options: Options()).parseSeriesDesc(
             "mixed {{schema:0 count:1 sum:1 counter_reset_hint:reset buckets:[1]}}")
         #expect(

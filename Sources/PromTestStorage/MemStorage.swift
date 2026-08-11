@@ -38,6 +38,7 @@ public import PromStorage
 // Only reached from the append path's type discipline, not from any public
 // signature here.
 internal import PromChunkEnc
+internal import PromModel
 internal import PromHistogram
 
 /// An in-memory ``Queryable`` — the Phase 5 stand-in for `tsdb.DB`.
@@ -64,6 +65,9 @@ public final class MemStorage: Queryable {
     struct Entry {
         var lset: Labels
         var samples: [any Sample]
+        /// The series' chunk planner, stepped once per appended float histogram so the derived
+        /// counter-reset hint costs O(1). See ``deriveCounterResetHint(_:)``.
+        var planner = FloatHistogramChunkPlanner()
     }
 
     /// Insertion-ordered. See the type's note.
@@ -89,6 +93,7 @@ public final class MemStorage: Queryable {
         guard let idx = byLabels[lset] else {
             byLabels[lset] = entries.count
             entries.append(Entry(lset: lset, samples: [sample]))
+            deriveCounterResetHint(entries.count - 1)
             return
         }
 
@@ -98,11 +103,13 @@ public final class MemStorage: Queryable {
         // precondition.
         guard let last = entries[idx].samples.last else {
             entries[idx].samples.append(sample)
+            deriveCounterResetHint(idx)
             return
         }
 
         if sample.t > last.t {
             entries[idx].samples.append(sample)
+            deriveCounterResetHint(idx)
             return
         }
 
@@ -173,6 +180,43 @@ public final class MemStorage: Queryable {
     public func load(_ lset: Labels, _ samples: [any Sample]) throws {
         for s in samples {
             try append(lset, s)
+        }
+    }
+
+    /// Give the newly appended sample the `CounterResetHint` a chunk read-back would produce.
+    ///
+    /// **This is the storage DERIVING the hint, not carrying it, and it is the behaviour Phase 5's
+    /// exit gate was missing.** Upstream's `teststorage` wraps a real `tsdb.DB`, so a histogram
+    /// appended to the Head comes back out through `chunkenc`, which recomputes the hint from the
+    /// chunk's header and the sample's position (quirk 102). What a `.test` file writes as
+    /// `counter_reset_hint:not_reset` is therefore not a value the storage keeps — a series counting
+    /// up gets `not_reset` from its second sample onwards *because it counts up*, whatever the load
+    /// line said, and the first sample of every chunk reads `unknown` however much the storage knows.
+    /// Both of the exit gate's last two failures were this.
+    ///
+    /// One planner per series, stepped once per append, so this is O(1) — see
+    /// `FloatHistogramChunkPlanner`. A **float** sample resets the planner, because it forces an XOR
+    /// chunk and so a fresh histogram chunk after it, whose first sample is back to `unknown`.
+    /// Integer histograms are left alone: nothing in the runner produces one, and modelling their
+    /// appender is Phase 6's.
+    ///
+    /// No `cut()` is ever called: `MemStorage` models no capacity or time boundary, which is
+    /// exception 12 made precise. `ChunkPlan.swift` says why that is exact for every `.test` input.
+    private func deriveCounterResetHint(_ idx: Int) {
+        guard let last = entries[idx].samples.last else { return }
+        switch last.type {
+        case .floatHistogram:
+            guard var fh = last.fh else { return }
+            let hint = entries[idx].planner.plan(fh)
+            if fh.counterResetHint != hint {
+                fh.counterResetHint = hint
+                entries[idx].samples[entries[idx].samples.count - 1] = FHSample(
+                    st: last.st, t: last.t, fh: fh)
+            }
+        case .float:
+            entries[idx].planner = FloatHistogramChunkPlanner()
+        default:
+            break
         }
     }
 

@@ -1837,10 +1837,48 @@ changing behaviour.
     `counter_reset_hint:` writes is not what a query reads back, and the position in the chunk
     matters more than the value.
 
-    `MemStorage` does not model chunks and so returns the stored hint unchanged. Measured cost: 8 of
-    the exit gate's assertions, which is why `promqltest`'s comparison passes
-    `counterResetHintSet: false` for now. Closing it means porting `chunkenc`'s `appendable` — pure
-    logic over two histograms, no bstream — plus the chunk-cut rules. Phase 6.
+    **FIXED.** `MemStorage` now keeps a `FloatHistogramChunkPlanner` per series and derives the hint
+    on append, which took the exit gate from 2 failures to **zero** and let both the
+    `counterResetHintSet` comparison and the histogram-valued range assertions be turned on.
+
+    Two further surprises inside the same rule, each caught by a corpus case rather than by reading:
+
+    * a **stale** sample short-circuits `AtFloatHistogram` (float_histogram.go:889), which returns
+      `&FloatHistogram{Sum: staleNaN}` and nothing else. So a stale native histogram reads back
+      `UnknownCounterReset` however deep into a chunk it sits, and loses its schema, spans and buckets
+      on the way out;
+    * an explicit `CounterReset` hint is "always honoured" by `appendable`, so it **cuts a chunk** —
+      and the first sample of a chunk reads back `unknown`. A sample written `reset` therefore reads
+      back `unknown`, never `reset`. Predicting otherwise cost two wrong assertions in a row.
+
+103. **`okToAppend` and `counterReset` are independent, and a chunk boundary's header depends on WHY
+    the boundary is there.** `appendable` returns both, and a schema or zero-threshold change gives
+    `okToAppend == false, counterReset == false`: cut a chunk, but do not call it a reset. Collapsing
+    them into one flag gets the header wrong.
+
+    Worse, the same pair of samples gets a *different* header depending on the boundary's cause:
+
+    * `AppendFloatHistogram` cutting internally passes no `prev`, so the new chunk's header is
+      `CounterReset` if a reset was detected and otherwise left **`unknown`** — a schema change
+      produces an `unknown` chunk, not a `NotCounterReset` one;
+    * the **Head** cutting for capacity or time hands the old appender over as `prev`, and that is the
+      only path that ever sets `NotCounterReset`.
+
+    So `NotCounterReset` headers do not exist in a series whose chunks were all cut by resets. The
+    `chunkmeta` corpus pins both paths, the second through an explicit `cutBefore`, because the
+    exported chunk API has no capacity rule of its own to trigger it.
+
+104. **A recode is not a chunk boundary, and it returns a new chunk object anyway.**
+    `AppendFloatHistogram` returns non-nil for both a cut and a recode; only the `recoded` flag
+    distinguishes them, and a recode rewrites the *current* chunk with wider spans while keeping every
+    sample in it. The oracle's first driver keyed on "did a new chunk come back" and reported three
+    read-back hints for a two-sample case.
+
+105. **A bucket disappearing is a counter reset only if it was in use.**
+    `expandFloatSpansAndBuckets` walks both span lists and, when `b` is missing an index `a` has,
+    returns "not appendable, reset" — *unless* `a`'s count there was zero, in which case it notes an
+    insert and continues. So two series with identical rising totals differ on whether they reset,
+    decided entirely by whether the vanished bucket was empty. Invisible from the counts.
 
 ## Not ported
 

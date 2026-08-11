@@ -110,57 +110,39 @@ struct PromQLTestTests {
 /// Where the remaining failures live is recorded in `docs/HANDOFF.md` §5e; the ones that are known
 /// *gaps* rather than bugs are counted as skips instead, so this number is bugs plus
 /// runner-incompleteness and nothing else.
-// The 4 remaining failures, all of them REAL engine findings rather than runner gaps:
+// **Zero failures.** Every `.test` file the port can load now answers correctly, so the ratchet is
+// 0 and any new divergence trips this test immediately rather than hiding under a threshold.
 //
-//   2  `expect warn: conflicting counter resets during histogram aggregation` does not fire for
-//      `sum_over_time`/`avg_over_time` over a mixed-hint matrix. Quirk 59 wrote down that the
-//      `functions-*` corpus could never make `counterResetSeen && notCounterResetSeen` both true;
-//      `native_histograms.test`'s `mixed` series is the shape that can. The documented blind spot,
-//      found.
+// The last two to go were the `conflicting counter resets during histogram aggregation` warnings on
+// `sum_over_time`/`avg_over_time` over a mixed-hint matrix, and they were never an evaluator bug:
+// `MemStorage` returned stored counter-reset hints unchanged where a chunk read-back DERIVES them
+// from the chunk header and the sample's position (quirk 102). Five hypotheses, four refuted, and the
+// cause was four layers from the symptom — HANDOFF §5e records the whole chase because the lesson
+// (test each layer, do not reason from the one that failed) outlives the bug.
 //
-//      NARROWED, and two hypotheses REFUTED — see HANDOFF §5e. Hint carriage through the storage,
-//      the buffer and `matrixIterSlice` is now pinned by
-//      `MatrixIterSliceTests.counterResetHintCarriage`, as is `parseSeriesDesc`'s handling of
-//      `counter_reset_hint:`; both survive. So the hints DO reach `trackCounterReset`, whose call
-//      sites match Go line for line, and the values are right. The remaining suspect is
-//      `funcSumOverTime`/`funcAvgOverTime`'s own annotation return path, plus whether the `[2m]`
-//      window at `11m` holds both samples. Five-line checks now the layers beneath are pinned.
-// FIXED, and it was the RUNNER: `histogram_quantile`'s monotonicity info did fire, with text
-// matching to the character. The line scanner split on the first `#` anywhere — a guess at Go's
-// `getLines`, which blanks a line only when it STARTS with `#` — so the expectation
-// `… functions/#histogram_quantile` was truncated to `… functions/` and a correct answer compared
-// against a cut string. A reminder that a gate failure indicts the harness as readily as the engine.
-// While here: `SequenceValue.counterResetHintSet` already exists, so the gate's
-// `compareNativeHistogram` could pass it instead of hard-coding false — which would start
-// comparing the hint on the assertions that write one. Worth doing with, not before, the fix
-// above, since it can only add failures until the hints carry.
-//
-// FIXED: `count_values` accepting an invalid UTF-8 label name. `ValidationScheme` now has a
-// `[UInt8]` overload that checks UTF-8 validity, and the caller validates `StringLiteral.val`
-// rather than a decoded `String` — decoding substitutes U+FFFD, after which the check cannot fail.
-// That is one instance of ADR-9's open question closed on the byte side rather than deferred.
-//
-let promqlTestAllowedFailures = 2
+// Also closed with it: `counterResetHintSet` is now passed the way upstream passes it, and the
+// histogram-valued RANGE assertions are compared by splitting the expectation list by timestamp.
+// Those two were held back deliberately until the storage could derive hints, because turning them
+// on first would have turned 2 failures into 8 without finding anything new.
+let promqlTestAllowedFailures = 0
 
-// Measured while wiring `util/convertnhcb` into the loader: with `counterResetHintSet` passed as
-// upstream passes it (test.go:1362), the gate reports **8** failures rather than 2 — six more of the
-// same `want hint=notCounterReset, got hint=unknownCounterReset` that the two above are. So the
-// storage gap below is six assertions larger than the gate can currently see, and the runner passes
-// `false` until it is closed. Recorded here rather than in a commit message because it is the
-// argument for a number in this file.
+// Measured when `util/convertnhcb` landed, and worth keeping as a record of how the gate hides
+// things: with `counterResetHintSet` passed as upstream passes it, the gate reported **8** failures
+// rather than 2 — six more instances of the same storage gap that the comparison simply was not
+// looking for. A threshold that only counts what it checks is not a measurement of correctness, and
+// the six were real.
 
 /// A floor, so lowering the ratchet by converting passes into skips fails the test.
-// 2,068 of 2,188 (94%), with 2 failures — and BOTH are a Phase 6-7 dependency rather than an
-// engine bug, so the engine has no known divergence left that the gate can see. The 118 skips are
-// itemised by the run itself and every one names a known gap: 63 are `info`/`label_replace`, 23 are
-// `@st` lines (`EncXOR2`, Phases 6-7), 22 are histogram-valued *range* assertions the comparison
-// does not split by timestamp yet, and the rest are the `expect range vector`/`expect string`
-// directives.
+// 2,092 of 2,188 (96%), with ZERO failures — and BOTH are a Phase 6-7 dependency rather than an
+// so the engine has no known divergence left that the gate can see. The 96 skips are itemised by the
+// run itself and every one names a known gap: 63 are `info`/`label_replace`, 23 are `@st` lines
+// (`EncXOR2`, Phases 6-7), and the rest are the `expect range vector`/`expect string` directives.
 //
 // `load_with_nhcb` is no longer among them: porting `util/convertnhcb` and wiring it into the loader
 // moved 170 assertions from skip to pass in one commit, which is what measuring the gap before
-// choosing the work was for (HANDOFF §5e).
-let promqlTestMinimumPasses = 2_068
+// choosing the work was for (HANDOFF §5e). `native_histograms.test`, the largest file at 522
+// assertions, now passes all 522 with no skips at all.
+let promqlTestMinimumPasses = 2_092
 
 extension String {
     fileprivate func padded(to n: Int) -> String {
