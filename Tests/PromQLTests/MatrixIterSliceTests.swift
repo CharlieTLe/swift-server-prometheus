@@ -274,15 +274,17 @@ struct MatrixIterSliceTests {
         // histogram samples. This is the FINDING, and it is asserted as the current behaviour with
         // the bug named, because a test that fails cannot land:
         //
-        // every expanded sample comes back `unknownCounterReset`, and Go's do not. Go's
-        // `histogramsSeries` builds each step with `combine(cur.Copy(), inc)` — which for `+` is
-        // `FloatHistogram.Add`, and **`Add` calls `adjustCounterReset`**, so upstream's hints are
-        // *derived by the arithmetic* rather than parsed. The port's expansion does not go through
-        // `add`, or discards what it sets.
+        // every expanded sample comes back `unknownCounterReset` — and **so do Go's.** The
+        // expansion DOES go through `FloatHistogram.Add` (`Parser+Semantics.swift:276`), and
+        // `adjustCounterReset` returns early when both hints are equal, which they are for two
+        // freshly parsed literals.
         //
-        // That is the whole of the exit gate's remaining collision-warning failure, and the fix is
-        // in `Parser`'s histogram expansion, not in `Functions+OverTime.swift`. When it lands,
-        // change this expectation to the derived hints and the gate's ratchet drops by 2.
+        // So the `not_reset`/`reset` hints `native_histograms.test` relies on come from neither the
+        // parser nor the arithmetic: they come from the **storage**, because `teststorage` wraps a
+        // real `tsdb.DB` whose Head re-derives `CounterResetHint` on append. `MemStorage` does not.
+        // That makes the gate's last collision failure a Phases 6-7 dependency rather than an
+        // evaluator bug — see HANDOFF §5e, which had written the mechanism down before any of this
+        // was investigated.
         let expanded = try Parser(options: Options()).parseSeriesDesc(
             "mixed {{schema:0 count:5 sum:6 buckets:[2 2 1]}}"
                 + "+{{schema:0 count:3 sum:2 buckets:[1 1 1]}}x2"

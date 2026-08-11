@@ -1245,20 +1245,28 @@ ratchet. Three of them are **real engine findings** and worth naming here:
   remaining suspect**, and `counterResetHintCarriage` only pinned an *explicit* literal's hint. A
   wider window happens to include a differently-hinted sample and passes by luck.
 
-  **FOUND, and the mechanism is the interesting part.** Every `+`/`x`-expanded sample comes back
-  `unknownCounterReset` in the port, and Go's do not — because Go's `histogramsSeries` builds each
-  step with `combine(cur.Copy(), inc)`, which for `+` is `FloatHistogram.Add`, and **`Add` calls
-  `adjustCounterReset`**. Upstream's hints on an expanded series are *derived by the arithmetic*,
-  not parsed. The port's expansion either does not go through `add` or discards what it sets.
+  **FOUND — and the fourth hypothesis was wrong too, in a way worth recording.** Every
+  `+`/`x`-expanded sample comes back `unknownCounterReset` in the port. The obvious conclusion was
+  that the expansion skips `FloatHistogram.Add` (which calls `adjustCounterReset`, so Go's hints
+  looked arithmetic-derived) — and a commit said so. It does not: `Parser+Semantics.swift:276` calls
+  `next.add(inc)`, and `adjustCounterReset` returns early when both hints are equal, which they are
+  for two freshly parsed literals. **So Go's expanded samples are `UnknownCounterReset` as well.**
 
-  So the fix is in **`Parser`'s histogram expansion**, not in `Functions+OverTime.swift` where the
-  symptom appeared — and `MatrixIterSliceTests.counterResetHintCarriage` now asserts the current
-  (wrong) hints with the bug named, so the next session has a failing-in-spirit test to invert.
-  When it lands the gate's ratchet drops by 2.
+  The `not_reset`/`reset` hints the test relies on therefore come from neither the parser nor the
+  arithmetic. They come from the **storage**: `teststorage` wraps a real `tsdb.DB`, and the Head
+  *re-derives* `CounterResetHint` as it appends — counting up gives `NotCounterReset`, a drop gives
+  `CounterReset`. §5 has said this all along, about the `mem-select` corpus: "a histogram appended to
+  a real `tsdb.DB` returns through the chunk encoding, which **re-derives `CounterResetHint**".
 
-  Four hypotheses: three refuted with permanent tests left behind, the fourth confirmed and its
-  mechanism traced to one line of Go. **The symptom was three layers away from the cause**, which is
-  the reason for testing each layer rather than reading the one that failed.
+  So the last collision-warning failure is **not an evaluator bug at all** — it is `MemStorage` not
+  deriving hints on append, which is Phases 6-7's chunk-encoding work reaching back into Phase 5's
+  stand-in. It belongs with `load_with_nhcb` and `@st` in the Phase 6-7 column, and the honest move
+  is to reclassify it there rather than count it against the engine.
+
+  Five hypotheses: four refuted, three of them with permanent tests left behind, and the fifth is
+  the one §5 wrote down before any of this started. **The symptom was four layers from the cause, and
+  two of my confident conclusions were wrong** — which is the argument for testing each layer instead
+  of reasoning from the one that failed.
 
   The lesson worth keeping regardless: **the two refuted hypotheses left two permanent tests
   behind.** Neither link had ever been pinned, both were plausible, and finding out cost less than
