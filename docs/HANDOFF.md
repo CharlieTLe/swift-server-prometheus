@@ -628,9 +628,15 @@ order came back. A head-only `tsdb.DB` returns **append order**, which is not a 
 
 In practice it has been stable for hundreds of regenerations — and then
 `sum_over_time(sq[2m:1m])` over a two-series selector flipped, months of green notwithstanding.
-The case is now wrapped in `sort_by_label`. **Every multi-series case in `promql/exec` and
-`promql/exec-range` carries the same latent risk**, so when one of them starts flapping, reach for
-`sort_by_label` (or a single-series selector) rather than assuming drift. And note the companion
+It has now happened **three times in one session**, each in CI after passing locally:
+`count_values("a b", …)` (a Go map in the aggregation), that `sum_over_time`, and
+`sum_over_time((sq + sq)[2m:1m])` — whose subquery inner expression is a *binop*, so it goes
+through `rangeEval`'s multi-step assembly and inherits that map's order.
+
+The rule that falls out: **a subquery over a plain selector is order-safe (`evalSeries` is
+ordered); one over a binop or an aggregation is not.** Every multi-series case in `promql/exec` and
+`promql/exec-range` carries the risk, so when one starts flapping reach for `sort_by_label` (or a
+single-series selector) rather than assuming drift. And note the companion
 constraint from quirk 96: sorting only helps when the sort *key* is unambiguous.
 
 **A fixture whose own output is nondeterministic is worse than no fixture.** Two ways this nearly
