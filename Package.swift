@@ -34,6 +34,7 @@ let package = Package(
         .library(name: "PromBlock", targets: ["PromBlock"]),
         .library(name: "PromTombstones", targets: ["PromTombstones"]),
         .library(name: "PromRecord", targets: ["PromRecord"]),
+        .library(name: "PromWAL", targets: ["PromWAL"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -106,6 +107,9 @@ let package = Package(
         // because it is Go's own package boundary and because `tsdb/record` imports it without
         // importing anything else of the block.
         .target(name: "PromTombstones", dependencies: ["PromStorage", "GoCompat"]),
+
+        // Phase 7: `tsdb/wlog` — the segment framing the records travel in.
+        .target(name: "PromWAL", dependencies: ["PromFS", "PromHash", "GoCompat"]),
 
         // Phase 7: `tsdb/record` — the WAL's wire format. Byte-exact, exported and stateless, which
         // makes it the one piece of the write path that can be pinned before `head.go` or `wlog` exists.
@@ -277,6 +281,10 @@ let package = Package(
                 "PromBlock", "PromFS", "PromIndex", "PromChunks", "PromChunkEnc", "PromStorage",
                 "PromTombstones", "GoOracleSupport", "GoCompat",
             ]
+        ),
+        .testTarget(
+            name: "PromWALTests",
+            dependencies: ["PromWAL", "PromFS", "PromRecord", "GoOracleSupport", "GoCompat"]
         ),
         .testTarget(
             name: "PromRecordTests",

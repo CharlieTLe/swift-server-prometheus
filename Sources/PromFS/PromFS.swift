@@ -231,10 +231,19 @@ public final class InMemoryFS: PromFS, @unchecked Sendable {
     }
 
     // Used by the write handle.
+    ///
+    /// **A write to a path that has been removed goes nowhere**, rather than recreating it. That is POSIX:
+    /// `os.Remove` unlinks the name, the open descriptor keeps writing to a now-nameless inode, and the file
+    /// does not reappear in the directory. Modelling it the other way round is not a theoretical difference —
+    /// `wlog.Truncate` can remove the segment the `WL` still holds open, and `Close` then flushes its last
+    /// page. With a resurrecting write that produced a segment file containing nothing but padding, which
+    /// `Segments` then reported as existing; `Fixtures/wal/segments.jsonl`'s truncate cases are what caught
+    /// it. `position` still advances, because the descriptor's offset does.
     fileprivate func mutate(_ path: String, _ body: (inout [UInt8]) -> Void) {
         lock.lock()
         defer { lock.unlock() }
-        var c = (files[path] ?? []) ?? []
+        guard let entry = files.index(forKey: path).map({ files[$0].value }) else { return }
+        var c = entry ?? []
         body(&c)
         files.updateValue(c, forKey: path)
     }

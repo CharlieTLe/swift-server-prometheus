@@ -270,6 +270,31 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     accumulator. `oracle/suites_record_encode.go` gives its seeds a generous capacity so the corpus
     pins that branch, and says so at the site.
 
+19. **`wlog.Reader.Segment()` returns `-1` where upstream panics.** Quirk 174 records the panic: a reader
+    built over no segments has a nil `segs`, and `Segment()` indexes it. A Swift trap is not catchable, so
+    reproducing it would take the process down with no way for a caller to react — and unlike
+    `extendFloats` (whose reachable panic the port raises as an error with Go's text, because a *query* was
+    what reached it) there is no error channel here: `Segment()` returns an `int`.
+
+    `-1` is not invented. It is exactly what upstream's own `else` branch returns when the source is not a
+    `segmentBufReader` at all, and it already means "this reader cannot say which segment". `Offset()` needs
+    no divergence: it reads `b.off`, which is 0 and valid.
+
+    The corpus cannot pin this — querying it kills the fixture generator — so
+    `Tests/PromWALTests/WALSegmentTests.swift` asserts the port's answers directly and says why. Reachability
+    is what decides a panic's treatment (quirk 82's lesson), and this one is reachable: a `SegmentRange` past
+    the last segment, or a `Truncate` that removed everything.
+
+20. **`wlog`'s compression is `None` only.** `compression.Type` is a `string` alias with three values, and
+    the WAL's type byte carries a snappy and a zstd flag bit. The flags are read (a record carrying one is
+    rejected by name rather than misparsed) and `WALCompression` has all three cases, but neither codec is
+    implemented: `db.go:85` defaults `WALCompression` to `None`, so nothing in the port needs them, and the
+    snappy block format deserves its own slice with its own corpus rather than being smuggled into this one.
+
+    Scope: a WAL Prometheus wrote **with compression enabled** is one the port reports
+    `unsupported compression type: snappy` on rather than misreading. That is the right failure — loud, and
+    at the record rather than after it — but it is a real limitation, not a formality.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -2524,6 +2549,49 @@ changing behaviour.
     to `CustomValues`, which is read only for the custom-buckets schema and so survives a reuse across
     schemas. The port keeps the shape; the control that "fixes" it is an argued survivor for exactly this
     reason.
+
+174. **`Reader.Segment()` panics on a reader with no segments, and the nil `segs` is deliberate.**
+    `NewSegmentBufReader` returns `&segmentBufReader{}` — a zero value with a nil `segs` — when it is given
+    no segments, specifically so `Read` can answer `io.EOF` immediately. `Segment()` then does
+
+    ```go
+    if b, ok := r.rdr.(*segmentBufReader); ok {
+        return b.segs[b.cur].Index()
+    }
+    ```
+
+    with no guard, so it is `index out of range [0] with length 0`. Two ordinary situations reach it: a
+    `SegmentRange` whose `First` is past the last segment, and a `Truncate` that removed every segment. The
+    corpus found it by reaching it — the fixture generator crashed — which is also why it cannot be pinned
+    differentially. See exception 19 for what the port does instead.
+
+175. **`Close` and `nextSegment` must NOT flush an empty page, and upstream says why in a comment.**
+    Both guard the flush with `if w.page.alloc > 0`, and `Close`'s comment is *"We must not flush an empty
+    page as it would falsely signal the segment is done if we start writing to it again after opening."*
+    The mechanism is `setSegment`, which derives `donePages` from the segment file's **size**: an
+    unconditional flush writes 32 KB of zeros into a segment nothing was logged to, and on reopen that
+    segment looks like it has one completed page. The port flushed unconditionally at first and the
+    empty-WAL case caught it.
+
+176. **`LastSegmentAndOffset`'s offset is `donePages*pageSize + page.alloc`, so it can name a byte that has
+    not been written.** It is where the *next* record will go, not how far the file goes: the in-memory page
+    contributes `alloc` whether or not it has been flushed, and a page that was just cleared contributes 0
+    rather than `pageSize`. Reading it as a file position — the port's first version returned `page.alloc`
+    alone — is wrong in both directions at once.
+
+177. **A segment can be LARGER than `segmentSize`, because a record is never split across segments.**
+    `log` compares the encoded length against the space left in the current segment and rotates if it does
+    not fit — and then writes the whole record into the new segment regardless of its size. A 40 KB record
+    with a one-page (32 KB) segment size produces a 0-byte segment 0 and a 64 KB segment 1. `segmentSize` is
+    a threshold for *starting* a new segment, not a bound on one, and a port that treated it as a bound
+    would split a record across two files and make every reader of that WAL fail.
+
+178. **`Truncate`'s `break` and `NewSegmentsRangeReader`'s `First`/`Last` asymmetry are both licensed by
+    `listSegments`, not by themselves.** `Truncate` iterates and `break`s at the first index at or above
+    its argument; the range reader `continue`s below `First` but `break`s above `Last`. All three are only
+    equivalent to a filter because `listSegments` returns the refs **sorted** and rejects a non-sequential
+    set. The controls that swap `break` for `continue` therefore survive, and the one on the sequentiality
+    check is the one that breaks — the pair is the unit of evidence, as quirk 65 puts it.
 
 ## Not ported
 

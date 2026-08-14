@@ -161,6 +161,7 @@
     "storage/listseries.jsonl": { "sha256": "be9e1eeaa101781a79f6d2ba6c229c44b5b94cd101f459583d8ff59691d3f537", "lines": 14 },
     "storage/mem-labels.jsonl": { "sha256": "6c014d18e98870f13f64ea59e8238ee1aa9b1ba647ca2af8292c16fef543d338", "lines": 15 },
     "storage/mem-select.jsonl": { "sha256": "51c08a76b4e309f3e524848025b906de7affd0567244b0dbde558278c80c3895", "lines": 25 },
-    "storage/memoized.jsonl": { "sha256": "827103284edf312725c249d423007992105197849e633379f6f6f8b863d113ca", "lines": 17 }
+    "storage/memoized.jsonl": { "sha256": "827103284edf312725c249d423007992105197849e633379f6f6f8b863d113ca", "lines": 17 },
+    "wal/segments.jsonl": { "sha256": "5616caa85c34613254331b4ebaac6f5cf933e18af5a326b95d7e6c63c84a4f87", "lines": 38 }
   }
 }
