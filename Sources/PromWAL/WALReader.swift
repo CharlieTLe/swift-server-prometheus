@@ -329,16 +329,29 @@ public func newWALSegmentsReader(_ fs: any PromFS, _ dir: String) throws -> Segm
 ///
 /// Note the asymmetry between the two bounds: `first` **continues** past an out-of-range index while `last`
 /// **breaks**. That is only equivalent to a filter because `listSegments` returns them sorted.
+///
+/// Both failure paths are WRAPPED, and the exact spelling matters because `Reader`'s callers surface it:
+/// `list segment in dir:%v: %w` and `open segment:%v in dir:%v: %w` — note there is no space after either
+/// colon. The port originally returned the bare underlying error and the pre-seeded gap case caught it.
 public func newWALSegmentsRangeReader(
     _ fs: any PromFS, _ ranges: [WALSegmentRange]
 ) throws -> SegmentBufReader {
     var segs: [WALSegment] = []
     for r in ranges {
-        let refs = try listWALSegments(fs, r.dir)
+        let refs: [WALSegmentRef]
+        do {
+            refs = try listWALSegments(fs, r.dir)
+        } catch {
+            throw WALError.wrapped("list segment in dir:\(r.dir)", error)
+        }
         for ref in refs {
             if r.first >= 0 && ref.index < r.first { continue }
             if r.last >= 0 && ref.index > r.last { break }
-            segs.append(try openReadWALSegment(fs, "\(r.dir)/\(ref.name)"))
+            do {
+                segs.append(try openReadWALSegment(fs, "\(r.dir)/\(ref.name)"))
+            } catch {
+                throw WALError.wrapped("open segment:\(ref.name) in dir:\(r.dir)", error)
+            }
         }
     }
     return SegmentBufReader(segs)

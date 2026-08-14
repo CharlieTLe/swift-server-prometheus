@@ -95,6 +95,17 @@ type walSegmentOut struct {
 	Bytes string `json:"bytes"`
 }
 
+// A file planted in the directory BEFORE `NewSize` runs, so the construction path sees a non-empty WAL.
+//
+// Three of the sweep's survivors need this and nothing else: every other case starts from an empty directory,
+// so `NewSize` never resumes and `listSegments` never sees a set that is unsorted or gappy. Note the names are
+// deliberately NOT `%08d` in two of the cases — `listSegments` accepts any integer filename, and "9" against
+// "10" is what tells a numeric sort apart from a lexicographic one.
+type walSeedFile struct {
+	Name  string `json:"name"`
+	Bytes string `json:"bytes"`
+}
+
 type walIn struct {
 	// In pages, so the fixture reads as "a 1-page segment" rather than "32768".
 	SegmentPages int     `json:"segmentPages"`
@@ -102,6 +113,9 @@ type walIn struct {
 	// The range handed to `NewSegmentsRangeReader`; -1 is open.
 	ReadFirst int `json:"readFirst"`
 	ReadLast  int `json:"readLast"`
+	// Planted before `NewSize`. Omitted from every case that does not use it, so adding this field left the
+	// existing fixture bytes untouched.
+	PreSeed []walSeedFile `json:"preSeed,omitempty"`
 }
 
 type walOut struct {
@@ -146,10 +160,24 @@ func genWALSegments(e *emitter) {
 
 		out := walOut{Segments: []walSegmentOut{}, Read: []string{}}
 
+		// Planted before construction, because `NewSize` reads the directory to pick its segment index.
+		for _, sf := range in.PreSeed {
+			if err := os.WriteFile(filepath.Join(dir, sf.Name), unrleHex(sf.Bytes), 0o666); err != nil {
+				panic(err)
+			}
+		}
+
 		w, err := wlog.NewSize(
 			slog.New(slog.DiscardHandler), nil, dir, in.SegmentPages*walPageSize, compression.None)
 		if err != nil {
-			panic(err)
+			// A GAP in the planted indices makes this fail rather than panic — `NewSize` calls `Segments`,
+			// which calls `listSegments`, which rejects a non-sequential set. That is a case, not a crash.
+			out.OpErr = strings.ReplaceAll(err.Error(), dir, "<dir>")
+			walReadBack(dir, in, &out)
+			out.OpErr = strings.ReplaceAll(out.OpErr, dir, "<dir>")
+			e.emit(fmt.Sprintf("wal/%03d/pages%d", n, in.SegmentPages), in, out)
+			n++
+			return
 		}
 
 		for _, op := range in.Ops {
@@ -417,4 +445,30 @@ func genWALSegmentCases(emit func(walIn)) {
 		many = append(many, markedRecord(90+i%7, byte(0xc0+i%16)))
 	}
 	emit(all(4, logOp(many...)))
+
+	// ---- A pre-seeded directory, which is the only way to reach `NewSize`'s resume arithmetic and
+	// `listSegments`' two invariants. See `walSeedFile`. ----
+	seeded := func(seed []walSeedFile, ops ...walOp) walIn {
+		in := all(2, ops...)
+		in.PreSeed = seed
+		return in
+	}
+	// One existing segment: the new one must be `last + 1`, never `last`. Reusing the index would truncate
+	// a segment a reader may still need.
+	emit(seeded([]walSeedFile{{Name: "00000005", Bytes: ""}}, logOp(smallRecord(1))))
+	// A non-empty existing segment, so the resumed index is picked over a file with real bytes in it.
+	emit(seeded(
+		[]walSeedFile{{Name: "00000000", Bytes: smallRecord(1, 2, 3)}}, logOp(smallRecord(4))))
+	// "9" against "10": sorted NUMERICALLY these are sequential and the next index is 11; sorted
+	// lexicographically they are 10 then 9, which the sequentiality check then rejects. So this one case
+	// separates the two sorts.
+	emit(seeded(
+		[]walSeedFile{{Name: "9", Bytes: ""}, {Name: "10", Bytes: ""}}, logOp(smallRecord(1))))
+	// A GAP, which is an error out of `NewSize` itself rather than a WAL that opens.
+	emit(seeded([]walSeedFile{{Name: "0", Bytes: ""}, {Name: "2", Bytes: ""}}))
+	// A non-integer filename is SKIPPED rather than rejected, which is how a `checkpoint.NNNNNN` directory
+	// lives alongside the segments.
+	emit(seeded(
+		[]walSeedFile{{Name: "00000000", Bytes: ""}, {Name: "checkpoint.000123", Bytes: ""}},
+		logOp(smallRecord(1))))
 }
