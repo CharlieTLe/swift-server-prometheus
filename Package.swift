@@ -284,7 +284,7 @@ let package = Package(
         ),
         .testTarget(
             name: "PromWALTests",
-            dependencies: ["PromWAL", "PromFS", "PromRecord", "GoOracleSupport", "GoCompat"]
+            dependencies: ["PromWAL", "PromFS", "PromHash", "PromRecord", "GoOracleSupport", "GoCompat"]
         ),
         .testTarget(
             name: "PromRecordTests",

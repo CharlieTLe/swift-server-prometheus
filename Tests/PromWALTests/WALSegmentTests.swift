@@ -68,11 +68,20 @@ struct WALOp: Codable, Sendable {
     var index: Int?
 }
 
+/// A file planted before `WL` is constructed. Three controls need it and nothing else: every other case
+/// starts from an empty directory, so `NewSize` never resumes an existing WAL and `listSegments` never sees a
+/// set that is unsorted or gappy.
+struct WALSeedFile: Codable, Sendable {
+    var name: String
+    var bytes: String
+}
+
 struct WALIn: Codable, Sendable {
     var segmentPages: Int
     var ops: [WALOp]?
     var readFirst: Int
     var readLast: Int
+    var preSeed: [WALSeedFile]?
 }
 
 struct WALSegmentOut: Codable, Equatable, Sendable {
@@ -96,6 +105,64 @@ struct WALOut: Codable, Equatable, Sendable {
     var readerHasNoSegments: Bool
 }
 
+// MARK: - The read-back half
+
+/// The oracle's `walReadBack`, and the ORDER matters: Go assigns `SegFirst`/`SegLast` even when `Segments`
+/// errors (they are 0/0 then), and it returns **early** when the range reader cannot be built, leaving
+/// `readerHasNoSegments` false and both accessors at 0. Shared by the write-program cases and the raw-bytes
+/// ones, exactly as it is upstream.
+func walReadBack(
+    _ fs: InMemoryFS, _ dir: String, readFirst: Int, readLast: Int, _ out: inout WALOut
+) {
+    for name in ((try? fs.list(dir)) ?? []).sorted() {
+        guard let h = try? fs.openForReading("\(dir)/\(name)"),
+            let bytes = try? h.read(offset: 0, length: h.size)
+        else { continue }
+        try? h.close()
+        out.segments.append(WALSegmentOut(name: name, size: bytes.count, bytes: rleHex(bytes)))
+    }
+
+    do {
+        let (first, last) = try walSegments(fs, dir)
+        out.segFirst = first
+        out.segLast = last
+    } catch {
+        out.opErr = String(describing: error)
+        out.segFirst = 0
+        out.segLast = 0
+    }
+
+    let sr: SegmentBufReader
+    do {
+        sr = try newWALSegmentsRangeReader(
+            fs, [WALSegmentRange(dir: dir, first: readFirst, last: readLast)])
+    } catch {
+        out.readErr = String(describing: error).replacingOccurrences(of: dir, with: "<dir>")
+        return
+    }
+
+    let r = WALReader(sr)
+    while r.next() {
+        out.read.append(rleHex(r.record))
+    }
+    if let e = r.err {
+        // The oracle scrubs its temp directory out of the message; the port's directory is literally
+        // `wal`, so the two agree only if this one is scrubbed the same way.
+        out.readErr = String(describing: e).replacingOccurrences(of: dir, with: "<dir>")
+    }
+    let refs = (try? listWALSegments(fs, dir)) ?? []
+    out.readerHasNoSegments = !refs.contains { rf in
+        if readFirst >= 0 && rf.index < readFirst { return false }
+        if readLast >= 0 && rf.index > readLast { return false }
+        return true
+    }
+    if !out.readerHasNoSegments {
+        out.readSegment = r.segment
+        out.readOffset = r.offset
+    }
+    try? sr.close()
+}
+
 @Suite("wal: the segment format, and the reader over the writer's own bytes")
 struct WALSegmentTests {
 
@@ -109,8 +176,27 @@ struct WALSegmentTests {
                 opErr: "", read: [], readErr: "", readSegment: 0, readOffset: 0,
                 readerHasNoSegments: false)
 
-            let w = try WL(
-                fs: fs, dir: dir, segmentSize: input.segmentPages * pageSize, compress: .none)
+            // Planted before construction, because `NewSize` reads the directory to pick its index.
+            if let seed = input.preSeed, !seed.isEmpty {
+                try fs.createDirectory(dir)
+                for sf in seed {
+                    let sh = try fs.createFile("\(dir)/\(sf.name)")
+                    try sh.append(unrleHex(sf.bytes))
+                    try sh.close()
+                }
+            }
+
+            // Construction can legitimately FAIL: a gap in the planted indices makes `walSegments` throw out
+            // of `init`. Go returns that error from `NewSize` rather than panicking, so it is a case.
+            let w: WL
+            do {
+                w = try WL(
+                    fs: fs, dir: dir, segmentSize: input.segmentPages * pageSize, compress: .none)
+            } catch {
+                out.opErr = String(describing: error)
+                walReadBack(fs, dir, readFirst: input.readFirst, readLast: input.readLast, &out)
+                return out
+            }
 
             for op in input.ops ?? [] {
                 do {
@@ -145,41 +231,7 @@ struct WALSegmentTests {
                 if out.opErr.isEmpty { out.opErr = String(describing: error) }
             }
 
-            for name in try fs.list(dir).sorted() {
-                let h = try fs.openForReading("\(dir)/\(name)")
-                let bytes = try h.read(offset: 0, length: h.size)
-                try h.close()
-                out.segments.append(
-                    WALSegmentOut(name: name, size: bytes.count, bytes: rleHex(bytes)))
-            }
-
-            let (first, last) = try walSegments(fs, dir)
-            out.segFirst = first
-            out.segLast = last
-
-            let refs = try listWALSegments(fs, dir)
-            out.readerHasNoSegments = !refs.contains { r in
-                if input.readFirst >= 0 && r.index < input.readFirst { return false }
-                if input.readLast >= 0 && r.index > input.readLast { return false }
-                return true
-            }
-
-            let sr = try newWALSegmentsRangeReader(
-                fs, [WALSegmentRange(dir: dir, first: input.readFirst, last: input.readLast)])
-            let r = WALReader(sr)
-            while r.next() {
-                out.read.append(rleHex(r.record))
-            }
-            if let e = r.err {
-                // The oracle scrubs its temp directory out of the message; the port's directory is
-                // literally `wal`, so the two agree only if this one is scrubbed the same way.
-                out.readErr = String(describing: e).replacingOccurrences(of: dir, with: "<dir>")
-            }
-            if !out.readerHasNoSegments {
-                out.readSegment = r.segment
-                out.readOffset = r.offset
-            }
-            try sr.close()
+            walReadBack(fs, dir, readFirst: input.readFirst, readLast: input.readLast, &out)
             return out
         }
     }

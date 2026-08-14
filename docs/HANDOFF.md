@@ -1,14 +1,17 @@
 # Handoff
 
-Written at the end of the session that added **`tsdb/wlog`'s segment format** to Phase 7.
+Written at the end of the session that added **`tsdb/wlog`'s segment format and its corruption corpus** to
+Phase 7.
 
 Phase 5's exit gate passes **2,183 of 2,183 assertions, zero failures and zero skips**. Phase 6 has
 twenty-three pinned slices and a complete READ path: a block Prometheus wrote can be opened, matched,
 selected, trimmed and read as samples or chunks, with every layer pinned against upstream on real files
-(§6m-§6w). **Phase 7 has two slices**: §7a lands `tsdb/record` in full — the WAL's wire format, both
-directions — and §7b lands `tsdb/wlog`'s segment format, so **the port can now write and read back a WAL**
-(uncompressed; exception 20). Nothing yet touches `ChunkDiskMapper`, `head.go`, `db.go` or `compact.go`, so
-the port still cannot produce a block outside a test, and the two read-path gaps §6w records stay open.
+(§6m-§6w). **Phase 7 has three slices**: §7a lands `tsdb/record` in full — the WAL's wire format, both
+directions — §7b lands `tsdb/wlog`'s segment format, so **the port can now write and read back a WAL**
+(uncompressed; exception 20), and §7c lands the **corruption corpus** that pins the reader's rejection paths,
+taking the control sweep from 22 survivors to 9 and finding two missing error wraps. Nothing yet touches
+`ChunkDiskMapper`, `head.go`, `db.go` or `compact.go`, so the port still cannot produce a block outside a test,
+and the two read-path gaps §6w records stay open.
 
 **Five things to read before adding a slice**, because each cost a session to learn:
 
@@ -41,10 +44,10 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 4 — `PromQLParser` | done |
 | 5 — engine + storage protocols | **DONE. 2,183 of 2,183 assertions pass — zero failures, zero skips.** Every evaluator arm, every runner directive, and every start-timestamp assertion. The gate has nothing left to measure. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). and **`chunkenc`'s metadata half** — `appendable`, the chunk-cut/header rules and the position-based hint derivation, wired into `MemStorage`, which took the gate to zero failures (§5e(c)). and **`info`** — `promql/info.go` plus `regexp.QuoteMeta`, 41 of `info.test`'s 42 (§5e(d)). and **`label_replace`**, on a new capture-tracking Pike VM in `PromRegex` (§5e(e)) — the last unported arm. and the last 11 **runner directives** (§5e(f)). Nothing in Phase 5 is outstanding. Next: **Phase 6's chunk ENCODER** — `tsdb/chunkenc/xor.go` on top of `wip/phase6-bstream` — which is also what the gate's last 23 skips wait on |
 | 6 — TSDB | **The READ path is closed.** Twenty-three pinned slices. `chunkenc` in full (metadata half, `bstream`, `xor.go`, `xor2.go`, `varbit.go`), the postings algebra and loser tree, `FindIntersectingPostings`, the index READER and WRITER (byte-identical files), `PromFS` (ADR-15), `chunks.Writer`/`Reader`, `meta.json` + `ULID`, `BlockReader`, `PostingsForMatchers`, the label queries with matchers, the deletion-interval arithmetic, `DeletedIterator`, `blockBaseSeriesSet`, both `populateWithDel*` iterators, and both queriers (§6m-§6w). A block Prometheus wrote can be opened, matched, selected, trimmed and read as samples or chunks, every layer pinned against upstream on real files. **The WRITE path is NOT started**: nothing here touches `compact.go`, `head.go`, `db.go` or the WAL, so the port cannot produce a block outside a test. Two read-path gaps stay open by construction and are Phase 7's (`Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes). Deliberately unported: `tombstones`' file reader (exception 16), `ShardedPostings`, `populateChunksFromIterable` — all three need the Head |
-| 7 — TSDB write | **TWO SLICES LANDED. §7a: `tsdb/record` in full** — the WAL's wire format, both directions, 469 differential cases. The type table, `MetricType`'s two conversions, and `Encoder`/`Decoder` for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers and the integer/float histogram records in V1, V2 and custom-buckets flavours. Two new targets mirroring Go's package boundaries: `PromRecord` (`tsdb/record`) and `PromTombstones` (`tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, plus `Stone`). Six quirks recorded, **two of them upstream bugs**: `samplesV2` measures the caller's accumulator to find the record's first entry (quirk 168, which `wlog/checkpoint.go` walks into), and the `minSize` capacity heuristic *discards* that accumulator (exception 18, the one declared divergence — Swift has no `make(len, cap)`). `Decbuf`'s varint reads were quadratic and are not any more. **§7b: `tsdb/wlog`'s segment format** — the 32 KB page framing, the `[type\|flags][BE16 length][BE32 CRC-32C]` fragment header, `WL` with `Log`/`NextSegment`/`Truncate`/`Close`, the segment directory, `SegmentBufReader` and `Reader`'s whole fragment grammar, in a new `PromWAL` target. 38 differential cases driven as a *program* (a segment size, a list of writes, a read range), and 56 negative controls scoring **34 broke / 22 survived** — the survivors dominated by one gap: the corpus is a writer→reader round trip, so no reader-side *rejection* path (CRC, length bound, grammar, padding, torn record) is reachable at all. A **corruption corpus is the outstanding work**, and it closes §6w's two read-path gaps too. **So the port can now write a WAL and read it back** — uncompressed only (exception 20). Five quirks (174-178), one new declared divergence (exception 19, `Reader.Segment()` returning `-1` where upstream panics), and a `PromFS` POSIX-fidelity fix: a write to a removed path no longer resurrects it. **Not started: `ChunkDiskMapper`, `head.go`, `head_append.go`, `head_wal.go`, `compact.go`** — so the port still cannot produce a block outside a test, and §6w's two read-path gaps stay open. §7b's tail has the ordering |
+| 7 — TSDB write | **TWO SLICES LANDED. §7a: `tsdb/record` in full** — the WAL's wire format, both directions, 469 differential cases. The type table, `MetricType`'s two conversions, and `Encoder`/`Decoder` for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers and the integer/float histogram records in V1, V2 and custom-buckets flavours. Two new targets mirroring Go's package boundaries: `PromRecord` (`tsdb/record`) and `PromTombstones` (`tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, plus `Stone`). Six quirks recorded, **two of them upstream bugs**: `samplesV2` measures the caller's accumulator to find the record's first entry (quirk 168, which `wlog/checkpoint.go` walks into), and the `minSize` capacity heuristic *discards* that accumulator (exception 18, the one declared divergence — Swift has no `make(len, cap)`). `Decbuf`'s varint reads were quadratic and are not any more. **§7b: `tsdb/wlog`'s segment format** — the 32 KB page framing, the `[type\|flags][BE16 length][BE32 CRC-32C]` fragment header, `WL` with `Log`/`NextSegment`/`Truncate`/`Close`, the segment directory, `SegmentBufReader` and `Reader`'s whole fragment grammar, in a new `PromWAL` target. 43 differential cases driven as a *program* (a segment size, a list of writes, a read range), five of them planting a pre-seeded directory. **§7c: the corruption corpus** — a SECOND input shape whose cases are literal fragments (raw type byte, payload, length/CRC overrides, truncation) rather than a write program, because a write program cannot express "one bit flipped". 37 cases; it took the sweep from **22 survivors to 9** (57 controls, 48 broke) and found a real defect: `NewSegmentsRangeReader`'s two error wraps (`list segment in dir:%v`, `open segment:%v in dir:%v`) were missing. Quirks 179-180, the first being that the faked page padding **erases the torn-record signal**, so a torn final record is normally dropped silently and only a page-aligned cut reports it. **So the port can now write a WAL and read it back, and reject a corrupt one** — uncompressed only (exception 20). Five quirks (174-178), one new declared divergence (exception 19, `Reader.Segment()` returning `-1` where upstream panics), and a `PromFS` POSIX-fidelity fix: a write to a removed path no longer resurrects it. **Not started: `ChunkDiskMapper`, `head.go`, `head_append.go`, `head_wal.go`, `compact.go`** — so the port still cannot produce a block outside a test, and §6w's two read-path gaps stay open. §7b's tail has the ordering |
 | 8–10 | not started, and the ordering below is a reading of `docs/ROADMAP.md` rather than new work. **8** ingest (scrape pool, target discovery, relabelling); **9** the server (HTTP API, the query endpoints, the prebuilt UI bundle per PORTING.md's "Not ported"); **10** remote read/write, exemplars, the OOO head, agent mode, perf. **Scale, so it is not rediscovered:** these are roughly 95k lines of Go against ~4.5k ported per session at this fidelity bar (an oracle suite plus an argued control sweep per slice). That bar is what caught ADR-10a, the file-index-vs-filename bug, the four survivor-diagnosis modes and — this session — a capacity heuristic that a comment had already dismissed as unobservable; lowering it for 8–10 would be a legitimate decision but must be recorded in PORTING.md as a departure, not taken silently |
 
-Green as of this commit: **339,611 committed fixture lines, 575 tests** across 23 test targets, on both
+Green as of this commit: **339,653 committed fixture lines, 578 tests** across 23 test targets, on both
 Swift 6.4 (Xcode 27) and the Swift 6.1 floor. The case count is `wc -l` over `Fixtures/**/*.jsonl` and the
 test count is the sum of the `Test run with N tests` lines — the figures in this line have drifted twice
 because they were computed some other way, so both methods are stated to make them reproducible rather than
@@ -71,14 +74,14 @@ Sources/            src     generated
   PromTombstones      164         –
   PromBlock         1,990         –
   PromRecord        1,577         –
-  PromWAL           1,056         –
+  PromWAL           1,069         –
   PromStorage       1,740         –
   PromTestStorage     522         –
   PromQLParser      5,995       550
   PromQL           12,833         –
   PromQLTest        1,255         –
-Tests             17,847
-oracle (Go)       26,936
+Tests             18,095
+oracle (Go)       27,265
 ```
 
 Every figure above is plain `wc -l` over `Sources/<target>/**/*.swift`, split by whether the file is under
@@ -2485,7 +2488,7 @@ call rather than concluding the branch is dead.
 5. **`compact.go` + `blockwriter.go`** — Head to block, which closes §6w's two declared gaps because it is
    the first thing that can put a non-XOR or malformed chunk in a fixture input.
 
-### 7b. `tsdb/wlog`'s segment format — LANDED. The port can now write a WAL; the reader's rejection paths are NOT yet pinned.
+### 7b. `tsdb/wlog`'s segment format — LANDED. The port can now write a WAL. (§7c then pinned the reader's rejection paths.)
 
 §7a ported the records; this is the envelope. A new `PromWAL` target with `WALFormat.swift`,
 `WALWriter.swift` and `WALReader.swift`: the 32 KB page framing, the
@@ -2642,15 +2645,80 @@ was missing the `.` on its enum case; both silently matched nothing. The `run()`
 exactly as designed — but a `SKIP` left unfixed is a control that does not exist, and these two sat that way.
 `flushed is not advanced` breaks; the other survives, and it belongs to the corruption gap above.
 
+### 7c. The `wlog` CORRUPTION corpus — the reader's rejection paths are now pinned
+
+§7b's outstanding half, and it did what it was built to do: **the sweep went from 22 survivors to 9** (57
+controls now, 48 broke, zero skipped), all nine reader-side validation controls now break, and it found a real
+defect in the port on the way.
+
+The mechanism is a **second oracle input shape**. `wal/segments` is a write program, and a write program
+cannot express "one bit flipped" — every byte it produces is well-formed by construction. `wal/corrupt`'s
+input is a **fragment list** instead: a raw type byte, a payload, and optional overrides of the length and
+CRC fields, plus an optional truncation of the assembled stream. That is upstream's own `testReaderCases`
+vocabulary (`reader_test.go:63`) plus the three things it lacks, because `encodedRecord` always computes a
+correct CRC and never truncates — a wrong CRC, a truncated stream, and a raw type byte so the invalid types
+5/6/7 and the flag bits are expressible. 37 cases; both suites share one `walReadBack`, as upstream does.
+
+**The defect it found: two error-wrapping sites were missing.** `NewSegmentsRangeReader` wraps both of its
+failures — `list segment in dir:%v: %w` and `open segment:%v in dir:%v: %w`, with **no space after either
+colon** — and the port returned the bare underlying error. Nothing in the round-trip corpus could see it,
+because that corpus never makes `listSegments` fail; the pre-seeded *gap* case does, on the first run.
+
+**The finding worth carrying (quirk 179): the faked padding ERASES the torn-record signal.** `Next` detects a
+torn write by checking `curRecTyp` after its loop — but `SegmentBufReader` pads a short segment with zeros to
+the page boundary, those zeros read as a **page terminator**, and the terminator *overwrites* `curRecTyp`. So
+a segment holding one `recFirst` fragment and nothing else reads zero records with **no error at all**, and
+only a cut on an exact page boundary answers `last record is torn`. That is upstream's behaviour, it is pinned
+rather than assumed, and it means a torn final record is normally dropped silently. It is also why `readFull`'s
+two arms are asserted against a bare `WALByteReader` in `WALCorruptTests`: no segment file can hand the reader
+a partial read.
+
+**One family is deliberately excluded (quirk 180, exception 20).** A flagged record is not merely noticed
+upstream, it is **decompressed** — `snappy: corrupt input` for the snappy bit, `unexpected EOF` for the zstd
+one. The port rejects by name, so a fixture case would pin a declared disagreement; those three are asserted
+Swift-side next to their exception instead. The high bits are *not* flags (`recTypeMask` is 7), that case
+agrees, and it stays in the corpus.
+
+**The cheap companion, in the same slice: a pre-seeded segment directory.** Five cases plant files before
+`NewSize` runs, which is the only way to reach its resume arithmetic and `listSegments`' two invariants — and
+one of them is worth stealing: planting **`9` and `10`** separates a numeric sort from a lexicographic one in
+a single case, because numerically they are sequential and the next index is 11, while lexicographically they
+are 10 then 9 and the sequentiality check rejects them. A gap (`0` and `2`) is an error out of `NewSize`
+itself, and `checkpoint.000123` is skipped rather than rejected, which is how a checkpoint directory lives
+alongside the segments.
+
+**A harness trap this created, and the reason to state it: the sweep's filter had to change.** `swift test
+--filter` matches the suite TYPE name, so the existing `'WALSegmentTests'` would have run none of the
+corruption cases — the nine controls the new corpus exists to close would have reported SURVIVED again, and it
+would have looked like the corpus had failed rather than like the sweep had not run it. The filter is now
+`'WAL(Segment|Corrupt)Tests'`. §4's "a filter that matches nothing reports success", one step subtler because
+this one *did* match something.
+
+#### The 9 that still survive, and what each needs
+
+- **3 are proofs** and stay argued in the script (the two `break`/`continue` swaps of quirk 178, and
+  `shouldClear = forceClear`).
+- **1 is a declared deferral** — `donePages = seg.size / pageSize`, which needs `OpenWriteSegment`.
+- **2 are the `left` arithmetic**, still open and still the most interesting: a record in the 7-byte window
+  rotates one segment earlier or later, but the corpus reads records back *in order* rather than asserting
+  which segment each landed in, so the difference is invisible. **Asserting the per-segment record
+  distribution is what closes these**, not more record sizes.
+- **1 is `every record flushes, not just the batch's last`** — almost certainly a proof (extra flushes leave
+  the same bytes once `Close` has run) but not yet argued to the standard the other three are.
+- **1 is the `k == pageSize` terminator arm** and **1 is `the fake padding runs past the page boundary`**.
+  Both are about the padding emulation, and quirk 179 is the reason to suspect they interlock the way quirk
+  65's pair does — perturb both together before calling either a gap.
+
+The three segment-directory survivors (`NewSize reuses the last segment index`, `segments are not sorted
+numerically`, `a gap in the segment indices is accepted`) are **closed** by the pre-seeded cases, as is the new
+wrap control. Every one of the remaining nine is a *known* gap with a named next step, which is the difference
+between this and the state §7b was committed in.
+
 #### Next in Phase 7
 
-0. **The `wlog` CORRUPTION corpus** — the outstanding half of §7b, and the reason 22 controls survive. It
-   needs a **second oracle input shape**: a directory of literal segment bytes plus the reader's answer,
-   rather than a write program. That is what makes the CRC check, the length bound, `validateRecord`'s arms,
-   the padding check, `unexpectedEOF` and the torn-record check testable at all. Do it with the two cheap
-   companions in the same slice — a pre-seeded segment directory (which closes the three `listSegments`/
-   `NewSize` survivors) and a per-segment record-distribution assertion (which closes the two `left` ones).
-   Upstream's `reader_test.go` has the mutation vocabulary to copy.
+0. **The `wlog` CORRUPTION corpus** — **DONE, as §7c above.** 22 survivors down to 12, nine reader-side
+   controls closed, two missing error wraps found. What is left of it is named in §7c's last section, and the
+   two `left` controls are the pick of them.
 1. **`tsdb/chunks`' `ChunkDiskMapper`** — the m-mapped head chunks, and the rest of `ChunkDiskMapperRef`
    (§7a added the type only).
 2. **`head.go` + `head_append.go`** — `MemPostings` (deliberately deferred from §6d), `memSeries`, the

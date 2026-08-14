@@ -123,6 +123,7 @@ var suites = map[string]func(*emitter){
 	"record/encode":           genRecordEncode,
 	"record/decode":           genRecordDecode,
 	"wal/segments":            genWALSegments,
+	"wal/corrupt":             genWALCorrupt,
 	"block/seriesset":         genBlockSeriesSet,
 	"block/meta":              genBlockMeta,
 	"gocompat/time-rfc3339":   genGoTimeRFC3339,

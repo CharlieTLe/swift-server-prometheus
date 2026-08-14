@@ -2593,6 +2593,43 @@ changing behaviour.
     set. The controls that swap `break` for `continue` therefore survive, and the one on the sequentiality
     check is the one that breaks — the pair is the unit of evidence, as quirk 65 puts it.
 
+179. **`SegmentBufReader`'s faked padding ERASES the torn-record signal, so a torn WAL usually reports no
+    error at all.** This is the most surprising thing the corruption corpus found, and it inverts the
+    intuitive reading of `Reader.Next`.
+
+    `Next` detects a torn write by checking `curRecTyp` *after* its loop: if the stream ended cleanly while
+    the last fragment was a `recFirst` or `recMiddle`, the record was never completed and the answer is
+    `last record is torn`. That works only if the stream actually ends there. It usually does not:
+    `segmentBufReader.Read` fakes **zero padding** up to the page boundary whenever a segment's bytes run out
+    mid-page (deliberately, so it does not advance `cur` and blame the wrong segment). Those zeros are read as
+    a **page terminator**, and the terminator assigns `curRecTyp = recPageTerm` — overwriting the very
+    evidence the post-loop check is looking for.
+
+    So, measured against Go:
+
+    - a segment containing one `recFirst` fragment and nothing else reads **zero records with NO error**;
+    - a segment cut in the middle of a `recFirst`/`recLast` pair, likewise;
+    - only a cut on an exact **page boundary** — where no padding is faked, so the read genuinely ends —
+      answers `last record is torn`.
+
+    The consequence for the port is that the torn check is nearly unreachable through a segment file, which is
+    why `Fixtures/wal/corrupt.jsonl` pins the page-aligned case and `WALCorruptTests` asserts the other two
+    against a bare `WALByteReader`. The consequence for anyone *using* the WAL is larger and is upstream's,
+    not ours: a torn final record is silently dropped rather than reported, unless it happens to end on a page
+    boundary.
+
+180. **`Reader` DECOMPRESSES a flagged record rather than merely noting the flag**, which is what makes
+    exception 20 a real limitation rather than a formality. A type byte with the snappy bit set sends the
+    payload through `compression.Decode`, so a payload that is not a valid snappy frame answers
+    `snappy: corrupt input` — and the zstd bit answers `unexpected EOF`. Neither message mentions the WAL.
+
+    The port rejects the record by name instead (`unsupported compression type: snappy`), so these cases are
+    **excluded from the differential corpus on purpose**: keeping them would pin a disagreement the port is
+    documented to have. They are asserted in `WALCorruptTests` instead, next to the exception that explains
+    them. Note also that the three high bits of the type byte are *not* flags — `recTypeMask` is 7, so a byte
+    with the high bit set reads as its low three bits and the compression flags are tested independently. That
+    case agrees with Go and stays in the corpus.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

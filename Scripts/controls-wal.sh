@@ -47,7 +47,11 @@ run() {
     restore
     return
   fi
-  control_verdict "$1" 'WALSegmentTests' 60
+  # The filter is a REGEX over the suite TYPE name and it must cover BOTH suites. Naming only
+  # `WALSegmentTests` here would leave every corruption case unrun, so the nine reader-side controls the
+  # `wal/corrupt` corpus exists to close would report SURVIVED again — §4's "a filter that matches nothing
+  # reports success", one step subtler because it does match something.
+  control_verdict "$1" 'WAL(Segment|Corrupt)Tests' 60
   restore
 }
 
@@ -118,6 +122,12 @@ perl -0pi -e 's/        if page\.alloc > 0 \{\n            try flushPage\(forceC
 perl -0pi -e 's/        if page\.alloc > 0 \{\n            try flushPage\(forceClear: true\)\n        \}\n        guard let current = segment/        try flushPage(forceClear: true)\n        guard let current = segment/' "$WR"; run "nextSegment flushes an empty page"
 perl -0pi -e 's/        return \(last, donePages \* pageSize \+ page\.alloc\)/        return (last, page.alloc)/' "$WR"; run "LastSegmentAndOffset omits the completed pages"
 perl -0pi -e 's/        return \(last, donePages \* pageSize \+ page\.alloc\)/        return (last, donePages * pageSize)/' "$WR"; run "LastSegmentAndOffset omits the partial page"
+
+perl -0pi -e 's/            throw WALError\.wrapped\("list segment in dir:\\\(r\.dir\)", error\)/            throw error/' "$RD"; run "the listSegments error is not wrapped with its context"
+# Note the sibling wrap, `open segment:%v in dir:%v`, has NO control and cannot have one: `listSegments` has
+# already filtered the names to integers, so `openReadWALSegment`'s `not a valid filename` is unreachable from
+# here, and the only other way it fails is a file removed between the list and the open. Unreachable-by-
+# construction rather than a corpus gap — quirk 52's shape, recorded so the absence is not read as an oversight.
 
 echo "=== SegmentBufReader's padding emulation ==="
 perl -0pi -e 's/        if off % pageSize != 0 \{/        if false {/' "$RD"; run "a short segment is not zero-padded to a page"
