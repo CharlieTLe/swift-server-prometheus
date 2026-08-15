@@ -37,7 +37,9 @@
 //     series lands on one worker in record order. Serial replay is that same order.
 //   * **The chunk snapshot** (`EnableMemorySnapshotOnShutdown`, `loadChunkSnapshot`, `LastChunkSnapshot`) — a
 //     declared §7f omission, and it is what `snapIdx`/`snapOffset` exist for.
-//   * **The checkpoint** (`LastCheckpoint`, the `startFrom >= snapIdx` backfill) — §7h(c), with `truncateWAL`.
+//   * **The chunk snapshot's** `snapIdx`/`snapOffset` interaction with the checkpoint backfill: upstream only
+//     replays the checkpoint when `startFrom >= snapIdx`, because a snapshot newer than the checkpoint already
+//     contains it. With no snapshot, `snapIdx` is -1 and the condition always holds.
 //   * **The WBL** (`loadWBL`, `errLoadWbl`) and everything OOO — Phase 10.
 //   * **Histograms, exemplars and metadata records.** `loadWAL` decodes them upstream; here the record types
 //     are recognised and SKIPPED, exactly as upstream skips a type it does not know — but the skip is a
@@ -64,6 +66,12 @@ public enum HeadReplayError: Error, CustomStringConvertible {
         seriesRef: UInt64, lastMinTime: Int64, lastMaxTime: Int64, mint: Int64, maxt: Int64)
     /// Go: `fmt.Errorf("finding WAL segments: %w", e)`.
     case findingWALSegments(any Error)
+    /// Go: `fmt.Errorf("find last checkpoint: %w", err)`.
+    case findLastCheckpoint(any Error)
+    /// Go: `fmt.Errorf("open checkpoint: %w", err)`.
+    case openCheckpoint(any Error)
+    /// Go: `fmt.Errorf("backfill checkpoint: %w", err)`.
+    case backfillCheckpoint(any Error)
     /// Go: `fmt.Errorf("open WAL segment: %d: %w", i, err)`.
     case openWALSegment(Int, any Error)
     /// Go: `&wlog.CorruptionErr{Err: fmt.Errorf("decode %s: %w", …)}` — the port carries the record kind and the
@@ -77,6 +85,9 @@ public enum HeadReplayError: Error, CustomStringConvertible {
             return
                 "out of sequence m-mapped chunk for series ref \(ref), last chunk: [\(lmin), \(lmax)], new: [\(mint), \(maxt)]"
         case .findingWALSegments(let e): return "finding WAL segments: \(e)"
+        case .findLastCheckpoint(let e): return "find last checkpoint: \(e)"
+        case .openCheckpoint(let e): return "open checkpoint: \(e)"
+        case .backfillCheckpoint(let e): return "backfill checkpoint: \(e)"
         case .openWALSegment(let i, let e): return "open WAL segment: \(i): \(e)"
         case .decode(let kind, let segment, let offset, let e):
             return "decode \(kind): \(e) (segment \(segment), offset \(offset))"
@@ -132,23 +143,63 @@ extension Head {
             return  // "WAL not found"
         }
 
-        // Upstream backfills the last CHECKPOINT first (§7h(c)); without it, replay starts at the first segment
-        // the directory holds.
-        let (startFrom, endAt): (Int, Int)
+        // The last CHECKPOINT is backfilled FIRST, because it holds the records the live segments no longer do
+        // — `truncateWAL` deletes a segment only after a checkpoint covers it. A missing checkpoint is not an
+        // error (`ErrNotFound`); anything else is.
+        var checkpointDirName: String?
+        // `LastCheckpoint` returns index 0 alongside `ErrNotFound`, and upstream uses that zero: `startFrom` is
+        // the CHECKPOINT's index, never the WAL directory's first segment.
+        var startFrom = 0
         do {
-            (startFrom, endAt) = try walSegments(fsStorage, wal.dir)
+            let (cpdir, idx) = try lastCheckpoint(fsStorage, wal.dir)
+            checkpointDirName = cpdir
+            startFrom = idx
+        } catch let e as RecordError where e == .notFound {
+            checkpointDirName = nil
+        } catch {
+            throw HeadReplayError.findLastCheckpoint(error)
+        }
+
+        // Only `endAt` is taken from `Segments`; upstream discards the first index (`_, endAt, e :=`). The
+        // difference is visible on a WAL whose oldest segment is ABOVE the checkpoint's: replay then tries to
+        // open the segment that is missing and fails, rather than silently starting at whatever is there.
+        let endAt: Int
+        do {
+            (_, endAt) = try walSegments(fsStorage, wal.dir)
         } catch {
             throw HeadReplayError.findingWALSegments(error)
         }
+
         stats.walReplayStatus.min = startFrom
         stats.walReplayStatus.max = endAt
         stats.walReplayStatus.current = startFrom
 
-        if startFrom < 0 {
-            return  // No segments at all.
+        var multiRef: [HeadSeriesRef: HeadSeriesRef] = [:]
+
+        if let cpdir = checkpointDirName {
+            let sr: SegmentBufReader
+            do {
+                sr = try newWALSegmentsReader(fsStorage, cpdir)
+            } catch {
+                throw HeadReplayError.openCheckpoint(error)
+            }
+            // "A corrupted checkpoint is a hard error for now and requires user intervention. There's likely
+            // little data that can be recovered anyway."
+            do {
+                try loadWAL(WALReader(sr), multiRef: &multiRef, mmappedChunks: mmappedChunks)
+            } catch {
+                try? sr.close()
+                throw HeadReplayError.backfillCheckpoint(error)
+            }
+            try? sr.close()
+            // The segments the checkpoint covers are not replayed again.
+            startFrom += 1
         }
 
-        var multiRef: [HeadSeriesRef: HeadSeriesRef] = [:]
+        if startFrom > endAt {
+            // Nothing left to read: an empty directory (`endAt` is -1), or a checkpoint that covers all of it.
+            return
+        }
         for i in startFrom...endAt {
             let segment: WALSegment
             do {

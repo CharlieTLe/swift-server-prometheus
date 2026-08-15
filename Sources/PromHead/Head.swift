@@ -223,6 +223,9 @@ public final class Head {
     /// Go: `postings` — built UNORDERED, because replay adds refs out of order and `Init` calls
     /// `EnsureOrder` afterwards (§7e ported `newUnordered` for exactly this).
     public private(set) var postings: MemPostings
+    /// Go: `walExpiries` — series no longer in the head, and the time until which their WAL records must be
+    /// kept. Written by `gc`, read by the checkpoint's `keep` predicate (§7h(c)).
+    var walExpiries: [HeadSeriesRef: Int64] = [:]
     /// Go: `tombstones` — the Head's in-memory deletion intervals. `MemTombstones` landed with §7h(a); before
     /// that the field could not exist, which is what the file header's tombstone bullet recorded.
     public private(set) var tombstones: MemTombstones

@@ -255,6 +255,10 @@ public struct RefMmapMarker: Sendable, Equatable {
 /// Go: the errors `record`'s decoders return, whose text `head_wal.go` surfaces into
 /// `Head.Init`'s "read WAL" failure. Reproduced byte for byte.
 public enum RecordError: Error, CustomStringConvertible, Equatable {
+    /// Go: `ErrNotFound = errors.New("not found")`. It lives in `record` although nothing in `record` returns
+    /// it: `wlog.LastCheckpoint` and `tsdb.LastChunkSnapshot` do, and both are read by `Head.Init`, which tests
+    /// `errors.Is(err, record.ErrNotFound)` to tell "no checkpoint yet" from a real failure.
+    case notFound
     /// Go: `errors.New("invalid record type")` — Series, Metadata, Tombstones, Exemplars, MmapMarkers.
     case invalidRecordType
     /// Go: `fmt.Errorf("invalid record type %v, expected Samples(2) or SamplesV2(11)", typ)`, where `typ`
@@ -276,6 +280,8 @@ public enum RecordError: Error, CustomStringConvertible, Equatable {
 
     public var description: String {
         switch self {
+        case .notFound:
+            return "not found"
         case .invalidRecordType:
             return "invalid record type"
         case .invalidSamplesRecordType(let b):
