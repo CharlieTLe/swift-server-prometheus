@@ -35,6 +35,7 @@ let package = Package(
         .library(name: "PromTombstones", targets: ["PromTombstones"]),
         .library(name: "PromRecord", targets: ["PromRecord"]),
         .library(name: "PromWAL", targets: ["PromWAL"]),
+        .library(name: "PromHead", targets: ["PromHead"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -110,6 +111,10 @@ let package = Package(
 
         // Phase 7: `tsdb/wlog` — the segment framing the records travel in.
         .target(name: "PromWAL", dependencies: ["PromFS", "PromHash", "GoCompat"]),
+
+        // Phase 7: the Head. `tsdb/isolation.go` first, because `defaultIsolationDisabled` is false — every
+        // `NewHead` runs it, and every append takes an ID from it. See HANDOFF §7f.
+        .target(name: "PromHead", dependencies: ["PromChunks", "PromIndex", "PromWAL", "GoCompat"]),
 
         // Phase 7: `tsdb/record` — the WAL's wire format. Byte-exact, exported and stateless, which
         // makes it the one piece of the write path that can be pinned before `head.go` or `wlog` exists.
@@ -281,6 +286,10 @@ let package = Package(
                 "PromBlock", "PromFS", "PromIndex", "PromChunks", "PromChunkEnc", "PromStorage",
                 "PromTombstones", "GoOracleSupport", "GoCompat",
             ]
+        ),
+        .testTarget(
+            name: "PromHeadTests",
+            dependencies: ["PromHead", "GoOracleSupport", "GoCompat"]
         ),
         .testTarget(
             name: "PromWALTests",
