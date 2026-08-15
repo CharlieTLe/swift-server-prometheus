@@ -76,6 +76,7 @@
     "histogram/integer.jsonl": { "sha256": "3777104d411240d5f74a0259f8b7c573f1bd56471e3ae0369498257d5c298e0c", "lines": 425 },
     "histogram/nhcb-classic.jsonl": { "sha256": "2f0f9133f8f0a09a5149948b44c95b357be59e5bafe36b5ccb1e84349e74f427", "lines": 48 },
     "index/findintersecting.jsonl": { "sha256": "cb8943f6fdff3cb4b919cd1834d13a292f47c80aaabfb228ed140e3aa10cf227", "lines": 41 },
+    "index/mempostings.jsonl": { "sha256": "91cce97c7de10942d3fe4c509cbf57d72d1178fcae9aeedd42128eeff454412e", "lines": 17 },
     "index/pfm.jsonl": { "sha256": "4a17ac00e886ea497af967f00920ae1a635a2f8d26bc9b5ae476a2e7e0012b95", "lines": 10 },
     "index/postings.jsonl": { "sha256": "4551c3ccc7e08242928c2f984c2f6f3531d39c2590457523094f20fe969ca93c", "lines": 68 },
     "index/reader.jsonl": { "sha256": "c0882e8f410cb64b8ff04bb367df8d91eb86b5af056a1d44750b8bc577964bbe", "lines": 36 },
