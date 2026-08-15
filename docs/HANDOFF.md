@@ -2821,7 +2821,62 @@ which measures nothing and is exactly as misleading as a SKIP.
 `MemSeries` is deliberately **partial**: `ref` and `lset` only, because that is all the index reads. The chunk
 state arrives with `memSeries.append`, and `stripeSeries.gc`/`gcStaleSeries`/`iterForDeletion` wait for it.
 
-Still to come in §7f: `HeadOptions`/`NewHead`, the rest of `memSeries`, and `headAppender`'s float path.
+#### §7f(c) is BLOCKED, and the blocker is a §6 deferral the plan above missed
+
+Attempting `memSeries`'s chunk state stopped on a prerequisite, and it is worth recording precisely because the
+scoping plan should have caught it and did not.
+
+**`PromChunkEnc.Chunk` is a protocol with no conforming type.** Its own doc comment says so — *"Declared now so
+`storage` can refer to it; no conforming type exists until Phase 6"* — and Phase 6 never made one, because the
+block reader only ever needed `XORChunk` concretely. `grep -rn ": Chunk\b" Sources/` returns nothing.
+
+That blocks `cutNewHeadChunk` outright: `memSeries.headChunks.chunk` is a `chunkenc.Chunk`, and
+`cutNewHeadChunk` calls `chunkenc.NewEmptyChunk(e)` to build one from an encoding. Neither the polymorphic
+field nor the factory can be written until something conforms.
+
+The mismatch is small but real, and every item is a decision rather than a typo:
+
+| `Chunk` declares | `XORChunk`/`XOR2Chunk` provide |
+|---|---|
+| `func bytes() -> [UInt8]` | `var bytes: [UInt8]` |
+| `func encoding() -> Encoding` | `var encoding: Encoding` |
+| `func numSamples() -> Int` | `var numSamples: Int` |
+| `func reset(stream: [UInt8])` | `func reset(_ stream: [UInt8])` |
+| `func appender() throws -> any ChunkAppender` | `func appender() throws -> XORAppender` |
+
+Methods versus properties is the one to think about rather than paper over: upstream's `Chunk` is a Go
+interface so everything is a method, but the concrete types were written with properties because that is
+idiomatic Swift for a stored-ish value. **Changing the protocol to match the types is the cheaper direction**
+and costs no fidelity — the Go origin is an interface shape, not an observable — but it touches `PromStorage`
+and `PromStorage`'s ported signatures reference `Chunk`, so check those call sites before deciding.
+
+**It also closes a §6 deferral, which is why this belongs here rather than being a surprise.**
+`Sources/PromBlock/BlockReader.swift:160` already guards `enc == .xor` with the comment: *"XOR2 and the
+histogram encodings decode through their own iterators; a block containing them needs the same dispatch the
+Head will need, which is Phase 7's."* §6 saw this coming and named Phase 7 as the owner. So the prerequisite
+slice pays for itself twice.
+
+Scope of the prerequisite, and what it does NOT need:
+
+1. Conform `XORChunk` and `XOR2Chunk` to `Chunk` (reconciling the five signatures above).
+2. Add `newEmptyChunk(_ e: Encoding)` — Go's `chunkenc.NewEmptyChunk`, plus `IsValidEncoding`, which
+   `cutNewHeadChunk` consults and which falls back to `NewXORChunk()` for an invalid encoding rather than
+   failing.
+3. Close `BlockReader`'s `guard enc == .xor` for XOR2.
+
+The **histogram** chunk encodings are genuinely absent (`Sources/PromChunkEnc/` has `XORChunk`, `XOR2Chunk`,
+`Bstream`, `Varbit` and `HistogramMeta`, but no `HistogramChunk`/`FloatHistogramChunk`), so `newEmptyChunk`
+can only answer for the two float encodings for now. That is consistent rather than a new gap: §7f already
+defers histogram appends, and `chunkOpts.useXOR2` selects between exactly those two.
+
+Still to come in §7f, in order: **the `Chunk` conformance prerequisite above**, then `memSeries`'s chunk state
+(`memChunk`, `mmappedChunk`, `cutNewHeadChunk`, `appendPreprocessor`, `append`, `minTime`/`maxTime`), then
+`HeadOptions`/`NewHead`, then `headAppender`'s float path.
+
+Two constants already available, so they are not re-derived: `maxBytesPerXORChunkBeforeAppend`,
+`chunkEncoding(useXOR2:)` and `compatibleValues` all landed with §5e(c)'s metadata half. `rangeForTimestamp`
+lives in **`db.go`**, not `head.go` — `(t/width)*width + width` — and `computeChunkEndTime` is in
+`head_append.go`.
 
 #### The five slices, each independently pinnable
 
