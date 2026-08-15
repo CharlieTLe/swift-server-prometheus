@@ -2724,6 +2724,89 @@ Of the 10 that remain, four are proofs (the data-slice spelling is provably the 
 controls are unobservable *in this port's structure*, and are flagged to re-run if `openForAppending` lands),
 and six are gaps with a named next step.
 
+### 7f (scoping). The Head — and the correction that makes it FIVE slices, not one
+
+Written the way §5c and §6b were, because both were executed straight out of the doc. Nothing below is
+implemented; it is the research so the next session does not repeat it.
+
+#### The correction: `head.go` IS differentially testable, and an earlier reading of this said otherwise
+
+The claim was that `memSeries` and `headAppender` are unexported, so the Head can only be pinned through
+`tsdb.DB` — which would drag `db.go` (2,666 lines) into the same slice and make it indivisible. **That is
+wrong, and the mistake is the one §5's "is there an exported entry point?" question exists to prevent.**
+
+`NewHead` is exported, and so is its whole argument list:
+
+```go
+func NewHead(r prometheus.Registerer, l *slog.Logger, wal, wbl *wlog.WL,
+             opts *HeadOptions, stats *HeadStats) (*Head, error)
+```
+
+The `*wlog.WL` it wants is **§7b's**, which now exists. `Head` then exposes `Appender` (a
+`storage.Appender`), `Init`, `Truncate`, `NumSeries`, `MinTime`/`MaxTime`, `Meta`, `Size`, `Delete`,
+`Tombstones`, `Index`, `Chunks` and `Close`. So the oracle can stand up a real `Head`, append through the
+real appender, and read every one of those back — exactly as `storage/mem-select` already does for a real
+`tsdb.DB`. `stripeSeries`, `seriesHashmap`, `memSeries` and `headAppender` stay unexported and are pinned
+*through* that surface, which is the same arrangement `engine.go` has and works fine.
+
+**And `Init` does not force `head_wal.go` first.** `Init(minValidTime)` replays the WAL, so on an **empty**
+WAL directory it is very nearly a no-op. That is what splits the Head from its replay.
+
+#### The five slices, each independently pinnable
+
+1. **§7f — the Head core, no replay.** `HeadOptions`/`DefaultHeadOptions`/`NewHead`, `stripeSeries` +
+   `seriesHashmap` + `newStripeSeries`, `memSeries`, `headAppender`'s FLOAT path (`Append`, `Commit`,
+   `Rollback`), `memSeries.appendable`, `append`, `appendPreprocessor`, and the accessors
+   (`NumSeries`, `MinTime`, `MaxTime`, `Meta`, `Size`). Driven by `NewHead` → `Init(0)` on an empty WAL dir →
+   `Appender()` → `Append` → `Commit`, with the WAL and the chunk files (§7b, §7d) as the committed output on
+   top of the accessors. **This is the slice to start with.**
+2. **§7g — `head_read.go`** (810 lines): `headIndexReader`, `headChunkReader`, `RangeHead`. Makes the Head
+   *queryable*, which lets the corpus assert the samples come back rather than only that the counters moved —
+   and joins the Head to Phase 6's querier.
+3. **§7h — `head_wal.go`** (2,006 lines): replay. Pinnable *properly* now, because §7b can write a WAL and
+   §7a can build the records: the corpus writes a WAL, replays it, and compares the resulting Head against a
+   Head built by appending the same samples. That equivalence is the whole contract.
+4. **§7i — `compact.go` + `blockwriter.go`** (1,071 lines): Head to block. **Closes §6w's two declared
+   read-path gaps**, because it is the first thing that can put a non-XOR or malformed chunk in a fixture.
+5. **§7j — `db.go`** (2,666 lines): the orchestration — retention, compaction scheduling, `Open`. Last,
+   because everything it schedules has to exist first.
+
+#### The three hidden costs in §7f, in order of how much they will surprise you
+
+- **Isolation is ON by default and is its own file.** `defaultIsolationDisabled = false` (head.go:65), so
+  `newIsolation(false)` is what runs, and `tsdb/isolation.go` is **317 lines** of append-ID watermarks, a
+  `txRing` per series and `cleanupAppendIDsBelow`. Every `append` takes an `appendID` and every read takes an
+  `isolationState`. It is not optional and it is not small: **budget it as part of §7f rather than
+  discovering it**, or the first `Commit` will not have anywhere to put its ID.
+- **Quirk 36 collects here, and this is the switch it was waiting for.** `HeadOptions.FloatChunkEncoding`
+  defaults to `EncXOR`, and `UseXOR2FloatEncoding()` is what `appendPreprocessor` consults.
+  Quirk 36 recorded that `promqltest` sets `EncXOR2` and that start timestamps ride on it, so Phase 5's exit
+  gate needs the Head configured that way. **Both encodings are already ported (§6b), so this is a wiring
+  decision, not new work** — but wire it in §7f, because a Head that only cuts `EncXOR` chunks cannot pass
+  `start_timestamps.test` when it eventually replaces `MemStorage`.
+- **`SamplesPerChunk` is 120 and `ChunkRange` is `DefaultBlockDuration`**, and together they decide when
+  `appendPreprocessor` cuts. §5e(c) already ported the metadata half of that decision — the chunk-cut and
+  header rules — so read `PromChunkEnc`'s `appendable` before rewriting it.
+
+#### What to leave out of §7f, and why each is safe to leave
+
+- **Out-of-order.** `OutOfOrderTimeWindow` defaults to **0**, which disables it, and the roadmap puts the OOO
+  head in Phase 10. `appendableHistogram`/`appendableFloatHistogram` and the `wbl` argument come with it.
+- **Exemplars.** `EnableExemplarStorage` defaults false; the circular buffer is its own slice.
+- **Histograms in the appender.** The float path is what the exit gate needs first, and
+  `AppendHistogram` doubles the surface. `record`'s histogram encoding (§7a) is already done, so this is
+  additive later.
+- **`EnableMemorySnapshotOnShutdown`**, `EnableFastStartup`, `EnableSharding` (`ShardedPostings` is already a
+  declared §6 deferral), `WALReplayConcurrency`.
+- **`SeriesLifecycleCallback`.** Upstream's own comment: *"It is always a no-op in Prometheus and mainly meant
+  for external users who import TSDB."* Port the protocol and the noop, and do not build anything on it.
+
+#### One thing already done that §7f should not re-do
+
+**`MemPostings` is landed (§7e).** `Head.postings` is a `*index.MemPostings` and `getOrCreate` calls
+`Add`; the insert-time order repair, `ensureOrder` for replay, and `delete`'s three cleanups are all pinned
+already. `head_wal.go` is the caller that wants `newUnordered()` — §7e ported it for exactly that.
+
 ### 7c. The `wlog` CORRUPTION corpus — the reader's rejection paths are now pinned
 
 §7b's outstanding half, and it did what it was built to do: **the sweep went from 22 survivors to 9** (57
@@ -2800,7 +2883,10 @@ between this and the state §7b was committed in.
    two `left` controls are the pick of them.
 1. **`tsdb/chunks`' `ChunkDiskMapper`** — **DONE, as §7d below.**
 2. **`head.go` + `head_append.go`** — `memSeries`, the appender, and `appendable`'s ordering rules, whose
-   metadata half §5e(c) already ported. `MemPostings` is **done**, as §7e.
+   metadata half §5e(c) already ported. `MemPostings` is **done**, as §7e. **Read §7f's scoping plan first**:
+   it corrects an earlier claim that this cannot be sliced apart from `db.go` (it can — `NewHead` and
+   `Appender` are exported), splits the rest of Phase 7 into five independently pinnable slices, and names the
+   three hidden costs, of which isolation being on by default is the one that will surprise you.
 3. **`head_wal.go`** — replay, the first consumer of §7a and §7b together.
 4. **`compact.go` + `blockwriter.go`** — Head to block, which closes §6w's two declared read-path gaps
    because it is the first thing that can put a non-XOR or malformed chunk in a fixture input.
