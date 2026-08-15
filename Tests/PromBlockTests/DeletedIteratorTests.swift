@@ -62,10 +62,11 @@ struct DeletedIteratorTests {
                 let ivs = (input.intervals ?? []).map {
                     DeletionInterval(mint: $0[0], maxt: $0[1])
                 }
-                // `XORIterator` is a struct in the port; `AnyChunkIterator` boxes it so the protocol's
-                // `AnyObject` requirement holds. That box is a port detail, not a divergence — Go's
-                // `chunkenc.Iterator` is already an interface over a pointer.
-                return DeletedIterator(iter: BoxedXORIterator(c.iterator()), intervals: ivs)
+                // `XORIterator` is a struct in the port; `BoxedFloatChunkIterator` (in `PromChunkEnc`)
+                // boxes it so `ChunkIterator`'s `AnyObject` requirement holds. That box is a port detail,
+                // not a divergence — Go's `chunkenc.Iterator` is already an interface over a pointer. It
+                // used to be duplicated here and in `PromBlock`; §7f(c) promoted the one copy.
+                return DeletedIterator(iter: BoxedFloatChunkIterator(c.iterator()), intervals: ivs)
             }
 
             let it = try build()
@@ -99,22 +100,3 @@ struct DeletedIteratorTests {
 
 /// A reference box around the port's `XORIterator`, which is a `struct`.
 ///
-/// `ChunkIterator` is `AnyObject` because Go's `chunkenc.Iterator` is an interface over a pointer and
-/// `SampleIterable.iterator(_:)` hands one back for reuse. The XOR iterator predates that protocol and is a
-/// value type, so this adapts it. Nothing here decides anything — every method forwards.
-private final class BoxedXORIterator: ChunkIterator {
-    private var it: XORIterator
-
-    init(_ it: XORIterator) { self.it = it }
-
-    func next() -> ValueType { it.next() }
-    func seek(_ t: Int64) -> ValueType { it.seek(t) }
-    func at() -> (Int64, Double) { it.at }
-    func atHistogram(_ reuse: Histogram?) -> (Int64, Histogram?) { (Int64.min, nil) }
-    func atFloatHistogram(_ reuse: FloatHistogram?) -> (Int64, FloatHistogram?) { (Int64.min, nil) }
-    func atT() -> Int64 { it.at.0 }
-    /// `XORIterator` has no start timestamp — Go's `xorIterator.AtST` returns 0, which the protocol
-    /// documents as "unimplemented/unset". XOR2 is where an ST actually lives.
-    func atST() -> Int64 { 0 }
-    func err() -> (any Error)? { it.err }
-}
