@@ -2861,15 +2861,49 @@ so the protocol itself is nearly free to change. The expensive part is `ChunkApp
   `append(_ t: Int64, _ v: Double)` — two unlabelled arguments and **no `st`** — against the protocol's
   `append(st:t:v:)`, and it has neither `appendHistogram` nor `appendFloatHistogram`.
 
-The missing `st` is the interesting part and should be checked against Go rather than assumed: upstream's
-`chunkenc.Appender` interface declares `Append(st, t int64, v float64)` and `xorAppender` implements it, so the
-XOR appender *does* take a start timestamp and must be discarding it — which is quirk 36's territory, since ST
-rides on **XOR2** and not XOR. Confirm what `xorAppender.Append` does with `st` before adding the parameter;
-if it ignores it, the port's two-argument spelling is a *simplification* that has to become a declared
-divergence or be undone.
+#### The `st` question is ANSWERED, and §7f(c) is unblocked. The port was already faithful.
 
-So the honest sizing: the protocol reconciliation is trivial, and `ChunkAppender` conformance for the two float
-chunks is the actual slice.
+The open question was whether `XORAppender`'s two-argument `append(_ t:_ v:)` was a simplification. It is not:
+
+```go
+func (a *xorAppender) Append(_, t int64, v float64) {   // xor.go — st is discarded, explicitly
+func (a *xor2Appender) Append(st, t int64, v float64) { // xor2.go — st is USED (stDiff)
+```
+
+Upstream unifies the two at the interface (`Appender.Append(st, t, v)`) and `xorAppender` declares the first
+parameter **`_`** — it genuinely throws the start timestamp away, because ST rides on XOR2 and not XOR. That is
+quirk 36's mechanism, in the one line that implements it. The port mirrors it exactly: `XORAppender.append(_ t:
+_ v:)` takes two and `XOR2Appender.append(_ st:_ t:_ v:)` takes three. **No divergence, and nothing to undo.**
+
+What that costs is only that the two appenders have different ARITIES, which is why neither conforms to a
+shared protocol. The fix is Go's own: give `XORAppender` a three-argument `append(_ st:_ t:_ v:)` that ignores
+`st` and delegates, exactly as `_` does upstream. One method, and the comment writes itself.
+
+The histogram arms are settled too, and they PANIC rather than error:
+
+```go
+func (*xorAppender) AppendHistogram(...)      { panic("appended a histogram sample to a float chunk") }
+func (*xorAppender) AppendFloatHistogram(...) { panic("appended a float histogram sample to a float chunk") }
+```
+
+Unreachable by contract — the Head cuts a new chunk on an encoding change before ever appending a histogram to
+a float chunk — so these get PORTING.md exception 9's treatment (guard with the exact message) rather than
+`extendFloats`' (raise as a reachable error). Both texts are above; use them verbatim.
+
+**So §7f(c)'s prerequisite is now fully specified**, in order:
+
+1. Add `append(_ st:_ t:_ v:)` to `XORAppender`, discarding `st`.
+2. Add `appendHistogram`/`appendFloatHistogram` to both float appenders, guarding with the two messages above.
+3. Conform `XORAppender` and `XOR2Appender` to `ChunkAppender`.
+4. Reconcile `Chunk` with the concrete types — turn `bytes()`/`encoding()`/`numSamples()` into properties and
+   `reset(stream:)` into `reset(_:)`, which is nearly free (`any Chunk` appears in **two** places).
+5. `appender()` cannot be covariant, so keep the concrete method under a new name for the 13 existing call
+   sites and let `appender() throws -> any ChunkAppender` be the witness.
+6. Add `newEmptyChunk(_:)` + `isValidEncoding` — note `cutNewHeadChunk` falls back to `NewXORChunk()` for an
+   invalid encoding rather than failing.
+7. Close `BlockReader`'s `guard enc == .xor` for XOR2, which discharges the §6 deferral.
+
+Then `memSeries`'s chunk state can be written against `any Chunk` as upstream does.
 
 **It also closes a §6 deferral, which is why this belongs here rather than being a surprise.**
 `Sources/PromBlock/BlockReader.swift:160` already guards `enc == .xor` with the comment: *"XOR2 and the
