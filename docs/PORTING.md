@@ -321,6 +321,17 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     `lastFile <= 0`, so an empty file `000000` is never repaired away and does reach this. A writer never
     creates index 0 (`toNewFile` pre-increments), so it takes a hand-planted or externally corrupted directory.
 
+23. **`MemPostings.LabelNames`, `Iter` and post-`Delete` `LabelValues` range Go MAPS, so upstream has no order
+    to be exact against.** Third instance of exception 11's situation, and the treatment is the same: the
+    corpus SORTS those three before committing, and the port sorts too.
+
+    The distinction that matters is which outputs are *not* in that set. `LabelValues` before any `Delete` is
+    `lvs[name]`, an append-only insertion-ordered slice, and its `Limit` truncates **before** any caller can
+    sort — so it is committed verbatim and is the interesting half of the suite. A case with a `Delete` sets
+    `sortLabelValues`, because `Delete` rebuilds `lvs[name]` from `m[name]`'s keys and the order becomes
+    arbitrary from that point. Sorting everything would have been simpler and would have thrown away the
+    insertion-order coverage, which is the behaviour `MemQuerier` had to be written around (quirk 35).
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
