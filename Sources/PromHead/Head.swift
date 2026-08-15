@@ -27,8 +27,8 @@
 //   * **Exemplars.** `resetInMemoryState` builds a `CircularExemplarStorage`; `EnableExemplarStorage` defaults
 //     false and §7f defers the whole feature, so `maxExemplars` is carried (because `NewHead` zeroes it) and
 //     the storage is not.
-//   * **Tombstones.** `MemTombstones` is still unported (exception 16), so `Head.tombstones` and
-//     `Head.Tombstones()` wait for §7g, which is the slice that needs to read them.
+//   * **Tombstones.** `MemTombstones` was unported when this file was written; §7h(a) added it, so
+//     `Head.tombstones` and `Head.Tombstones()` are in `HeadGC.swift` with the rest of the deletion path.
 //   * **Out-of-order** (`wbl`, `oooIso`, `minOOOTime`/`maxOOOTime`'s writers), **sharding**,
 //     **`EnableFastStartup`**'s series-state goroutine, the WAL-expiry map, the cardinality cache, and the
 //     pools. Each is named in §7f's "what to leave out" list.
@@ -44,6 +44,7 @@ public import PromFS
 public import PromIndex
 public import PromLabels
 public import PromStorage
+public import PromTombstones
 public import PromWAL
 
 /// Go: `DefaultOutOfOrderCapMax` — the default maximum size of an in-memory out-of-order chunk.
@@ -188,7 +189,7 @@ public final class Head {
     /// Go: `chunkRange` — a copy of `opts.ChunkRange`, atomic because `ApplyConfig` can change it.
     public private(set) var chunkRange: Int64 = 0
     /// Go: `numSeries`.
-    public private(set) var numSeries: UInt64 = 0
+    var numSeries: UInt64 = 0
     /// Go: `numStaleSeries`.
     var numStaleSeries: UInt64 = 0
     /// Go: `minTime`/`maxTime`. **`minTime == MaxInt64` means uninitialised**, so the two are stored in that
@@ -218,6 +219,9 @@ public final class Head {
     /// Go: `postings` — built UNORDERED, because replay adds refs out of order and `Init` calls
     /// `EnsureOrder` afterwards (§7e ported `newUnordered` for exactly this).
     public private(set) var postings: MemPostings
+    /// Go: `tombstones` — the Head's in-memory deletion intervals. `MemTombstones` landed with §7h(a); before
+    /// that the field could not exist, which is what the file header's tombstone bullet recorded.
+    public private(set) var tombstones: MemTombstones
     /// Go: `iso`.
     public private(set) var iso: Isolation
     /// Go: `chunkDiskMapper`.
@@ -281,6 +285,7 @@ public final class Head {
             stripeSize: opts.stripeSize,
             seriesCallback: opts.seriesCallback ?? NoopSeriesLifecycleCallback())
         self.postings = MemPostings.newUnordered()
+        self.tombstones = MemTombstones()
         self.iso = Isolation(disabled: opts.isolationDisabled)
         self.chunkRange = opts.chunkRange
 
@@ -312,6 +317,7 @@ public final class Head {
         iso = Isolation(disabled: opts.isolationDisabled)
         numSeries = 0
         postings = MemPostings.newUnordered()
+        tombstones = MemTombstones()
         chunkRange = opts.chunkRange
         minTimeValue = Int64.max
         maxTimeValue = Int64.min
