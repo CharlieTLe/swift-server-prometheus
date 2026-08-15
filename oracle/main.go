@@ -127,6 +127,7 @@ var suites = map[string]func(*emitter){
 	"chunks/headchunks":       genHeadChunks,
 	"index/mempostings":       genMemPostings,
 	"head/memseries":          genHeadMemSeries,
+	"head/core":               genHeadCore,
 	"block/seriesset":         genBlockSeriesSet,
 	"block/meta":              genBlockMeta,
 	"gocompat/time-rfc3339":   genGoTimeRFC3339,
