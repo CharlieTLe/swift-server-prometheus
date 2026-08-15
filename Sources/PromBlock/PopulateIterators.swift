@@ -205,7 +205,7 @@ public final class PopulateWithDelGenericSeriesIterator {
         guard chunk.encoding == .xor else { return nil }
         let c = XORChunk()
         c.reset(chunk.bytes)
-        return BoxedXOR(c.iterator())
+        return BoxedFloatChunkIterator(c.iterator())
     }
 
     func err() -> (any Error)? { error }
@@ -277,22 +277,6 @@ public final class PopulateWithDelSeriesIterator: ChunkIterator {
         if let e = generic.err() { return e }
         return curr?.err()
     }
-}
-
-/// A reference box around `XORIterator`, which is a value type. Same role as the one in the tests; here
-/// because the populate iterators need it in the library.
-final class BoxedXOR: ChunkIterator {
-    private var it: XORIterator
-    init(_ it: XORIterator) { self.it = it }
-    func next() -> ValueType { it.next() }
-    func seek(_ t: Int64) -> ValueType { it.seek(t) }
-    func at() -> (Int64, Double) { it.at }
-    func atHistogram(_ reuse: Histogram?) -> (Int64, Histogram?) { (Int64.min, nil) }
-    func atFloatHistogram(_ reuse: FloatHistogram?) -> (Int64, FloatHistogram?) { (Int64.min, nil) }
-    func atT() -> Int64 { it.at.0 }
-    /// `xorIterator.AtST` returns 0 — the protocol documents that as "unimplemented/unset".
-    func atST() -> Int64 { 0 }
-    func err() -> (any Error)? { it.err }
 }
 
 // MARK: - populateWithDelChunkSeriesIterator

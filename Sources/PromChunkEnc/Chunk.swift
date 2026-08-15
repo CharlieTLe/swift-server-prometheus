@@ -155,21 +155,29 @@ public protocol ChunkIterable {
 
 /// Go: `chunkenc.Chunk`.
 ///
-/// Declared now so `storage` can refer to it; no conforming type exists until
-/// Phase 6.
+/// **The member shapes follow the CONCRETE types, not Go's interface.** Go declares `Bytes()`, `Encoding()`
+/// and `NumSamples()` as methods because a Go interface has no other option; `XORChunk` and `XOR2Chunk` were
+/// written with properties, which is idiomatic Swift for a derived value and is what every existing call site
+/// uses. Matching the protocol to them costs no fidelity — the Go origin is an interface *shape*, not an
+/// observable — and it avoids rewriting the concrete types and their callers to satisfy a spelling.
+///
+/// `makeAppender()` is the one deliberate rename. Go's is `Appender()`, and so is the concrete method on each
+/// chunk — but the concrete one returns its *own* appender type, and Swift does not allow return-type
+/// covariance for a protocol witness. Rather than force thirteen call sites onto an existential, the protocol
+/// asks for a differently-named factory and each chunk implements it by wrapping its concrete appender.
 public protocol Chunk: ChunkIterable {
     /// Go: `Bytes`.
-    func bytes() -> [UInt8]
+    var bytes: [UInt8] { get }
     /// Go: `Encoding`.
-    func encoding() -> Encoding
-    /// Go: `Appender`.
-    func appender() throws -> any ChunkAppender
+    var encoding: Encoding { get }
     /// Go: `NumSamples`.
-    func numSamples() -> Int
+    var numSamples: Int { get }
+    /// Go: `Appender` — see the note above on the name.
+    func makeAppender() throws -> any ChunkAppender
     /// Go: `Compact` — optional; a hint that no more samples are coming.
     func compact()
     /// Go: `Reset`.
-    func reset(stream: [UInt8])
+    func reset(_ stream: [UInt8])
 }
 
 /// Go: `chunkenc.Appender`. Named `ChunkAppender` here because `storage` has an
@@ -177,7 +185,12 @@ public protocol Chunk: ChunkIterable {
 public protocol ChunkAppender: AnyObject {
     /// Go: `Append`. May trap when the chunk is full; deciding when to cut a new
     /// chunk is the caller's job.
-    func append(st: Int64, t: Int64, v: Double)
+    ///
+    /// Unlabelled to match the concrete appenders. **`st` is the start timestamp and the XOR appender
+    /// discards it** — upstream's `xorAppender.Append(_, t int64, v float64)` names the parameter `_`, because
+    /// start timestamps ride on XOR2 and not XOR (quirk 36). So a three-argument signature here is not a
+    /// claim that every encoding stores it.
+    func append(_ st: Int64, _ t: Int64, _ v: Double)
 
     /// Go: `AppendHistogram`.
     func appendHistogram(

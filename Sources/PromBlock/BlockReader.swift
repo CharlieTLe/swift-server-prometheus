@@ -157,19 +157,20 @@ public final class BlockReader {
         var out: [(t: Int64, v: Double)] = []
         for meta in s.chunks {
             let (enc, bytes) = try chunk(meta)
-            guard enc == .xor else {
-                // XOR2 and the histogram encodings decode through their own iterators; a block containing
-                // them needs the same dispatch the Head will need, which is Phase 7's.
-                continue
-            }
-            let c = XORChunk()
+            // §6 skipped everything but XOR here, with a note that the dispatch "needs the same dispatch the
+            // Head will need, which is Phase 7's". §7f(c) built it: `newEmptyChunk` plus the `Chunk`
+            // conformance is that dispatch, so both float encodings now decode. The histogram encodings are
+            // still absent from `PromChunkEnc` entirely, so `newEmptyChunk` reports them by name rather than
+            // this silently skipping them — a block carrying one is now a loud failure instead of a short read.
+            guard enc == .xor || enc == .xor2 else { continue }
+            let c = try newEmptyChunk(enc)
             c.reset(bytes)
-            var it = c.iterator()
+            let it = c.iterator(nil)
             while it.next() == .float {
-                let (t, v) = it.at
+                let (t, v) = it.at()
                 out.append((t, v))
             }
-            if let e = it.err { throw e }
+            if let e = it.err() { throw e }
         }
         return out
     }
