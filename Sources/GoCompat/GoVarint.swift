@@ -29,6 +29,22 @@ public enum GoVarint: Sendable {
         return n + 1
     }
 
+    /// `github.com/dennwc/varint`'s `UvarintSize` — how many bytes a uvarint of `x` will occupy, without
+    /// encoding it.
+    ///
+    /// **Not from `encoding/binary`**, which has no such function; upstream imports a third-party package for
+    /// it, and `chunkPos.bytesToWriteForChunk` is the caller that matters — it has to predict the chunk's
+    /// on-disk size exactly, before the write, or the `cutAndExpectRef` assertion fires.
+    ///
+    /// dennwc's version is a chain of `if x < 1<<7 { return 1 }` comparisons. `(bits.Len64(x) + 6) / 7` is the
+    /// same function for every `x > 0` and disagrees only at `x == 0`, where the shift chain answers 1 and the
+    /// division answers 0 — a zero-length chunk is a real input, so the `max(1, ...)` is load-bearing rather
+    /// than defensive.
+    public static func uvarintSize(_ x: UInt64) -> Int {
+        if x == 0 { return 1 }
+        return (64 - x.leadingZeroBitCount + 6) / 7
+    }
+
     /// Go: `binary.PutVarint`. Zig-zag encoded, then as a uvarint.
     @discardableResult
     public static func putVarint(_ out: inout [UInt8], _ x: Int64) -> Int {

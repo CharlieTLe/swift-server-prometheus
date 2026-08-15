@@ -18,47 +18,11 @@ import Testing
 
 // MARK: - The RLE codec, which must agree with the oracle's
 
-/// The oracle's `rleHex`. The trailing `.` on a run is load-bearing: hex pairs are themselves digits, so
-/// `z16372` followed by the byte `0x11` would read back as a run of 1,637,211 without it.
-func rleHex(_ b: [UInt8]) -> String {
-    var out = ""
-    var i = 0
-    while i < b.count {
-        if b[i] == 0 {
-            var j = i
-            while j < b.count && b[j] == 0 { j += 1 }
-            out += "z"
-            out += String(j - i)
-            out += "."
-            i = j
-            continue
-        }
-        let hex = String(b[i], radix: 16)
-        out += hex.count == 1 ? "0" + hex : hex
-        i += 1
-    }
-    return out
-}
-
-/// The oracle's `unrleHex`.
-func unrleHex(_ s: String) -> [UInt8] {
-    var out: [UInt8] = []
-    let chars = Array(s)
-    var i = 0
-    while i < chars.count {
-        if chars[i] == "z" {
-            var j = i + 1
-            while j < chars.count && chars[j] != "." { j += 1 }
-            let n = Int(String(chars[(i + 1)..<j]))!
-            out.append(contentsOf: [UInt8](repeating: 0, count: n))
-            i = j + 1
-            continue
-        }
-        out.append(UInt8(String(chars[i...(i + 1)]), radix: 16)!)
-        i += 2
-    }
-    return out
-}
+// `GoOracleSupport.RLEHex` is the shared implementation — the head chunk suite needs the same codec, and a
+// second copy in another test module is exactly how the two drift apart. Thin aliases keep the call sites
+// reading as they did.
+func rleHex(_ b: [UInt8]) -> String { RLEHex.encode(b) }
+func unrleHex(_ s: String) -> [UInt8] { RLEHex.decode(s) }
 
 // MARK: - Wire types
 

@@ -295,6 +295,32 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     `unsupported compression type: snappy` on rather than misreading. That is the right failure — loud, and
     at the record rather than after it — but it is a real limitation, not a formality.
 
+21. **`openMMapFiles` names its offending file by ranging a MAP, so upstream is nondeterministic and the port
+    is not.** The header-validation loop is `for i, b := range cdm.mmappedChunkFiles`, and it returns on the
+    first file that fails. With two bad files upstream reports whichever the map handed it first, so there is
+    no order to be byte-exact against — the same situation as exception 11's unsorted `Select`.
+
+    The port iterates in **index order**, which is one of the orders Go can produce and the only one a reader
+    can predict. Recorded rather than left implicit because the corpus deliberately contains no case with two
+    invalid files: pinning one would pin a coin toss (quirk 96's lesson, which cost a CI failure once).
+
+22. **A ZERO-LENGTH head chunk file is an mmap error upstream and a header error here.**
+    `openMMapFiles` calls `fileutil.OpenMmapFile` before it validates any header, and mmap refuses a
+    zero-length mapping — so upstream answers `mmap files, file: <name>: mmap, size 0: invalid argument`. ADR-15
+    declines mmap, so the port reads the bytes (which succeeds, with none) and fails at the header check
+    instead: `<name>: invalid head chunk file header: invalid size`.
+
+    Both refuse the file, at the same call, for the same reason; only the wording differs, and the upstream
+    wording is `strerror(EINVAL)` rather than Prometheus's own. **The corpus deliberately does not contain the
+    case** — pinning it would put an OS error string in a fixture that two CI platforms need to agree on, which
+    is the reproducibility rule in PORTING.md's own terms. `seeded-file-zero-short` plants a three-byte file
+    instead, which reaches the header check on both sides, and `HeadChunksTests` asserts the port's answer for
+    the zero-length case directly.
+
+    Reachability, since that is what decides the treatment: `repairLastChunkFile` returns early on
+    `lastFile <= 0`, so an empty file `000000` is never repaired away and does reach this. A writer never
+    creates index 0 (`toNewFile` pre-increments), so it takes a hand-planted or externally corrupted directory.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -2629,6 +2655,52 @@ changing behaviour.
     them. Note also that the three high bits of the type byte are *not* flags — `recTypeMask` is 7, so a byte
     with the high bit set reads as its low three bits and the compression flags are tested independently. That
     case agrees with Go and stays in the corpus.
+
+181. **`IterateAllChunks` reads `numSamples` out of the CHUNK BODY, and it is not a field of the head chunk
+    format at all.** The per-chunk layout the writer emits is
+    `[BE64 series ref][BE64 mint][BE64 maxt][encoding][uvarint len][data][BE32 CRC]` — there is no sample
+    count in it. The scan nevertheless reports one:
+
+    ```go
+    numSamples := binary.BigEndian.Uint16(mmapFile.byteSlice.Range(idx, idx+2))
+    idx += int(dataLen) // Skip the data.
+    ```
+
+    `idx` is at the START of the data when that runs, so those two bytes are the first two bytes of the
+    chunk's own encoding — which for XOR, XOR2 and both histogram encodings is the sample count, because
+    `chunkenc` puts it there. Note the `idx += int(dataLen)` that follows does **not** add the 2: the read is a
+    peek, not a consumption.
+
+    So this format borrows a fact about its payload's format. A port that treated `numSamples` as a field of
+    the head chunk header would write a fourth value the writer never writes and shift every subsequent byte;
+    one that consumed the two bytes would lose them from the data. Both are controls in
+    `Scripts/controls-headchunks.sh` and both break.
+
+182. **The pre-allocated tail of a head chunk file is NOT truncated away, so 128 KiB is the minimum size of
+    any head chunk file — and the zero tail is load-bearing.** `cutSegmentFile` pre-allocates to
+    `HeadChunkFilePreallocationSize` (`MinWriteBufferSize * 2`, 128 KiB) and `finalizeCurFile` does
+    flush-sync-close with **no truncate**. Contrast `chunks.go`'s block writer, whose `finalizeTail` *does*
+    truncate — which is why ADR-15 could decline pre-allocation there and cannot here.
+
+    Two consequences, both of which the corpus caught in the port's first version:
+
+    - **`Size()` reports the pre-allocated length from the moment the file is cut**, not after the first
+      flush. The port padded at close instead and answered 32,802 where Go answers 131,072.
+    - **`IterateAllChunks`' two end-of-content branches only exist because of that tail.** The all-zeros check
+      and the `seriesRef == 0 && mint == 0 && maxt == 0` break are what stop the scan inside the padding; with
+      no pre-allocation the scan would end exactly at the last chunk and neither branch would ever run.
+
+    The port therefore keeps the current file's content in memory and rewrites it, because `PromFS` has
+    neither a positional write nor an appending open — and `createFile` truncates, which also means a second
+    `createFile` for an append handle **erases the segment header** `cutSegmentFile` just wrote. That was the
+    port's first bug here: every file began with its first chunk.
+
+183. **`%0.6d` is a PRECISION, not a width, so `segmentFile(dir, -1)` is `-000001`.** Go's integer precision
+    is a minimum digit count and the sign sits outside it, giving seven characters for -1. A negative index is
+    reachable: `Chunk`'s "head chunk file index %d more than current open file" arm constructs its
+    `CorruptionErr` with `FileIndex: -1`, and `CorruptionErr.Error()` renders the file NAME. The port padded
+    the sign into the six and answered `-00001`; a truncate case that reads a ref belonging to a deleted file
+    is what reached it.
 
 ## Not ported
 
