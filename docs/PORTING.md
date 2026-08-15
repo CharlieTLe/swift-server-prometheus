@@ -2713,6 +2713,22 @@ changing behaviour.
     the sign into the six and answered `-00001`; a truncate case that reads a ref belonging to a deleted file
     is what reached it.
 
+184. **`rangeForTimestamp` truncates toward zero, so chunk windows are laid out differently below zero.**
+    `db.go:2516` is `(t/width)*width + width`, and Go's integer division truncates rather than floors. With a
+    width of 1000, `t = 500` gives 1000 and `t = -500` gives **1000 as well** — while a flooring version would
+    give 0. So the window containing a negative timestamp is up to twice as wide as one above zero, and the
+    first chunk of a series with pre-1970 samples holds a longer time span than the configured range. The port
+    reproduces it: a Swift rewrite using `%` to floor would move chunk boundaries for any negative timestamp,
+    which `promqltest` cases starting before the epoch would notice.
+
+185. **`computeChunkEndTime`'s subtractions WRAP, and the wrap is on the normal path.** `cur` is the chunk's
+    `maxTime`, which is `math.MinInt64` on a chunk with no sample yet — and `appendPreprocessor` calls the
+    function with exactly such a chunk whenever `samplesPerChunk/4 == 0`, because then `numSamples == 0`
+    satisfies the quarter-mark test on the sample that just cut the chunk. `cur-start+1` therefore overflows,
+    Go wraps it to a huge positive, `n` comes out near zero and the `n <= 1` arm returns `maxT` unchanged. The
+    port uses `&-`/`&+` for those three operators; Swift's checked `-` would trap where upstream computes a
+    perfectly usable answer. Found by the fixture on its first run — the trap is what pointed at it.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

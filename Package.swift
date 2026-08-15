@@ -114,7 +114,12 @@ let package = Package(
 
         // Phase 7: the Head. `tsdb/isolation.go` first, because `defaultIsolationDisabled` is false — every
         // `NewHead` runs it, and every append takes an ID from it. See HANDOFF §7f.
-        .target(name: "PromHead", dependencies: ["PromChunks", "PromIndex", "PromWAL", "GoCompat"]),
+        .target(
+            name: "PromHead",
+            dependencies: [
+                "PromChunkEnc", "PromChunks", "PromHistogram", "PromIndex", "PromLabels",
+                "PromStorage", "PromWAL", "GoCompat",
+            ]),
 
         // Phase 7: `tsdb/record` — the WAL's wire format. Byte-exact, exported and stateless, which
         // makes it the one piece of the write path that can be pinned before `head.go` or `wlog` exists.
@@ -289,7 +294,10 @@ let package = Package(
         ),
         .testTarget(
             name: "PromHeadTests",
-            dependencies: ["PromHead", "GoOracleSupport", "GoCompat"]
+            dependencies: [
+                "PromHead", "PromChunkEnc", "PromChunks", "PromFS", "PromHistogram", "PromLabels",
+                "GoOracleSupport", "GoCompat",
+            ]
         ),
         .testTarget(
             name: "PromWALTests",
