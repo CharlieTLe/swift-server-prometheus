@@ -39,8 +39,9 @@
 //     engineering with no observable behaviour, and the port has no concurrency yet — see `Isolation.swift`
 //     on why a lock here would be a claim about a design that has not been made. The *padding* is worth
 //     recording rather than reproducing: it is a statement about cache lines, not about semantics.
-//   * **`gc`, `gcStaleSeries` and `iterForDeletion`.** All three walk `memSeries`'s chunk state, which
-//     arrives with the rest of `memSeries`. They are the next step, not this one.
+//   * **`gc`, `gcStaleSeries` and `iterForDeletion`.** All three need `Head`-level state — the postings to
+//     delete from and the tombstones to write — rather than just a series' chunks, which `MemSeries.swift`
+//     now has. They land with `NewHead`.
 //===----------------------------------------------------------------------===//
 
 public import PromChunks
@@ -48,27 +49,6 @@ public import PromLabels
 
 /// Go: `DefaultStripeSize` — `1 << 14`.
 public let defaultStripeSize = 1 << 14
-
-/// Go: `memSeries`, as much of its IDENTITY as the series index needs.
-///
-/// **This is a partial port and says so.** `stripeSeries` and `seriesHashmap` only ever read a series' `ref`
-/// and its labels, so those are what is here; the chunk state (`headChunks`, `mmappedChunks`, the append
-/// bookkeeping and `txRing`) arrives with `memSeries.append`, and `stripeSeries.gc` waits for it. Growing this
-/// type is the next step of §7f.
-public final class MemSeries {
-    /// Go: `ref` — the Head's own ID for the series, and the key of `stripeSeries.series`.
-    public let ref: HeadSeriesRef
-    /// Go: `lset`, reached through `labels()`.
-    public let lset: Labels
-
-    public init(ref: HeadSeriesRef, labels lset: Labels) {
-        self.ref = ref
-        self.lset = lset
-    }
-
-    /// Go: `labels()`.
-    public func labels() -> Labels { lset }
-}
 
 /// Go: `seriesHashmap` — find a `memSeries` by label set, tolerating hash collisions.
 public struct SeriesHashmap {

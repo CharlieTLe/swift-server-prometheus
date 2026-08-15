@@ -28,7 +28,7 @@ struct StripeSeriesTests {
 
     static func ref(_ n: UInt64) -> HeadSeriesRef { HeadSeriesRef(rawValue: n) }
     static func series(_ n: UInt64, _ name: String) -> MemSeries {
-        MemSeries(ref: ref(n), labels: Labels([Label("l", name)]))
+        MemSeries(labels: Labels([Label("l", name)]), ref: ref(n))
     }
     static func lset(_ name: String) -> Labels { Labels([Label("l", name)]) }
 
