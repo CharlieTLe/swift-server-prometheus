@@ -117,8 +117,8 @@ let package = Package(
         .target(
             name: "PromHead",
             dependencies: [
-                "PromChunkEnc", "PromChunks", "PromHistogram", "PromIndex", "PromLabels",
-                "PromStorage", "PromWAL", "GoCompat",
+                "PromBlock", "PromChunkEnc", "PromChunks", "PromFS", "PromHistogram", "PromIndex",
+                "PromLabels", "PromStorage", "PromWAL", "GoCompat",
             ]),
 
         // Phase 7: `tsdb/record` — the WAL's wire format. Byte-exact, exported and stateless, which

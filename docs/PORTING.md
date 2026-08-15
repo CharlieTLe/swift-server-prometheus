@@ -332,6 +332,14 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     arbitrary from that point. Sorting everything would have been simpler and would have thrown away the
     insertion-order coverage, which is the behaviour `MemQuerier` had to be written around (quirk 35).
 
+24. **`defaultWALReplayConcurrency` is 1, not `runtime.GOMAXPROCS(0)`.** Upstream's default is the machine's
+    processor count, and `NewHead` substitutes it for any `WALReplayConcurrency <= 0`. The port fixes it at 1
+    for two reasons: the replay itself is serial here (§7h will keep it so — the parallelism is over WAL
+    segments, and a port with no concurrency model must not claim otherwise), and a value read from the host
+    would make `HeadOptions` unpinnable, because the option travels in the fixture. The **substitution** is
+    still faithful and is pinned: the corpus commits *whether* `NewHead` replaced the value, not the number it
+    replaced it with.
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -2728,6 +2736,27 @@ changing behaviour.
     Go wraps it to a huge positive, `n` comes out near zero and the `n <= 1` arm returns `maxT` unchanged. The
     port uses `&-`/`&+` for those three operators; Swift's checked `-` would trap where upstream computes a
     perfectly usable answer. Found by the fixture on its first run — the trap is what pointed at it.
+
+186. **A fresh Head's `Meta()` is an INVERTED block range, and that is the intended signal.**
+    `resetInMemoryState` stores `MaxInt64` into `minTime` and `MinInt64` into `maxTime`, and `initialized()` is
+    literally `MinTime() != math.MaxInt64` — so "uninitialised" is encoded in the data rather than in a flag.
+    `Meta()` copies both straight into a `BlockMeta`, which therefore reports `MinTime > MaxTime` until the
+    first sample lands. A port that "fixed" this by clamping to 0 would break `initialized()`, and with it
+    `Truncate`'s early return and `db.go`'s compaction scheduling. Upstream's own comment warns that the
+    initialised state must only change after `maxTime` is already updated, which is why the two fields are
+    written in that order.
+
+187. **`getOrCreateWithOptionalID` BURNS a series ID when the series already exists.** The ID is allocated
+    before `setUnlessAlreadySet` reports whether it won, so a caller that races on the same label set consumes
+    an ID for nothing — upstream says so: *"Note this id is wasted in the case where a concurrent operation
+    creates the same series first."* The counter is also **pre-incremented**, so the first series is 1 and a
+    ref of 0 is the "allocate one for me" sentinel the same function tests for. Both are replicated, and both
+    are observable: the next series created gets a ref two higher, not one.
+
+188. **`compactable` divides before multiplying: `chunkRange/2*3`.** The comment says "1.5 times the chunk
+    range", and for an odd chunk range the two spellings differ — with `chunkRange = 3`, Go's is `3` and
+    `3*3/2` would be `4`, so a head spanning exactly 4 ms is compactable under one and not the other. Kept in
+    Go's order.
 
 ## Not ported
 
