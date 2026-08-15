@@ -49,7 +49,7 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 7 — TSDB write | **TWO SLICES LANDED. §7a: `tsdb/record` in full** — the WAL's wire format, both directions, 469 differential cases. The type table, `MetricType`'s two conversions, and `Encoder`/`Decoder` for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers and the integer/float histogram records in V1, V2 and custom-buckets flavours. Two new targets mirroring Go's package boundaries: `PromRecord` (`tsdb/record`) and `PromTombstones` (`tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, plus `Stone`). Six quirks recorded, **two of them upstream bugs**: `samplesV2` measures the caller's accumulator to find the record's first entry (quirk 168, which `wlog/checkpoint.go` walks into), and the `minSize` capacity heuristic *discards* that accumulator (exception 18, the one declared divergence — Swift has no `make(len, cap)`). `Decbuf`'s varint reads were quadratic and are not any more. **§7b: `tsdb/wlog`'s segment format** — the 32 KB page framing, the `[type\|flags][BE16 length][BE32 CRC-32C]` fragment header, `WL` with `Log`/`NextSegment`/`Truncate`/`Close`, the segment directory, `SegmentBufReader` and `Reader`'s whole fragment grammar, in a new `PromWAL` target. 43 differential cases driven as a *program* (a segment size, a list of writes, a read range), five of them planting a pre-seeded directory. **§7c: the corruption corpus** — a SECOND input shape whose cases are literal fragments (raw type byte, payload, length/CRC overrides, truncation) rather than a write program, because a write program cannot express "one bit flipped". 37 cases; it took the sweep from **22 survivors to 9** (57 controls, 48 broke) and found a real defect: `NewSegmentsRangeReader`'s two error wraps (`list segment in dir:%v`, `open segment:%v in dir:%v`) were missing. Quirks 179-180, the first being that the faked page padding **erases the torn-record signal**, so a torn final record is normally dropped silently and only a page-aligned cut reports it. **So the port can now write a WAL and read it back, and reject a corrupt one** — uncompressed only (exception 20). Five quirks (174-178), one new declared divergence (exception 19, `Reader.Segment()` returning `-1` where upstream panics), and a `PromFS` POSIX-fidelity fix: a write to a removed path no longer resurrects it. **§7e: `index.MemPostings`** — the Head's in-memory inverted index, deferred from §6d and the first thing `head.go` needs: `add`/`addFor`'s one-pass insert repair, `ensureOrder`, `delete`'s three cleanups, and every reader (`symbols`, `sortedKeys`, `labelNames`, `labelValues`, `all`, `postings`, `postingsForAllLabelValues`, `postingsForLabelMatching`, `iter`). 17 cases, **40 controls scoring 32 broke / 8 survived — and all eight survivors are PROOFS**, argued in the sweep. `Stats` is deferred to Phase 9 with its only caller, the `/status/tsdb` endpoint. Exception 23. **§7d: `tsdb/chunks/head_chunks.go`'s `ChunkDiskMapper`** — the Head's chunk files: the format constants, `ChunkDiskMapperRef`'s arithmetic, `chunkPos`, the writer (`cut`, the CRC discipline, `writeChunk`), the reader (`chunk(ref:)`, `openMMapFiles`, `repairLastChunkFile`), `iterateAllChunks`, `truncate`/`deleteCorrupted`, the out-of-order mask and `GoVarint.uvarintSize` (from `dennwc/varint`, probed against Go over 300k values). 48 differential cases, **61 controls scoring 51 broke / 10 survived**, every survivor argued in the script. Three quirks (181-183) and two exceptions (21-22), and the corpus caught four defects — three of them ADR-15's rather than the format's. **Not started: `head.go`, `head_append.go`, `head_wal.go`, `compact.go`** — so the port still cannot produce a block outside a test, and §6w's two read-path gaps stay open. §7d's tail has the ordering |
 | 8–10 | not started, and the ordering below is a reading of `docs/ROADMAP.md` rather than new work. **8** ingest (scrape pool, target discovery, relabelling); **9** the server (HTTP API, the query endpoints, the prebuilt UI bundle per PORTING.md's "Not ported"); **10** remote read/write, exemplars, the OOO head, agent mode, perf. **Scale, so it is not rediscovered:** these are roughly 95k lines of Go against ~4.5k ported per session at this fidelity bar (an oracle suite plus an argued control sweep per slice). That bar is what caught ADR-10a, the file-index-vs-filename bug, the four survivor-diagnosis modes and — this session — a capacity heuristic that a comment had already dismissed as unobservable; lowering it for 8–10 would be a legitimate decision but must be recorded in PORTING.md as a departure, not taken silently |
 
-Green as of this commit: **339,718 committed fixture lines, 604 tests** across 24 test targets, on both
+Green as of this commit: **339,718 committed fixture lines, 616 tests** across 24 test targets, on both
 Swift 6.4 (Xcode 27) and the Swift 6.1 floor. The case count is `wc -l` over `Fixtures/**/*.jsonl` and the
 test count is the sum of the `Test run with N tests` lines — the figures in this line have drifted twice
 because they were computed some other way, so both methods are stated to make them reproducible rather than
@@ -76,14 +76,14 @@ Sources/            src     generated
   PromTombstones      164         –
   PromBlock         1,990         –
   PromRecord        1,577         –
-  PromHead            313         –
+  PromHead            582         –
   PromWAL           1,069         –
   PromStorage       1,740         –
   PromTestStorage     522         –
   PromQLParser      5,995       550
   PromQL           12,833         –
   PromQLTest        1,255         –
-Tests             18,983
+Tests             19,229
 oracle (Go)       28,265
 ```
 
@@ -2785,8 +2785,43 @@ The one asymmetry to carry forward: **disabling isolation does not stop tracking
 `closeAppend` return early, but `State()` runs in full, because head truncation has to wait for overlapping
 reads whether or not writes are isolated. Two controls pin it in both directions.
 
-Still to come in §7f: `HeadOptions`/`NewHead`, `stripeSeries`+`seriesHashmap`, `memSeries`, and
-`headAppender`'s float path.
+#### §7f(b): the series index — `seriesHashmap` and `stripeSeries`
+
+Landed. 27 controls: **23 broke, 4 survived** — one of those four deliberately, and the other three proofs.
+
+The probe technique from §7f(a) generalised, and this is the useful part: **`head.go` cannot be lifted into a
+probe package wholesale — it imports half of Prometheus — but `seriesHashmap` can.** It touches only
+`memSeries.ref`, `memSeries.labels()` and `labels.Equal`, so reducing `memSeries` to two fields and
+`labels.Equal` to a string compare leaves all three methods **verbatim**. That probe produced every expectation,
+and three would have been coin flips from reading alone:
+
+- `set` gives the `unique` slot to the **first** writer. A colliding series with different labels does not
+  displace the incumbent — it joins `conflicts`.
+- `del` on the series holding `unique` **promotes `conflicts[0]` into the slot** rather than clearing it.
+- when a conflict list empties, the `conflicts` **key is deleted**, not left holding an empty array.
+
+So the rule for the rest of the Head: **before reasoning about an unexported type, check what it actually
+imports.** A type whose dependencies are only `labels` and primitives can be lifted even when its file cannot.
+
+Two things worth carrying:
+
+- **The two shardings are the same mask over different keys**, not different arithmetic. `series` is keyed by
+  `ref & (size-1)` and `hashes` by `hash & (size-1)`, so one series sits in two unrelated stripes — which is
+  the whole reason `setUnlessAlreadySet` exists as one function. The file header originally said the shardings
+  were "independent"; a surviving control routed `hashStripe` through `refStripe` and showed that reading was
+  misleading. **A survivor that fixes a comment is still worth the run.**
+- **`size` must be a power of two** or neither mask is a modulo. `HeadOptions.StripeSize`'s doc comment
+  requires it and nothing upstream validates it, so the port has a `precondition`.
+
+The sweep also carries a **control on the controls** — a deliberately inert perturbation that must survive,
+proving `broke` is not the harness's default. That is the failure mode `lib/control-run.sh` was written for,
+and one control in this sweep did report COMPILE on its first run (deleting a guard left an unused binding),
+which measures nothing and is exactly as misleading as a SKIP.
+
+`MemSeries` is deliberately **partial**: `ref` and `lset` only, because that is all the index reads. The chunk
+state arrives with `memSeries.append`, and `stripeSeries.gc`/`gcStaleSeries`/`iterForDeletion` wait for it.
+
+Still to come in §7f: `HeadOptions`/`NewHead`, the rest of `memSeries`, and `headAppender`'s float path.
 
 #### The five slices, each independently pinnable
 
