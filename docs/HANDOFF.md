@@ -2846,9 +2846,30 @@ The mismatch is small but real, and every item is a decision rather than a typo:
 
 Methods versus properties is the one to think about rather than paper over: upstream's `Chunk` is a Go
 interface so everything is a method, but the concrete types were written with properties because that is
-idiomatic Swift for a stored-ish value. **Changing the protocol to match the types is the cheaper direction**
-and costs no fidelity — the Go origin is an interface shape, not an observable — but it touches `PromStorage`
-and `PromStorage`'s ported signatures reference `Chunk`, so check those call sites before deciding.
+idiomatic Swift for a stored-ish value. **Changing the protocol to match the types costs no fidelity** — the Go
+origin is an interface shape, not an observable.
+
+**The blast radius was measured rather than guessed, and the cost is not where it looks.** `any Chunk` appears
+in exactly **two** places in the whole port — `PromChunks/Chunks.swift:26`'s `Meta.chunk` and its initialiser —
+so the protocol itself is nearly free to change. The expensive part is `ChunkAppender`:
+
+- `Chunk.appender()` must return `any ChunkAppender`, and Swift does **not** allow return-type covariance for a
+  protocol witness, so `XORChunk.appender() -> XORAppender` cannot satisfy it as written. Either the concrete
+  signature changes (**13 call sites** use `.appender()` concretely) or the conformance goes through a
+  separately-named witness.
+- `XORAppender` does **not** conform to `ChunkAppender` today and is not close: its method is
+  `append(_ t: Int64, _ v: Double)` — two unlabelled arguments and **no `st`** — against the protocol's
+  `append(st:t:v:)`, and it has neither `appendHistogram` nor `appendFloatHistogram`.
+
+The missing `st` is the interesting part and should be checked against Go rather than assumed: upstream's
+`chunkenc.Appender` interface declares `Append(st, t int64, v float64)` and `xorAppender` implements it, so the
+XOR appender *does* take a start timestamp and must be discarding it — which is quirk 36's territory, since ST
+rides on **XOR2** and not XOR. Confirm what `xorAppender.Append` does with `st` before adding the parameter;
+if it ignores it, the port's two-argument spelling is a *simplification* that has to become a declared
+divergence or be undone.
+
+So the honest sizing: the protocol reconciliation is trivial, and `ChunkAppender` conformance for the two float
+chunks is the actual slice.
 
 **It also closes a §6 deferral, which is why this belongs here rather than being a surprise.**
 `Sources/PromBlock/BlockReader.swift:160` already guards `enc == .xor` with the comment: *"XOR2 and the
