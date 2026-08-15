@@ -2758,6 +2758,22 @@ changing behaviour.
     `3*3/2` would be `4`, so a head spanning exactly 4 ms is compactable under one and not the other. Kept in
     Go's order.
 
+189. **A REJECTED append can still initialise the Head.** `initAppender.Append` calls `h.initTime(t)` before it
+    builds the real appender and therefore before any validation runs, so an append that goes on to fail — an
+    empty label set, a duplicate label name, an out-of-bounds timestamp — leaves the head initialised with
+    `minTime == maxTime == t` and zero series. The corpus has it directly: a case that appends with no labels at
+    all reports `MinTime == MaxTime == 1000` and `NumSeries == 0`. It matters because `initialized()` gates
+    `Truncate`, `compactable()` and which appender the *next* caller gets, so one bad sample permanently changes
+    the head's mode. Replicated, including the order.
+
+190. **`Rollback` writes the series records to the WAL.** It looks like a pure undo, and it is not: the function
+    truncates `a.batches` and then ends with `return a.log()`, so the samples are dropped but every series this
+    appender created is still logged. Upstream states the reason: *"Series are created in the head memory
+    regardless of rollback. Thus we have to log them to the WAL in any case."* A replay that did not learn the
+    series would hand its ref to a different label set. **The port had this wrong and the corpus caught it** —
+    the two rollback cases were the only mismatches on the suite's first run, and both were a 28-byte series
+    record the port had not written.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

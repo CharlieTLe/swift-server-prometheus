@@ -48,6 +48,22 @@ extension Labels {
         return Labels(sortedUnchecked: filter { !$0.value.isEmpty })
     }
 
+    /// Go: `Labels.HasDuplicateLabelNames` — the first repeated name, or nil.
+    ///
+    /// Compares ADJACENT names only, which is sound because a `Labels` is sorted by name; a duplicate can
+    /// therefore only sit next to its twin. `headAppender.getOrCreate` is the caller, and it rejects the whole
+    /// append with `label name "%s" is not unique`.
+    public func hasDuplicateLabelNames() -> String? {
+        var prevName = ""
+        for l in self {
+            if l.name == prevName {
+                return l.name
+            }
+            prevName = l.name
+        }
+        return nil
+    }
+
     /// Go: `Labels.MatchLabels(on, names...)`.
     ///
     /// With `on: true` keeps only `names`; with `on: false` drops `names` **and**
