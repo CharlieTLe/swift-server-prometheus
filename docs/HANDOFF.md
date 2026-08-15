@@ -2905,6 +2905,51 @@ a float chunk — so these get PORTING.md exception 9's treatment (guard with th
 
 Then `memSeries`'s chunk state can be written against `any Chunk` as upstream does.
 
+#### A THIRD conformance gap, and this one is structural — plus the precedent that already solves it
+
+Working through the list above turned up one more, and it is not a missing method:
+
+**`ChunkIterable` cannot be satisfied by the float chunks either, because `ChunkIterator` is
+`AnyObject`-constrained and `XORIterator`/`XOR2Iterator` are `struct`s.** `Chunk` refines `ChunkIterable`, so
+this blocks the `Chunk` conformance just as much as `ChunkAppender` does. The two iterator types were
+deliberately made value types; Go's are pointers, which is why its `Iterator(reuse)` can hand one back.
+
+**Phase 6 already hit this and already solved it.** `Sources/PromBlock/PopulateIterators.swift:284` has:
+
+```swift
+/// A reference box around `XORIterator`, which is a value type. Same role as the one in the tests; here
+/// because the populate iterators need it in the library.
+final class BoxedXOR: ChunkIterator { ... }
+```
+
+So the precedent exists, is documented, and even notes that a second copy lives in the tests. That settles the
+direction: **box, do not convert the iterators to classes.** Converting them would change the copy-vs-alias
+semantics of `iterator(reuse)`, which PORTING.md §4 explicitly warns is load-bearing — and the reuse call
+sites in `PromQL` (`Engine+MatrixSelector.swift:146`, `Engine+Smooth.swift:105`,
+`HistogramStatsIterator.swift:268`) are exactly the ones that depend on it.
+
+So the prerequisite gains two steps, and one of them is a cleanup that pays for itself:
+
+- **0.** Promote `BoxedXOR` to a real, `public` boxing adapter in `PromChunkEnc` — generic over the two float
+  iterators — and delete the duplicate in the tests. It is currently `internal` in `PromBlock` and duplicated,
+  which is how the two drift apart (the same argument that moved `rleHex` into `GoOracleSupport` in §7d).
+  Note the existing box answers `(Int64.min, nil)` for both histogram accessors, which matches Go's
+  `nopIterator` pairing and should be kept.
+- **4a.** Satisfy `ChunkIterable` on `XORChunk`/`XOR2Chunk` by returning the box, honouring `reuse` by
+  resetting it when the caller passes one of the right type.
+
+**The honest sizing, third revision.** This is not "conform two types"; it is a small `PromChunkEnc`
+refactor — one boxing adapter promoted and generalised, three protocols reconciled with their concrete
+types, and a factory added. Each step is specified and none has an open question left, but it is its own
+slice and it should be reviewed as one rather than smuggled into the `memSeries` commit.
+
+**And the pattern is worth naming, because this is the third time in one session it has appeared:** a
+protocol declared early "so another module can refer to it", with the conforming types written later and
+independently, drifts out of alignment silently — nothing forces the two together until someone needs the
+polymorphism. `Chunk`, `ChunkAppender` and `ChunkIterable` all did it. **When a slice declares a protocol with
+no conforming type, the next slice that adds a concrete type should be the one that conforms it**, even if
+nothing yet needs the existential.
+
 **It also closes a §6 deferral, which is why this belongs here rather than being a surprise.**
 `Sources/PromBlock/BlockReader.swift:160` already guards `enc == .xor` with the comment: *"XOR2 and the
 histogram encodings decode through their own iterators; a block containing them needs the same dispatch the
