@@ -53,14 +53,24 @@ Correctness is defined by differential testing against Go, not by hand-written e
 
 ```
 oracle/       Go module (separate from the Swift build) — `promoracle <cmd>`, JSONL in/out
+              probe/ holds committed lifts of unexported Go (see below)
 Fixtures/     committed golden JSONL + verbatim upstream testdata, sha256-pinned in MANIFEST.json
-Scripts/      regen-fixtures.sh · verify-fixtures.sh · sync-testdata.sh · fuzz-diff.sh
+Scripts/      regen-fixtures.sh · verify-fixtures.sh · regen-tables.sh · controls-*.sh (one per slice)
 ```
 
 - `swift test` is **hermetic** — it reads committed `Fixtures/` and needs no Go toolchain.
 - `Scripts/verify-fixtures.sh` regenerates with the oracle and diffs against the committed copies;
   run it in CI where Go is available, and on every upstream-pin bump.
+- `Scripts/regen-fixtures.sh` also copies the verbatim upstream testdata (`promql/promqltest/testdata`
+  and Go's `regexp/testdata`) — there is no separate sync script.
 - Adding a new byte-exact surface means adding an oracle subcommand and a fixture file, not writing
   expected values by hand.
+- **A corpus that nothing can break is not measuring anything.** Each slice gets a
+  `Scripts/controls-<slice>.sh` that perturbs one behaviour at a time, rebuilds, runs the relevant
+  suites and restores the file, reporting `broke` / `SURVIVED`. A survivor is a hypothesis, not a
+  proof — argue every one in the sweep's tail. See `Scripts/lib/control-run.sh`.
+- **When the Go you need to pin is unexported**, lift the file into its own package under
+  `oracle/probe/` and *commit the lift*, so `verify-fixtures.sh` re-runs it on every upstream-pin
+  bump. Only works when the file's dependencies are all exported packages.
 - Fixture tests **batch-report**: collect all mismatches and show the first 20 plus a count. Never
   stop at the first failure — corpora run to millions of cases.

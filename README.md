@@ -8,10 +8,11 @@ from Go to Swift, pinned to upstream **v3.13.2**.
 > **Status: phases 0–6 of 10 complete; phase 7 in progress.** The query engine passes all 2,183 of
 > upstream's `eval` assertions with zero failures and zero skips, and the TSDB **read** path is
 > closed — a block Prometheus wrote can be opened, matched, selected, trimmed and read. Phase 7 is
-> building the write path: the WAL round-trips and rejects corruption, and the Head can hold series
-> and cut chunks, but `headAppender`, `compact.go` and `db.go` are outstanding, so **the port cannot
-> yet produce a block outside a test**. There is no server, no scrape/ingest and no remote
-> read/write. ~58k of a projected ~85k lines of Swift. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> building the write path, and **the Head now ingests**: `append` → `commit` puts a sample in a chunk
+> and a record in the WAL, both byte-compared against Go. What it cannot yet do is be *queried*
+> (`head_read.go`) or *replay* (`head_wal.go`); `compact.go` and `db.go` are untouched, so **the port
+> cannot yet produce a block outside a test**. There is no server, no scrape/ingest and no remote
+> read/write. ~59k of a projected ~85k lines of Swift. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why this exists
 
@@ -27,8 +28,8 @@ workflow, the traps that have already cost time, and exactly what to do next.
 ## How correctness is defined
 
 Not by hand-written expectations. `oracle/` is a separate Go module (~30k lines) that runs the pinned
-Prometheus and Go toolchains and emits golden fixtures; `Fixtures/` holds **339,801 committed fixture
-lines** across 144 JSONL files, sha256-pinned in `MANIFEST.json`. `swift test` reads those and needs
+Prometheus and Go toolchains and emits golden fixtures; `Fixtures/` holds **339,841 committed fixture
+lines** across 145 JSONL files, sha256-pinned in `MANIFEST.json`. `swift test` reads those and needs
 no Go toolchain.
 
 ```sh
@@ -41,7 +42,7 @@ Adding a new byte-exact surface means adding an oracle subcommand and a fixture 
 expected values by hand. Two practices have been added to that rig as the port reached code with no
 exported entry point and no upstream test corpus:
 
-- **Negative-control sweeps.** `Scripts/controls-*.sh` (30 of them, one per slice) each perturb one
+- **Negative-control sweeps.** `Scripts/controls-*.sh` (31 of them, one per slice) each perturb one
   behaviour of the slice at a time, rebuild, run the relevant suites and restore the file, reporting
   `broke` / `SURVIVED`. A corpus that nothing can break is not measuring anything. A *survivor* is a
   hypothesis, not a proof — HANDOFF records the four distinct reasons one can survive.
@@ -58,7 +59,7 @@ above.
 
 ## What works today
 
-632 tests in 149 suites across 24 test targets, green on Swift 6.4 (Xcode 27) and on the Swift 6.1
+639 tests in 150 suites across 24 test targets, green on Swift 6.4 (Xcode 27) and on the Swift 6.1
 floor.
 
 ### Foundations
@@ -82,7 +83,7 @@ floor.
 | `PromQLParser` | lexer ported 1:1; hand-written precedence-climbing parser replacing goyacc; `ast.go`, `printer.go`, `prettier.go`, `model.Duration`, `strutil.Unquote`. 6,154 parse cases across six option sets — AST JSON, every error message and `PositionRange`, `String()`, `Prettify()`, `Tree()`, and `parse(print(parse(x))) == parse(x)` |
 | `PromQL` | the engine: instant and range queries, vector and matrix selectors, all 13 aggregation operators, the vector binary operators, subqueries, step-invariant duplication, and all 82 `FunctionCalls` entries that have a body. Plus `value.go`, `quantile.go`, `durations.go`, `PreprocessExpr`, `histogram_stats_iterator.go`, `info.go` |
 | `PromQLTest` | the `promqltest` runner and its directives — **2,183 of 2,183 `eval` assertions, zero failures, zero skips** |
-| `PromStorage`, `PromTestStorage` | the storage protocols, merge and sample iterators; an in-memory `Queryable` whose contract is itself pinned against a real `tsdb.DB` |
+| `PromStorage`, `PromTestStorage` | the storage protocols, `Appender`, and the sample iterators (`Buffer`, `MemoizedIterator`, `SampleRing`); an in-memory `Queryable` whose contract is itself pinned against a real `tsdb.DB`. `storage/merge.go` is not ported — nothing needs it until `db.go` |
 
 ### TSDB
 
@@ -95,7 +96,7 @@ floor.
 | `PromTombstones`, `PromFS` | deletion-interval arithmetic and `Stone`; the filesystem layer (ADR-15) |
 | `PromRecord` | `tsdb/record` in full — the WAL wire format both directions: Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers, and integer/float histograms in V1, V2 and custom-buckets flavours |
 | `PromWAL` | `tsdb/wlog`'s segment format: 32 KB page framing, the `[type\|flags][BE16 length][BE32 CRC-32C]` fragment header, `WL`, `Reader`, `SegmentBufReader` — plus a corruption corpus that pins every rejection path. Uncompressed only |
-| `PromHead` | **in progress**: `isolation.go`, `seriesHashmap`/`stripeSeries`, `memSeries`' in-order chunk state (all four of upstream's cut rules), `HeadOptions`/`NewHead`. `headAppender`, `head_read.go` and `head_wal.go` are next |
+| `PromHead` | **in progress**: `isolation.go`, `seriesHashmap`/`stripeSeries`, `memSeries`' in-order chunk state (all four of upstream's cut rules), `HeadOptions`/`NewHead`, and **the float append path** — `Head.Appender`, `Append`, `Commit`, `Rollback`, asserted in all three places a committed sample lands: the accessors, the WAL records byte for byte, and the chunk files. `head_read.go` (query) and `head_wal.go` (replay) are next |
 
 ### Two divergences worth knowing about
 

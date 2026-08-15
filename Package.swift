@@ -140,8 +140,11 @@ let package = Package(
             ]
         ),
 
-        // Phase 6: `tsdb/index`'s postings algebra. `MemPostings` is deliberately not here — that is
-        // the Head's in-memory index and belongs with the Head in Phase 7. See Postings.swift.
+        // Phase 6: `tsdb/index`'s postings algebra, plus Phase 7's `MemPostings` (§7e). `MemPostings`
+        // is the HEAD's in-memory inverted index and the Head is its only filler, but it lives here
+        // because `tsdb/index/postings.go` is where upstream puts it and every target here maps
+        // one-to-one onto a Go package. See Postings.swift for the algebra a query compiles into,
+        // MemPostings.swift for the container the Head fills.
         .target(
             name: "PromIndex",
             dependencies: [
