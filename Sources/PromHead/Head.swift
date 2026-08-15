@@ -190,7 +190,7 @@ public final class Head {
     /// Go: `numSeries`.
     public private(set) var numSeries: UInt64 = 0
     /// Go: `numStaleSeries`.
-    public private(set) var numStaleSeries: UInt64 = 0
+    var numStaleSeries: UInt64 = 0
     /// Go: `minTime`/`maxTime`. **`minTime == MaxInt64` means uninitialised**, so the two are stored in that
     /// order and upstream's comment warns that `maxTime` must be updated first.
     var minTimeValue: Int64 = Int64.max
