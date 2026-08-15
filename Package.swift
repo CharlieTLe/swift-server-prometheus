@@ -110,7 +110,14 @@ let package = Package(
         .target(name: "PromTombstones", dependencies: ["PromStorage", "GoCompat"]),
 
         // Phase 7: `tsdb/wlog` — the segment framing the records travel in.
-        .target(name: "PromWAL", dependencies: ["PromFS", "PromHash", "GoCompat"]),
+        .target(
+            name: "PromWAL",
+            dependencies: [
+                // `PromRecord` and its neighbours arrive with §7h(c)'s `checkpoint.go`, which filters records
+                // rather than copying bytes — a checkpoint has to decode what it prunes.
+                "PromChunks", "PromFS", "PromHash", "PromRecord", "PromStorage", "PromTombstones",
+                "GoCompat",
+            ]),
 
         // Phase 7: the Head. `tsdb/isolation.go` first, because `defaultIsolationDisabled` is false — every
         // `NewHead` runs it, and every append takes an ID from it. See HANDOFF §7f.
@@ -304,7 +311,13 @@ let package = Package(
         ),
         .testTarget(
             name: "PromWALTests",
-            dependencies: ["PromWAL", "PromFS", "PromHash", "PromRecord", "GoOracleSupport", "GoCompat"]
+            dependencies: [
+                "PromWAL", "PromFS", "PromHash", "PromRecord",
+                // §7h(c): `CheckpointTests` builds records and reads the stats back, so it needs the types
+                // `checkpoint.go` filters — the same set `PromWAL` itself gained.
+                "PromChunks", "PromLabels", "PromStorage", "PromTombstones",
+                "GoOracleSupport", "GoCompat",
+            ]
         ),
         .testTarget(
             name: "PromRecordTests",

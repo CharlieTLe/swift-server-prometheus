@@ -185,9 +185,14 @@ extension Head {
         tombstones.deleteTombstones(r.deleted)
         tombstones.truncateBefore(mint)
 
-        // Upstream also records `walExpiries[ref] = actualInOrderMint` for every deleted series, so WAL
-        // checkpointing keeps their series records while the WAL still holds their samples — otherwise a replay
-        // would meet a sample whose ref has no labels. That map and its reader are §7h's.
+        // Samples for deleted series are likely still in the WAL, so flag that their series records must be
+        // kept while the WAL contains data through `actualInOrderMint`. Without this a replay would meet a
+        // sample whose ref has no labels. §7h(c) added the map's reader.
+        if wal != nil {
+            for ref in r.deleted {
+                walExpiries[HeadSeriesRef(rawValue: ref.rawValue)] = r.actualMint
+            }
+        }
 
         return (r.actualMint, r.minMmapFile)
     }
@@ -258,7 +263,7 @@ extension Head {
         if !wasInitialized {
             return
         }
-        // `truncateWAL(mint)` belongs here and is §7h's: it needs the checkpoint machinery and `walExpiries`.
+        try truncateWAL(mint: mint)
     }
 
     /// Go: `Head.truncateMemory`.
@@ -354,13 +359,17 @@ public enum HeadDeleteError: Error, CustomStringConvertible {
     }
 }
 
-/// Go: `fmt.Errorf("truncate chunks.HeadReadWriter by file number: %w", err)`.
+/// Go: `truncateMemory`/`truncateWAL`'s wrapped errors.
 public enum HeadTruncateError: Error, CustomStringConvertible {
+    /// Go: `fmt.Errorf("truncate chunks.HeadReadWriter by file number: %w", err)`.
     case truncateChunks(any Error)
+    /// Go: `fmt.Errorf("create checkpoint: %w", err)`.
+    case createCheckpoint(any Error)
 
     public var description: String {
         switch self {
         case .truncateChunks(let e): return "truncate chunks.HeadReadWriter by file number: \(e)"
+        case .createCheckpoint(let e): return "create checkpoint: \(e)"
         }
     }
 }

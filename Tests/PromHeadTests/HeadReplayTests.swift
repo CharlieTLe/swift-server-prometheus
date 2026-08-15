@@ -38,7 +38,9 @@ struct HWIn: Codable, Sendable {
     var closeFirst: Bool
     var minValidTime: Int64?
     var truncateBeforeClose: Int64?
+    var truncateTwice: Int64?
     var deleteBeforeClose: [Int64]?
+    var deleteAfterPhase: Int?
     var replayTwice: Bool?
     var corruptChunkFile: Bool?
     var cutSegmentBetweenPhases: Bool?
@@ -63,10 +65,30 @@ struct HWHeadOut: Codable, Equatable, Sendable {
     var initErr: String
 }
 
+/// One record from the checkpoint, decoded. The `files` bytes are the contract; this is the same thing in a
+/// form a failure message can be read — which is what makes "the checkpoint kept a series record for a series
+/// the head no longer has" legible rather than buried in hex.
+///
+/// The three payload arrays are OPTIONAL because Go's `omitempty` drops them when empty, so a record with no
+/// entries must decode to `nil` here rather than `[]` or the `==` comparison fails.
+struct HWCPRecord: Codable, Equatable, Sendable {
+    var type: String
+    var series: [String]?
+    var samples: [String]?
+    var stones: [String]?
+}
+
+struct HWCheckpointOut: Codable, Equatable, Sendable {
+    var name: String
+    var files: [HAFileOut]
+    var records: [HWCPRecord]
+}
+
 struct HWOut: Codable, Equatable, Sendable {
     var original: HWHeadOut
     var replayed: HWHeadOut
     var again: HWHeadOut?
+    var checkpoint: HWCheckpointOut?
     var equivalent: Bool
 }
 
@@ -126,6 +148,54 @@ struct HeadReplayTests {
         return out
     }
 
+    /// The checkpoint directory, if the truncation wrote one, read through the same reader `Init` uses — which
+    /// is the point: a checkpoint is a WAL directory and nothing special is needed to open one.
+    ///
+    /// The LAST `checkpoint.*` is the one taken, matching Go's sorted `ReadDir` walk. Normally there is only
+    /// one, because `truncateWAL` deletes the checkpoints it supersedes; a second would show up in
+    /// `walSegments` rather than being hidden here.
+    static func readCheckpoint(_ fs: InMemoryFS) -> HWCheckpointOut? {
+        let names = ((try? fs.list("head/wal")) ?? []).sorted()
+        guard let name = names.last(where: { $0.hasPrefix("checkpoint.") }) else { return nil }
+        let cpdir = "head/wal/\(name)"
+        var out = HWCheckpointOut(
+            name: name, files: HeadAppendTests.readDir(fs, cpdir), records: [])
+
+        guard let sr = try? newWALSegmentsReader(fs, cpdir) else { return out }
+        let r = WALReader(sr)
+        var dec = RecordDecoder()
+        while r.next() {
+            let rec = r.record
+            var cr = HWCPRecord(type: recordType(rec).description)
+            switch recordType(rec) {
+            case .series:
+                let ss = (try? dec.series(rec)) ?? []
+                cr.series = ss.isEmpty ? nil : ss.map { "\($0.ref.rawValue)=\($0.labels)" }
+            case .samples, .samplesV2:
+                let ss = (try? dec.samples(rec)) ?? []
+                cr.samples =
+                    ss.isEmpty
+                    ? nil : ss.map { "\($0.ref.rawValue)@\($0.t)=\(hbits($0.v))" }
+            case .tombstones:
+                let ts = (try? dec.tombstones(rec)) ?? []
+                // Go prints `tombstones.Intervals` with `%v`, so a stone reads `1:[{9000 11000}]`.
+                cr.stones =
+                    ts.isEmpty
+                    ? nil
+                    : ts.map { stone in
+                        let ivs = stone.intervals.map { "{\($0.mint) \($0.maxt)}" }
+                            .joined(separator: " ")
+                        return "\(stone.ref.rawValue):[\(ivs)]"
+                    }
+            default:
+                break
+            }
+            out.records.append(cr)
+        }
+        try? sr.close()
+        return out
+    }
+
     @Test("every committed case matches Go, byte for byte")
     func matchesGo() throws {
         try Fixtures.check("head/replay.jsonl", FixtureCase<HWIn, HWOut>.self) { input in
@@ -150,6 +220,11 @@ struct HeadReplayTests {
 
             let h1 = try newHead()
             try h1.initialize(minValidTime: 0)
+            func deleteAll() throws {
+                let d = input.deleteBeforeClose!
+                try h1.delete(
+                    mint: d[0], maxt: d[1], matchers: [try Matcher(.regexp, "__name__", ".*")])
+            }
             for (pi, phase) in input.phases.enumerated() {
                 let app = h1.appender()
                 for s in phase {
@@ -158,6 +233,9 @@ struct HeadReplayTests {
                         v: fbits(s.v))
                 }
                 try app.commit()
+                if input.deleteAfterPhase == pi {
+                    try deleteAll()
+                }
                 if (input.cutSegmentBetweenPhases ?? false) && pi < input.phases.count - 1 {
                     _ = try lastWAL!.nextSegment()
                 }
@@ -165,9 +243,11 @@ struct HeadReplayTests {
             if let t = input.truncateBeforeClose {
                 try h1.truncate(mint: t)
             }
-            if let d = input.deleteBeforeClose, d.count == 2 {
-                try h1.delete(
-                    mint: d[0], maxt: d[1], matchers: [try Matcher(.regexp, "__name__", ".*")])
+            if let t = input.truncateTwice {
+                try h1.truncate(mint: t)
+            }
+            if let d = input.deleteBeforeClose, d.count == 2, input.deleteAfterPhase == nil {
+                try deleteAll()
             }
 
             var out = HWOut(
@@ -175,7 +255,7 @@ struct HeadReplayTests {
                 replayed: HWHeadOut(
                     minTime: 0, maxTime: 0, numSeries: 0, numStale: 0, series: [], tombstones: [],
                     chunkDirEntries: [], walSegments: [], initErr: ""),
-                again: nil, equivalent: false)
+                again: nil, checkpoint: Self.readCheckpoint(fs), equivalent: false)
 
             if input.closeFirst {
                 try h1.close()
@@ -401,6 +481,305 @@ struct HeadReplayTests {
         #expect(head.tombstonesReader().total() == 0)
         // The head stays UNINITIALISED, because nothing was appended.
         #expect(head.initialized() == false)
+        try head.close()
+    }
+
+    // MARK: - §7h(c): truncateWAL, the two-thirds rule, and the WAL expiries
+
+    /// Build a head on `fs` with `chunkRange` 4000 and a real WAL.
+    private static func newTruncHead(_ fs: InMemoryFS) throws -> Head {
+        let opts = HeadOptions.default()
+        opts.chunkDirRoot = "head"
+        opts.chunkRange = 4000
+        return try Head(fs: fs, wal: try WL(fs: fs, dir: "head/wal"), opts: opts)
+    }
+
+    /// `updateWALExpiry` takes the MAXIMUM, never lowering an expiry already set — a duplicate series record's
+    /// later samples can only extend how long its record must be kept. And an absent ref answers `(0, false)`,
+    /// where the flag rather than the zero is what `keepSeriesInWALCheckpointFn` reads.
+    ///
+    /// Unreachable from the corpus: `gc` only ever writes one expiry per series per truncation, so no case
+    /// writes the same ref twice.
+    @Test("updateWALExpiry takes the max, and an absent ref reports not-found rather than zero")
+    func walExpiryTakesTheMax() throws {
+        let fs = InMemoryFS()
+        let head = try Self.newTruncHead(fs)
+        let ref = HeadSeriesRef(rawValue: 7)
+
+        var (keepUntil, ok) = head.walExpiry(ref)
+        #expect(keepUntil == 0)
+        #expect(ok == false)
+
+        head.updateWALExpiry(ref, keepUntil: 5000)
+        (keepUntil, ok) = head.walExpiry(ref)
+        #expect(keepUntil == 5000)
+        #expect(ok == true)
+
+        // Lower: ignored.
+        head.updateWALExpiry(ref, keepUntil: 1000)
+        #expect(head.walExpiry(ref).0 == 5000)
+        // Higher: taken.
+        head.updateWALExpiry(ref, keepUntil: 9000)
+        #expect(head.walExpiry(ref).0 == 9000)
+        // A negative expiry on a fresh ref is stored as itself, not clamped to zero — the `Int64.min` seed is
+        // what makes that work, and `0` would have swallowed it.
+        head.updateWALExpiry(HeadSeriesRef(rawValue: 8), keepUntil: -50)
+        #expect(head.walExpiry(HeadSeriesRef(rawValue: 8)) == (-50, true))
+        try head.close()
+    }
+
+    /// `keepSeriesInWALCheckpointFn`'s two arms, in isolation. The corpus reaches both through `Truncate`, but
+    /// only in combination; here each is on its own, including the boundary — the expiry test is `>= mint`, so a
+    /// series whose samples end exactly at the truncation point keeps its record.
+    @Test("a series record is kept because the series exists, or because its expiry has not passed")
+    func keepSeriesBothArms() throws {
+        let fs = InMemoryFS()
+        let head = try Self.newTruncHead(fs)
+        try head.initialize(minValidTime: 0)
+        let app = head.appender()
+        try app.append(
+            ref: SeriesRef(rawValue: 0), labels: Labels([Label("__name__", "live")]), t: 1000, v: 1)
+        try app.commit()
+        let live = head.series.getByHash(
+            hash: Labels([Label("__name__", "live")]).goHash(),
+            labels: Labels([Label("__name__", "live")]))!
+
+        let keep = head.keepSeriesInWALCheckpointFn(mint: 5000)
+        // First arm: the series is in the head, and no expiry is needed.
+        #expect(keep(live.ref) == true)
+        #expect(head.walExpiry(live.ref).1 == false)
+        // Neither arm: gone from the head, no expiry.
+        #expect(keep(HeadSeriesRef(rawValue: 99)) == false)
+        // Second arm, at the boundary and either side of it.
+        head.updateWALExpiry(HeadSeriesRef(rawValue: 99), keepUntil: 5000)
+        #expect(keep(HeadSeriesRef(rawValue: 99)) == true)
+        head.walExpiries[HeadSeriesRef(rawValue: 99)] = 4999
+        #expect(keep(HeadSeriesRef(rawValue: 99)) == false)
+        try head.close()
+    }
+
+    /// The two-thirds rule at its threshold. `last` is decremented first — the live segment is never
+    /// checkpointed — and then `first + (last-first)*2/3` has to come out ABOVE `first` for the checkpoint to be
+    /// worth writing. With `first == 0` that needs FOUR segments: three gives `(2-1)*2/3 == 0`.
+    ///
+    /// The corpus has the five-segment case and the one-segment case; this is the boundary between them, which
+    /// no corpus case sits on.
+    @Test("three segments is not enough for a checkpoint and four is")
+    func twoThirdsRuleThreshold() throws {
+        for (segments, wantCheckpoint) in [(3, false), (4, true)] {
+            let fs = InMemoryFS()
+            let head = try Self.newTruncHead(fs)
+            try head.initialize(minValidTime: 0)
+            // One phase per segment, so every segment has records in it.
+            for s in 0..<segments {
+                let app = head.appender()
+                try app.append(
+                    ref: SeriesRef(rawValue: 0), labels: Labels([Label("__name__", "m")]),
+                    t: Int64(s) * 4000, v: Double(s))
+                try app.commit()
+                if s < segments - 1 {
+                    _ = try head.wal!.nextSegment()
+                }
+            }
+
+            try head.truncateWAL(mint: 4000)
+            let names = ((try? fs.list("head/wal")) ?? []).sorted()
+            let checkpoints = names.filter { $0.hasPrefix("checkpoint.") }
+            if wantCheckpoint {
+                // last = 3, decremented to 2, `0 + 2*2/3 = 1` — so segments 0 and 1, and `Truncate(2)`.
+                #expect(checkpoints == ["checkpoint.00000001"])
+                #expect(names.filter { !$0.hasPrefix("checkpoint.") } == ["00000002", "00000003", "00000004"])
+            } else {
+                #expect(checkpoints.isEmpty)
+                // A new segment is cut EITHER WAY: that happens before the rule is consulted.
+                #expect(names == ["00000000", "00000001", "00000002", "00000003"])
+            }
+            try head.close()
+        }
+    }
+
+    /// `mint <= lastWALTruncationTime` is the idempotence guard, and it is why `Truncate` can be called on every
+    /// tick. A second truncation at the same point does nothing at all — not even cut a segment.
+    @Test("a truncation at or below the last one does nothing, not even cut a segment")
+    func truncateWALIsIdempotent() throws {
+        let fs = InMemoryFS()
+        let head = try Self.newTruncHead(fs)
+        try head.initialize(minValidTime: 0)
+        let app = head.appender()
+        try app.append(
+            ref: SeriesRef(rawValue: 0), labels: Labels([Label("__name__", "m")]), t: 1000, v: 1)
+        try app.commit()
+
+        try head.truncateWAL(mint: 2000)
+        #expect(head.lastWALTruncationTime == 2000)
+        let after = ((try? fs.list("head/wal")) ?? []).sorted()
+        #expect(after == ["00000000", "00000001"])
+
+        try head.truncateWAL(mint: 2000)  // Equal: refused.
+        try head.truncateWAL(mint: 1000)  // Lower: refused.
+        #expect(((try? fs.list("head/wal")) ?? []).sorted() == after)
+        #expect(head.lastWALTruncationTime == 2000)
+
+        try head.truncateWAL(mint: 3000)  // Higher: another segment.
+        #expect(((try? fs.list("head/wal")) ?? []).sorted() == ["00000000", "00000001", "00000002"])
+        try head.close()
+    }
+
+    /// The expiries are pruned at the END of `truncateWAL`, after the checkpoint — the order is the whole point,
+    /// because the checkpoint is what makes the expiry unnecessary. Only expiries strictly BELOW `mint` go, so
+    /// one exactly at `mint` survives to be read by the next checkpoint.
+    ///
+    /// And they are pruned ONLY when a checkpoint was written: every early return above sits before the prune,
+    /// so a truncation that declined to checkpoint leaves every expiry in place. Both halves are asserted here,
+    /// because the difference is what stops a series record being dropped before its samples are gone.
+    @Test("truncateWAL prunes the expiries below mint, and only once it has written a checkpoint")
+    func expiriesArePrunedAfterTheCheckpoint() throws {
+        // Four segments, so the two-thirds rule fires.
+        func seed(_ head: Head) throws {
+            try head.initialize(minValidTime: 0)
+            for s in 0..<4 {
+                let app = head.appender()
+                try app.append(
+                    ref: SeriesRef(rawValue: 0), labels: Labels([Label("__name__", "m")]),
+                    t: Int64(s) * 4000, v: Double(s))
+                try app.commit()
+                if s < 3 { _ = try head.wal!.nextSegment() }
+            }
+            head.updateWALExpiry(HeadSeriesRef(rawValue: 10), keepUntil: 1999)
+            head.updateWALExpiry(HeadSeriesRef(rawValue: 11), keepUntil: 2000)
+            head.updateWALExpiry(HeadSeriesRef(rawValue: 12), keepUntil: 2001)
+        }
+
+        let fs = InMemoryFS()
+        let head = try Self.newTruncHead(fs)
+        try seed(head)
+        try head.truncateWAL(mint: 2000)
+        #expect(((try? fs.list("head/wal")) ?? []).contains("checkpoint.00000001"))
+        #expect(head.walExpiries.keys.map(\.rawValue).sorted() == [11, 12])
+        try head.close()
+
+        // The same expiries, but a truncation that returns before checkpointing: nothing is pruned.
+        let fs2 = InMemoryFS()
+        let head2 = try Self.newTruncHead(fs2)
+        try head2.initialize(minValidTime: 0)
+        let app = head2.appender()
+        try app.append(
+            ref: SeriesRef(rawValue: 0), labels: Labels([Label("__name__", "m")]), t: 1000, v: 1)
+        try app.commit()
+        head2.updateWALExpiry(HeadSeriesRef(rawValue: 10), keepUntil: 1999)
+        try head2.truncateWAL(mint: 2000)
+        #expect(((try? fs2.list("head/wal")) ?? []).allSatisfy { !$0.hasPrefix("checkpoint.") })
+        #expect(head2.walExpiries.keys.map(\.rawValue) == [10])
+        try head2.close()
+    }
+
+    /// `Init` replays the CHECKPOINT first and then only the segments above it, and the checkpoint's records are
+    /// what carry a series whose live segment is gone. Driven directly rather than through `Truncate`, so the
+    /// checkpoint's content is chosen rather than derived.
+    @Test("Init reads the checkpoint before the segments, and skips the ones it covers")
+    func initBackfillsTheCheckpoint() throws {
+        let fs = InMemoryFS()
+        let enc = RecordEncoder()
+        let lset = Labels([Label("__name__", "m")])
+
+        // Live segments 2 and 3 with the samples. Neither carries a series record — the checkpoint is the only
+        // place the labels for ref 4 exist, so a replay that skipped it would drop these samples entirely.
+        let w = try WL(fs: fs, dir: "head/wal")
+        _ = try w.nextSegment()  // 1
+        _ = try w.nextSegment()  // 2
+        try w.log(enc.samples([RefSample(ref: HeadSeriesRef(rawValue: 4), t: 2000, v: 2)]))
+        _ = try w.nextSegment()  // 3
+        try w.log(enc.samples([RefSample(ref: HeadSeriesRef(rawValue: 4), t: 3000, v: 3)]))
+        try w.close()
+        // Segments 0 and 1 are the ones the checkpoint covers, so they are gone.
+        try fs.remove("head/wal/00000000")
+        try fs.remove("head/wal/00000001")
+
+        // The checkpoint, holding the series record and the sample from the segments that went.
+        let cp = try WL(fs: fs, dir: "head/wal/checkpoint.00000001")
+        try cp.log(enc.series([RefSeries(ref: HeadSeriesRef(rawValue: 4), labels: lset)]))
+        try cp.log(enc.samples([RefSample(ref: HeadSeriesRef(rawValue: 4), t: 1000, v: 1)]))
+        try cp.close()
+
+        let opts = HeadOptions.default()
+        opts.chunkDirRoot = "head"
+        opts.chunkRange = 4000
+        let head = try Head(fs: fs, wal: try WL(fs: fs, dir: "head/wal"), opts: opts)
+        try head.initialize(minValidTime: 0)
+
+        let s = head.series.getByHash(hash: lset.goHash(), labels: lset)
+        #expect(s?.ref.rawValue == 4)
+        // Every sample the checkpoint and the surviving segments hold, and each exactly once — the checkpoint's
+        // t=1000 is not replayed a second time by a segment scan that started too low.
+        var seen: [Int64] = []
+        let ir = head.index()
+        let cr = try head.chunks()
+        if let s, let (_, metas) = try? ir.series(SeriesRef(rawValue: s.ref.rawValue)) {
+            for m in metas {
+                guard let (chk, _) = try? cr.chunkOrIterable(meta: m), let chk else { continue }
+                let it = chk.iterator(nil)
+                while it.next() == .float { seen.append(it.at().0) }
+            }
+        }
+        #expect(seen == [1000, 2000, 3000])
+        try cr.close()
+        try head.close()
+    }
+
+    /// Upstream takes only `endAt` from `Segments` — `startFrom` is the CHECKPOINT's index, or 0. So a WAL whose
+    /// oldest segment is above 0 with NO checkpoint asks for segment 0 and fails, rather than quietly starting
+    /// at whatever is there. The port used the directory's first index before §7h(c) and this is what pins the
+    /// difference; it is unreachable in normal operation, because `truncateWAL` always leaves a checkpoint
+    /// behind when it removes segments.
+    @Test("a WAL missing its low segments with no checkpoint fails rather than skipping them")
+    func missingLowSegmentsWithoutACheckpointFails() throws {
+        let fs = InMemoryFS()
+        let enc = RecordEncoder()
+        let w = try WL(fs: fs, dir: "head/wal")
+        try w.log(
+            enc.series([
+                RefSeries(ref: HeadSeriesRef(rawValue: 1), labels: Labels([Label("n", "a")]))
+            ]))
+        _ = try w.nextSegment()
+        _ = try w.nextSegment()
+        try w.log(enc.samples([RefSample(ref: HeadSeriesRef(rawValue: 1), t: 1000, v: 1)]))
+        try w.close()
+        // Remove the low segments WITHOUT writing a checkpoint, which is the state `wlog.Truncate` alone leaves.
+        try fs.remove("head/wal/00000000")
+        try fs.remove("head/wal/00000001")
+
+        let opts = HeadOptions.default()
+        opts.chunkDirRoot = "head"
+        let head = try Head(fs: fs, wal: try WL(fs: fs, dir: "head/wal"), opts: opts)
+        do {
+            try head.initialize(minValidTime: 0)
+            Issue.record("expected a missing-segment failure")
+        } catch let e as HeadReplayError {
+            #expect(e.description.hasPrefix("open WAL segment: 0: "))
+        }
+        try head.close()
+    }
+
+    /// A corrupt CHECKPOINT is a hard error, not a recovery: *"There's likely little data that can be recovered
+    /// anyway"* — the head cannot know which series records it lost. Wrapped as `backfill checkpoint`.
+    @Test("a corrupt checkpoint fails Init rather than being skipped")
+    func corruptCheckpointFailsInit() throws {
+        let fs = InMemoryFS()
+        try fs.createDirectory("head/wal")
+        let cp = try WL(fs: fs, dir: "head/wal/checkpoint.00000000")
+        // A `series` type byte the decoder cannot finish.
+        try cp.log([RecordType.series.rawValue, 0x01, 0x02])
+        try cp.close()
+
+        let opts = HeadOptions.default()
+        opts.chunkDirRoot = "head"
+        let head = try Head(fs: fs, wal: try WL(fs: fs, dir: "head/wal"), opts: opts)
+        do {
+            try head.initialize(minValidTime: 0)
+            Issue.record("expected a backfill failure")
+        } catch let e as HeadReplayError {
+            #expect(e.description.hasPrefix("backfill checkpoint: "))
+        }
         try head.close()
     }
 }
