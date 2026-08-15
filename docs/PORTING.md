@@ -2774,6 +2774,21 @@ changing behaviour.
     the two rollback cases were the only mismatches on the suite's first run, and both were a 28-byte series
     record the port had not written.
 
+191. **An OOO chunk ref for a series that has never taken an out-of-order sample SEGFAULTS upstream.**
+    `chunkFromSeries` routes a ref whose bit 23 is set straight to `memSeries.oooChunk`, which dereferences
+    `s.ooo.firstOOOChunkID` with no nil check — and `s.ooo` is nil for every series that has only ever taken
+    in-order samples. The corpus found this by feeding a hand-made ref: `promoracle` crashed with a nil pointer
+    dereference in `head_read.go:689`. Unreachable in practice, because only the OOO append path mints such
+    refs, so the port **diverges deliberately** and answers `ErrNotFound` — a hand-made ref is exactly the case
+    a port should not reproduce a crash for. The corpus records the input it cannot use, in
+    `oracle/suites_head_read.go`.
+
+192. **`RangeHead.BlockMaxTime` WRAPS when `maxt` is `math.MaxInt64`.** It is `MaxTime() + 1`, because a block's
+    interval is half-open where a head's is closed — and `NewRangeHead` puts no restriction on `maxt`, so a
+    caller asking for "everything" gets `math.MinInt64` back. Swift's checked `+` trapped on exactly that input
+    while the corpus was being generated, which is how it was found; the port uses `&+`. Anything that computed
+    a block interval from that number would produce an inverted range, and upstream would too.
+
 ## Not ported
 
 - The React UI (`web/ui/mantine-ui`, ~25k lines TS) — ship the prebuilt bundle, do the five

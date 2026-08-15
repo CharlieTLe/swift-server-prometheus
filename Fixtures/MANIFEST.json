@@ -61,6 +61,7 @@
     "head/append.jsonl": { "sha256": "3a532cff962d8facd898ebf289c693a870fb685413d54feb201ec215aab46e44", "lines": 40 },
     "head/core.jsonl": { "sha256": "c9a8c56750f498b83b64858afb4ed835e5d6640703471ab3bc29288598e85557", "lines": 25 },
     "head/memseries.jsonl": { "sha256": "4f6204ca80a36336056effe86e894b22dd1dfebedd3989f5c43971c1d1a12e13", "lines": 58 },
+    "head/read.jsonl": { "sha256": "2c8ab66891e9579cc378d158b42dbdc181c68e7c7f3b47e12020696a85a1d142", "lines": 23 },
     "histogram/bounds.jsonl": { "sha256": "082195cef42198afffce0c0419e036be74323e0f5e02c29bf906e57b89cb19b0", "lines": 188 },
     "histogram/convertnhcb.jsonl": { "sha256": "d261c4443335b2c041f4ce044288fc83c45efbe7c18cceaf1d1c2723c3a0614d", "lines": 49 },
     "histogram/float-add.jsonl": { "sha256": "adf45a4f0088f6eb9a26f4eb5c9b6eef98e1be17079b1a243d40156a2eb6ab35", "lines": 336 },
