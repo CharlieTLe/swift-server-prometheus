@@ -213,6 +213,10 @@ public final class Head {
     public let opts: HeadOptions
     /// Go: `wal` — may be nil, and `NewHead` accepts that: a Head with no WAL simply does not log.
     public let wal: WL?
+    /// The filesystem the Head was built with. Upstream reaches the WAL's directory through `os` directly;
+    /// `PromFS` is an object, so the Head keeps the one it was handed — `Init` opens WAL segments itself
+    /// (§7h(b)) and `WL` keeps its own copy private.
+    public let fsStorage: any PromFS
 
     /// Go: `series` — all series addressable by ID or by label hash.
     public private(set) var series: StripeSeries
@@ -276,6 +280,7 @@ public final class Head {
 
         self.opts = opts
         self.wal = wal
+        self.fsStorage = fs
         self.stats = stats ?? HeadStats()
 
         // resetInMemoryState, inlined because Swift cannot call a method before the stored properties are

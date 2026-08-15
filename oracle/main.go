@@ -131,6 +131,7 @@ var suites = map[string]func(*emitter){
 	"head/append":             genHeadAppend,
 	"head/read":               genHeadRead,
 	"head/gc":                 genHeadGC,
+	"head/replay":             genHeadReplay,
 	"block/seriesset":         genBlockSeriesSet,
 	"block/meta":              genBlockMeta,
 	"gocompat/time-rfc3339":   genGoTimeRFC3339,
