@@ -340,6 +340,25 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     still faithful and is pinned: the corpus commits *whether* `NewHead` replaced the value, not the number it
     replaced it with.
 
+25. **A checkpoint's temporary directory is COPIED to its final name, not renamed atomically.** Upstream writes
+    into `checkpoint.NNNNNNNN.tmp`, `Sync`s the directory, and then `fileutil.Replace`s it onto
+    `checkpoint.NNNNNNNN` — a rename, so the final name never exists in a half-written state and
+    `LastCheckpoint` can trust anything it finds. `PromFS` (ADR-15) has `createFile`, `append` and `remove` and
+    **no rename**, so the port creates the final directory and copies each segment's bytes into it, then removes
+    the temporary one.
+
+    **The end state is identical and is pinned as bytes**: `Fixtures/head/replay.jsonl` commits the checkpoint
+    directory's name and every segment's contents, and `CheckpointTests` asserts the `.tmp` name is gone whether
+    the checkpoint succeeded or failed (upstream's unconditional `defer`, which the port reproduces).
+
+    **The crash window is not the same, and cannot be.** Upstream's failure modes are "the temporary directory
+    exists" or "the final directory exists". The port adds a third: a crash mid-copy leaves a final directory
+    with a prefix of the segments, which `Head.Init` would then replay as a complete checkpoint and lose the
+    records that had not been copied. Closing it needs a rename in `PromFS`, which is a one-method addition —
+    recorded here rather than fixed because ADR-15's protocol is deliberately minimal and every other caller
+    happens not to need one. **Anything that adds `rename` to `PromFS` should come back and delete this
+    exception.**
+
 ## Replicated Go quirks
 
 The inverse of the list above: places where Go does something that reads like a bug, and the port
@@ -2788,6 +2807,35 @@ changing behaviour.
     caller asking for "everything" gets `math.MinInt64` back. Swift's checked `+` trapped on exactly that input
     while the corpus was being generated, which is how it was found; the port uses `&+`. Anything that computed
     a block interval from that number would produce an inverted range, and upstream would too.
+
+193. **A checkpoint COPIES histogram, exemplar and metadata records through unfiltered, where upstream filters
+    them.** Not a Go quirk but the port's, and it is listed here because it is the one place §7h(c) does less
+    than upstream rather than differently. Upstream's `Checkpoint` has a case for each of the eleven record
+    types: histograms and exemplars are dropped below `mint`, and metadata is accumulated into a map so only the
+    LATEST per series is written, flushed once after the loop. The port's `Head` cannot produce any of them yet
+    (§7f defers the histogram append path, exemplars and `UpdateMetadata`), so a filter for them would be code
+    no corpus could reach. They are copied through byte for byte instead and counted in
+    `CheckpointStats.passedThrough`, which is not an upstream field — so a checkpoint that carries them is
+    lossless rather than silently lossy, and the count says how many.
+
+    What is **not** copied through: an unknown type, and `MmapMarkers`. Upstream's switch has no case for either,
+    so both fall to `default: continue` and are dropped, and the port drops them too — copying an unknown record
+    through would be a divergence rather than a deferral, since the whole point of upstream's `continue` is that
+    a record a future Prometheus wrote cannot be reasoned about. `CheckpointTests` plants all eleven types by
+    hand and asserts the split. **Whoever lands the histogram append path or `UpdateMetadata` closes this**: the
+    three filters and the metadata map become reachable, and this entry becomes a bug.
+
+194. **A `Stone`'s multi-interval `break` in the checkpoint filter is DEAD, because the record codec flattened
+    the intervals away.** Upstream's tombstone filter reads as if a stone can carry several intervals — it scans
+    them and `break`s out on the first one whose `Maxt` reaches `mint`, keeping the stone whole rather than
+    trimming it. But `record.Encoder.Tombstones` writes one entry per *(ref, interval)* pair and
+    `record.Decoder.Tombstones` builds one `Stone` with exactly one `Interval` from each, so a stone that came
+    off a WAL never has more than one interval to scan. The `break` can only ever run on its first iteration.
+
+    The port keeps the shape (`stone.intervals.contains { $0.maxt >= mint }`) because it is what upstream means
+    and because `MemTombstones` genuinely does hold multi-interval stones — it is only the WAL round trip that
+    flattens them. Pinned by `CheckpointTests`, which encodes a two-interval stone and asserts three come back,
+    so the negative control that weakens `contains` to `allSatisfy` is read as a proof rather than a corpus gap.
 
 ## Not ported
 
