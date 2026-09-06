@@ -224,8 +224,18 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
 
     The scoped part matters: a block directory that *does* contain a `tombstones` file still opens,
     and its deletions are silently not applied. That is the divergence — not "unsupported", but
-    "accepted and ignored". Porting `tombstones` is a prerequisite for `Delete()`, not for reading,
-    and it belongs with whichever phase adds deletion.
+    "accepted and ignored".
+
+    **AMENDED: the codec is no longer the missing piece — the CALL SITE is.** `Sources/PromTombstones/`
+    now has the whole of `tsdb/tombstones/tombstones.go`: `Encode`, `Decode`, `WriteFile` and
+    `ReadTombstones`, byte-exact and pinned by `Fixtures/tombstones/{file,corrupt}.jsonl` (see quirks
+    210-213 and exception 29). `MemTombstones` landed earlier, with `Head.Delete` (§7h(a)). So the port can
+    write and read a block's `tombstones` file today; what it still does not do is **call
+    `readTombstones` from `BlockReader.open`** and hand the result to the querier, and it has no
+    `Block.Delete`. Both belong with the block writer — `compact.go:739` writes an empty tombstone
+    file for every block it produces and `block.go:370` reads one back — so this exception shrinks to
+    "`BlockReader` does not consult the file it now knows how to parse", and whoever lands
+    `blockwriter.go`/`LeveledCompactor` should close it.
 
 17. **The WAL's label codec cannot carry invalid UTF-8, because `Labels` holds Swift `String`s.**
     `record.EncodeLabels` writes label names and values as `PutUvarintStr` — a byte length then the
@@ -358,6 +368,34 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     recorded here rather than fixed because ADR-15's protocol is deliberately minimal and every other caller
     happens not to need one. **Anything that adds `rename` to `PromFS` should come back and delete this
     exception.**
+
+    **SECOND SITE: `tombstones.WriteFile`.** Upstream writes `dir/tombstones.tmp` and `fileutil.Replace`s it
+    onto `dir/tombstones`; the port copies and lets the unconditional deferred remove delete the temporary,
+    exactly as here. The end state is pinned as bytes by `Fixtures/tombstones/file.jsonl`, which commits the
+    file's contents *and* the directory listing after the write — so a surviving `tombstones.tmp` is a fixture
+    diff. The crash window differs in the same way and for the same reason: a crash mid-copy can leave a
+    `tombstones` file that is a prefix of the real one, which `ReadTombstones` would then reject as a checksum
+    failure (or, at exactly eight bytes, panic — quirk 210). A rename in `PromFS` closes both sites at once.
+
+29. **`MemTombstones.Iter` yields series in ASCENDING REF ORDER, where upstream ranges a Go map.**
+    Upstream has no order to be byte-exact against, and the consequence is larger than it looks: `Encode`
+    walks `Iter`, so a `tombstones` file over more than one series has a **different byte order run to run**,
+    and `Block.Delete` writes a different file each time it is called with the same deletions. There is no
+    count, index or terminator in the format and `Decode` merges through `AddInterval`, so every one of those
+    orderings decodes to the same interval set — which is why upstream can afford not to care.
+
+    The port cannot afford it. A committed fixture over an arbitrary order would be flaky
+    (`docs/HANDOFF.md` §4), and a block writer whose output bytes move between runs cannot be pinned at all.
+    So the port sorts, exactly as exception 11 resolved the same situation for an unsorted `Select` and
+    exception 14 for `rangeEval`'s map. The interval list *within* a ref needed no decision — `Intervals.Add`
+    already maintains it sorted and non-overlapping.
+
+    **How it stays differential rather than becoming a hand-written expectation:** `oracle/suites_tombstone_file.go`
+    hands `Encode` and `WriteFile` an `orderedTombstones`, a `tombstones.Reader` implementation whose `Iter`
+    yields the same ascending order over a real `MemTombstones`. `Reader` is the documented parameter of both
+    functions, so the entry point is still upstream's and the intervals still come from real `AddInterval`
+    calls; only the one axis upstream leaves undefined is fixed. `TombstoneFileTests.iterIsOrdered` asserts the
+    port's half directly, and two negative controls (unsorted, and descending) break on the file's bytes.
 
 ## Replicated Go quirks
 
@@ -2836,6 +2874,61 @@ changing behaviour.
     and because `MemTombstones` genuinely does hold multi-interval stones — it is only the WAL round trip that
     flattens them. Pinned by `CheckpointTests`, which encodes a two-interval stone and asserts three come back,
     so the negative control that weakens `contains` to `allSatisfy` is read as a proof rather than a corpus gap.
+
+210. **An eight-byte `tombstones` file PANICS upstream, and `OpenBlock` has no recover.**
+    `ReadTombstones` guards `len(b) < tombstonesHeaderSize` — five — and then, forty lines later, writes
+    `hash.Write(d.Get()[tombstoneFormatVersionSize:])` with no guard at all. By that point `d.Be32()` has taken
+    the magic and the CRC has already been sliced off the end, so `d.Get()` is `len(b) - 8` bytes. At exactly
+    eight it is EMPTY, and Go's slice rule requires `low <= high` with `high` defaulting to `len` — so `[1:]` on
+    a zero-length slice is `runtime error: slice bounds out of range [1:0]`.
+
+    It is reachable from a disk: a torn write, a truncated copy, an interrupted `fileutil.Replace`. Nothing
+    between `tsdb.OpenBlock` and here recovers, so a single corrupt tombstone file takes the process down.
+    Two things fall out of the guard being 5 rather than 9: the guard admits four lengths that cannot possibly
+    be valid, and the ONE of those four that is not caught by a later arm is the one that panics.
+
+    **The port raises it as an error carrying Go's text** rather than trapping. HANDOFF §5's rule decides
+    which treatment a panic gets: `extendFloats`' panic is reachable and is raised with Go's message, while
+    exception 9's three unreachable ones are guarded. A Swift trap is not catchable, so reproducing the crash
+    would make the corpus ungenerable on the Swift side while the Go side recovers it. `Fixtures/tombstones/corrupt.jsonl`
+    commits it in a `panic` field for the two cases that reach it, and `TombstoneCorruptTests` sorts a thrown
+    error into `err` or `panic` by its `runtime error: ` prefix.
+
+211. **The tombstone file's checksum does not cover its version byte, so corrupting the version is not a
+    checksum failure.** Both ends slice `[tombstoneFormatVersionSize:]` before hashing — `tombstones.go:113`
+    on the write side, with the comment *"Ignore first byte which is the format type. We do this for
+    compatibility"*, and `:210` on the read side. The magic is not covered either, because the CRC's input
+    starts after it.
+
+    So the one byte that decides whether the file can be parsed at all is the one byte the checksum does not
+    protect: flip `0x01` to `0x02` and the file passes its CRC and is rejected two arms later with
+    `invalid tombstone format 2`. Which is presumably the intent — a v2 writer's file should be *recognised*
+    as v2 rather than dismissed as corrupt — but it means a bit-flip in that byte is reported as a version
+    mismatch rather than as the corruption it is. Six version values are pinned, and the two controls that
+    widen the hash to `bytes[0...]` (write) and `range(0, d.count)` (read) both break.
+
+212. **A 5-to-7-byte tombstone file reports `invalid magic number 0`, not a size error.** The header guard
+    admits it, `d.Be32()` then under-runs — it latches `ErrInvalidSize` and **returns 0** — and the magic
+    comparison is checked before `d.Err()` is. Zero is not `0x0130BA30`, so the magic arm answers first and
+    the latched error is never looked at.
+
+    Worth stating because the intuitive expectation is the opposite and because the same substitution decides
+    quirk 213. Note also that `%x` on the `uint32` is unpadded: `0x000130BA` prints as `130ba`, so a port that
+    reached for `String(format: "%08x")` would be wrong on every magic with a leading zero byte and right on
+    every other one.
+
+213. **Both of the tombstone reader's `if d.Err() != nil` checks are DEAD CODE, and the port keeps them.**
+    `tombstones.go:164` (in `Decode`) and `:217` (in `ReadTombstones`) each re-check the sticky `Decbuf` error
+    after a more specific arm has already answered for the only read that could have latched it. In `Decode`
+    the read is `d.Byte()`, whose failure returns 0 and is answered by the format arm — which is why
+    `Decode([])` says `invalid tombstone format 0` rather than `invalid size`. In `ReadTombstones` the read is
+    `d.Be32()`, whose failure is quirk 212's magic arm.
+
+    They are ported because deleting them would make the next reader of the Go wonder whether the port had
+    lost a rejection path, and because the negative control that deletes both is a *live* assertion about the
+    arms above them: it survives today, and stops surviving the moment either arm is reordered. The companion
+    control that moves `Decode`'s check *above* the format check breaks, which is what says the ordering — not
+    the check — is the contract.
 
 ## Not ported
 

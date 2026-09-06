@@ -107,7 +107,14 @@ let package = Package(
         // Phase 6: `tsdb/tombstones`' interval arithmetic, plus Phase 7's `Stone`. Its own target
         // because it is Go's own package boundary and because `tsdb/record` imports it without
         // importing anything else of the block.
-        .target(name: "PromTombstones", dependencies: ["PromStorage", "GoCompat"]),
+        //
+        // `PromFS`/`PromEncoding`/`PromHash` arrive with the FILE CODEC (`TombstoneFile.swift`), which
+        // discharges half of exception 16: a block's `tombstones` file is magic + `Encbuf` body + CRC-32C,
+        // written through the ADR-15 filesystem seam.
+        .target(
+            name: "PromTombstones",
+            dependencies: ["PromStorage", "PromFS", "PromEncoding", "PromHash", "GoCompat"]
+        ),
 
         // Phase 7: `tsdb/wlog` — the segment framing the records travel in.
         .target(
@@ -324,6 +331,12 @@ let package = Package(
             dependencies: [
                 "PromRecord", "PromLabels", "PromHistogram", "PromChunks", "PromStorage",
                 "PromTombstones", "PromModel", "GoOracleSupport", "GoCompat",
+            ]
+        ),
+        .testTarget(
+            name: "PromTombstonesTests",
+            dependencies: [
+                "PromTombstones", "PromFS", "PromStorage", "PromHash", "GoOracleSupport", "GoCompat",
             ]
         ),
         .testTarget(

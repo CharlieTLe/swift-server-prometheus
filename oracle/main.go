@@ -117,6 +117,8 @@ var suites = map[string]func(*emitter){
 	"index/findintersecting":    genFindIntersecting,
 	"block/labels":              genBlockLabelQueries,
 	"block/tsintervals":         genTombstoneIntervals,
+	"tombstones/file":           genTombstoneFile,
+	"tombstones/corrupt":        genTombstoneCorrupt,
 	"block/deletediter":         genDeletedIterator,
 	// Phase 7: the TSDB write path.
 	"record/types":            genRecordTypes,
