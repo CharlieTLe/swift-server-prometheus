@@ -38,6 +38,7 @@ public import PromChunks
 public import PromIndex
 public import PromLabels
 public import PromStorage
+public import PromTombstones
 
 /// Go: `headChunksBufMaxCap` — the reusable `collectHeadChunks` buffer is dropped when it grows past this, so a
 /// single huge series does not pin memory for the rest of the reader's life.
@@ -412,6 +413,15 @@ public final class RangeHead {
 
     /// Go: `NumSeries` — the HEAD's count, not the range's. A series with no samples in the window still counts.
     public func numSeries() -> UInt64 { head.seriesCount() }
+
+    /// Go: `RangeHead.Tombstones` — the HEAD's tombstones, **unfiltered by the range** (head.go:1608). A
+    /// deletion outside `[mint, maxt]` is still reported, and the chunk-level `IsSubrange` test in §6s is what
+    /// makes that harmless.
+    public func tombstonesReader() -> MemTombstones { head.tombstonesReader() }
+
+    /// Go: `RangeHead.Size` — `h.head.Size()` (head.go:2811), so the WAL and the chunk files of the WHOLE
+    /// head, not of the range.
+    public func size() -> Int64 { head.size() }
 
     /// Go: `Meta`, with its own ULID sentinel.
     public func meta() -> BlockMeta {

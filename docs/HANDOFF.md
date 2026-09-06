@@ -58,8 +58,8 @@ Read `README.md` first for what the project is, then this for how to continue it
 | 3 — native histograms | done |
 | 4 — `PromQLParser` | done |
 | 5 — engine + storage protocols | **DONE. 2,183 of 2,183 assertions pass — zero failures, zero skips.** Every evaluator arm, every runner directive, and every start-timestamp assertion. The gate has nothing left to measure. Detail: — protocols, sample iterators, `value.go`, `quantile.go`, the `GoMath` arithmetic *and* transcendental layers (trig, hyperbolic, `Log1p`), `durations.go`, `PreprocessExpr`, the in-memory `Queryable`, `histogram_stats_iterator.go`, `prometheus/schema`, `GoTime`'s calendar and **all 82 `FunctionCalls` entries that can have a body** are landed (seven of Go's 89 keys are `nil`). `engine.go` has: the front door (`NewEngine`, `NewInstantQuery`/`NewRangeQuery`, `validateOpts`), `FindMinMaxTime`, the `limit_ratio` sampler, the error vocabulary, `Matrix.Sort` through the ported pdqsort, `Exec`, the instant VECTOR SELECTOR (`populateSeries`, `evalSeries`, `vectorSelectorSingle`), `timestamp` over a selector, `mergeSeriesWithSameLabelset`, **range queries in full** — `execEvalStmt`'s range branch, `rangeEval`'s multi-step assembly, `addToSeries`, `StepInvariantExpr`'s step duplication — the **matrix selector** (`matrixSelector`, `matrixIterSlice`, `extendFloats`), and the **`matrixArg` half of the `Call` arm** — so **all 82 ported `FunctionCalls` bodies are reachable from a query**, `anchored`/`smoothed` included. and the **vector binary operators** in full (`VectorAnd`/`Or`/`Unless`, `VectorBinop`, `resultMetric`, `VectorscalarBinop`, `vectorElemBinop`, and `rangeEval`'s signature-ordinal machinery). and the **aggregations** — `rangeEvalAgg`, `aggregation`, `fParams`, the grouping-key/label pair — for the nine one-row-per-group operators. **all thirteen aggregation operators** — `aggregationK` and `aggregationCountValues` included, on `GoHeap` (Go's `container/heap`, ported because `limitk` emits its heap unsorted). and **subqueries** (`runSubquery`, `evalSubquery`, the `SubqueryExpr` arm and the `Call` arm's AST replacement). and **`label_join`**. Next: **`label_replace`**, which needs `FindStringSubmatchIndex` + `ExpandString` and therefore Pike VM **capture tracking** in `PromRegex` (`RegexCompiler.swift`'s header says the VM is deliberately boolean-only) — a PromRegex slice, not an evaluator one. and the binop **fill modifiers** and **`smoothSeries`**, so every other arm of the evaluator now runs. Then `info`, and `promqltest` — the exit gate. and **`util/convertnhcb`** wired into `load_with_nhcb`, worth +170 assertions on its own (§5e(b)). and **`chunkenc`'s metadata half** — `appendable`, the chunk-cut/header rules and the position-based hint derivation, wired into `MemStorage`, which took the gate to zero failures (§5e(c)). and **`info`** — `promql/info.go` plus `regexp.QuoteMeta`, 41 of `info.test`'s 42 (§5e(d)). and **`label_replace`**, on a new capture-tracking Pike VM in `PromRegex` (§5e(e)) — the last unported arm. and the last 11 **runner directives** (§5e(f)). Nothing in Phase 5 is outstanding. Next: **Phase 6's chunk ENCODER** — `tsdb/chunkenc/xor.go` on top of `wip/phase6-bstream` — which is also what the gate's last 23 skips wait on |
-| 6 — TSDB | **The READ path is closed.** Twenty-three pinned slices. `chunkenc` in full (metadata half, `bstream`, `xor.go`, `xor2.go`, `varbit.go`), the postings algebra and loser tree, `FindIntersectingPostings`, the index READER and WRITER (byte-identical files), `PromFS` (ADR-15), `chunks.Writer`/`Reader`, `meta.json` + `ULID`, `BlockReader`, `PostingsForMatchers`, the label queries with matchers, the deletion-interval arithmetic, `DeletedIterator`, `blockBaseSeriesSet`, both `populateWithDel*` iterators, and both queriers (§6m-§6w). A block Prometheus wrote can be opened, matched, selected, trimmed and read as samples or chunks, every layer pinned against upstream on real files. **The WRITE path is NOT started**: nothing here touches `compact.go`, `head.go`, `db.go` or the WAL, so the port cannot produce a block outside a test. Two read-path gaps stay open by construction and are Phase 7's (`Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes). Deliberately unported: `ShardedPostings` and `populateChunksFromIterable` — both need the Head. `tombstones`' file reader was the third; it landed in Phase 7 as §7i(t), so exception 16 is now only about `BlockReader` not CALLING it |
-| 7 — TSDB write | **SIX SLICES LANDED (§7a–§7f, the last of them six sub-slices deep). §7a: `tsdb/record` in full** — the WAL's wire format, both directions, 469 differential cases. The type table, `MetricType`'s two conversions, and `Encoder`/`Decoder` for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers and the integer/float histogram records in V1, V2 and custom-buckets flavours. Two new targets mirroring Go's package boundaries: `PromRecord` (`tsdb/record`) and `PromTombstones` (`tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, plus `Stone`). Six quirks recorded, **two of them upstream bugs**: `samplesV2` measures the caller's accumulator to find the record's first entry (quirk 168, which `wlog/checkpoint.go` walks into), and the `minSize` capacity heuristic *discards* that accumulator (exception 18, the one declared divergence — Swift has no `make(len, cap)`). `Decbuf`'s varint reads were quadratic and are not any more. **§7b: `tsdb/wlog`'s segment format** — the 32 KB page framing, the `[type\|flags][BE16 length][BE32 CRC-32C]` fragment header, `WL` with `Log`/`NextSegment`/`Truncate`/`Close`, the segment directory, `SegmentBufReader` and `Reader`'s whole fragment grammar, in a new `PromWAL` target. 43 differential cases driven as a *program* (a segment size, a list of writes, a read range), five of them planting a pre-seeded directory. **§7c: the corruption corpus** — a SECOND input shape whose cases are literal fragments (raw type byte, payload, length/CRC overrides, truncation) rather than a write program, because a write program cannot express "one bit flipped". 37 cases; it took the sweep from **22 survivors to 9** (57 controls, 48 broke) and found a real defect: `NewSegmentsRangeReader`'s two error wraps (`list segment in dir:%v`, `open segment:%v in dir:%v`) were missing. Quirks 179-180, the first being that the faked page padding **erases the torn-record signal**, so a torn final record is normally dropped silently and only a page-aligned cut reports it. **So the port can now write a WAL and read it back, and reject a corrupt one** — uncompressed only (exception 20). Five quirks (174-178), one new declared divergence (exception 19, `Reader.Segment()` returning `-1` where upstream panics), and a `PromFS` POSIX-fidelity fix: a write to a removed path no longer resurrects it. **§7e: `index.MemPostings`** — the Head's in-memory inverted index, deferred from §6d and the first thing `head.go` needs: `add`/`addFor`'s one-pass insert repair, `ensureOrder`, `delete`'s three cleanups, and every reader (`symbols`, `sortedKeys`, `labelNames`, `labelValues`, `all`, `postings`, `postingsForAllLabelValues`, `postingsForLabelMatching`, `iter`). 17 cases, **40 controls scoring 32 broke / 8 survived — and all eight survivors are PROOFS**, argued in the sweep. `Stats` is deferred to Phase 9 with its only caller, the `/status/tsdb` endpoint. Exception 23. **§7d: `tsdb/chunks/head_chunks.go`'s `ChunkDiskMapper`** — the Head's chunk files: the format constants, `ChunkDiskMapperRef`'s arithmetic, `chunkPos`, the writer (`cut`, the CRC discipline, `writeChunk`), the reader (`chunk(ref:)`, `openMMapFiles`, `repairLastChunkFile`), `iterateAllChunks`, `truncate`/`deleteCorrupted`, the out-of-order mask and `GoVarint.uvarintSize` (from `dennwc/varint`, probed against Go over 300k values). 48 differential cases, **61 controls scoring 51 broke / 10 survived**, every survivor argued in the script. Three quirks (181-183) and two exceptions (21-22), and the corpus caught four defects — three of them ADR-15's rather than the format's. **§7f is UNDER WAY and is six sub-slices deep**: (a) `tsdb/isolation.go` in full, (b) `seriesHashmap` + `stripeSeries`, (c) the `Chunk`/`ChunkAppender`/`ChunkIterable` conformances — which also discharged a §6 deferral by teaching `BlockReader` to decode XOR2 — (d) **`memSeries`' in-order chunk state**: the four cut grounds in `appendPreprocessor`, `cutNewHeadChunk`, `append`, `appendable`, `mmapChunks`, `truncateChunksBefore`, the `memChunk` list and `db.go`'s `rangeForTimestamp`, in 58 differential cases with **77 controls scoring 71 broke / 6 survived** and two new quirks (184: `rangeForTimestamp` truncates toward zero; 185: `computeChunkEndTime` relies on Go's wrapping subtraction, which trapped in Swift on the first run). §7f(d) also changed how unexported Go gets verified: the probe is **committed** as `oracle/probe/headmemseries` rather than thrown away, so `verify-fixtures.sh` re-runs it on every pin bump, and (e) **`HeadOptions` and `NewHead`** — the first Head slice with an EXPORTED entry point, so its 25 cases drive `tsdb.NewHead` itself: both validation errors, all four option normalisations, the uninitialised sentinels, `getOrCreate`'s ID allocation, `mmapHeadChunks` and `Close`. 60 controls, **41 broke on the first run and 54 after the corpus was widened** — a constructor-only corpus measures a constructor, not a type. Three quirks (186-188) and exception 24. and (f) **`headAppender`'s float path** — `storage.Appender`, both appenders, `Append`, `Commit`, `commitFloats`, `log()` and `Rollback`, in 40 cases driven through the real `tsdb.Head` and asserted against the accessors, the **WAL records** and the **chunk files** at once; 74 controls, 65 broke. **So the Head ingests**: a sample appended through the port lands in a chunk and in the WAL, byte-compared against Go. Quirks 189-190, the second a defect the corpus found — `Rollback` logs the series records. and (g) **`head_read.go`** — `headIndexReader`, `headChunkReader`, `RangeHead` and the isolation-aware iterator, in 23 cases with 63 controls (51 broke); quirks 191-192, both found by the corpus refusing to generate (an upstream SEGFAULT on a hand-made OOO ref, and `BlockMaxTime` wrapping at `MaxInt64`). **So the Head is now QUERYABLE**: postings, series, chunk metas and chunks come back, and a reader opened mid-commit sees a truncated iterator. and (h)(a) **the Head's GC** — `stripeSeries.gc`, `Head.gc`, `Delete`, `Truncate` and `MemTombstones` (the half exception 16 left out), in 22 cases with 52 controls (41 broke). and (h)(b) **the REPLAY** — `Init`, `loadMmappedChunks`, `removeCorruptedMmappedChunks` and `loadWAL`, in 18 cases whose contract is stated directly (*a replayed Head equals an appended one*) with 47 controls (32 broke). **So a restart works**: a Head reopened on the same directory recovers its series, its samples and its chunk layout, and recovers them from the WAL alone when the chunk files are destroyed. and (h)(c) **`truncateWAL` and `wlog/checkpoint.go`** — the compacted copy a truncation leaves behind so the segments it deletes are not lost, plus `Init`'s backfill of it; 34 differential cases (16 new) committing the checkpoint directory's NAME, its segment BYTES *and* its records decoded, with 24 hand-written assertions for the error strings and the record types the Head cannot produce, and 79 controls scoring 75 broke / 4 survived. `PromWAL` gained `PromRecord`/`PromChunks`/`PromStorage`/`PromTombstones`, because a checkpoint filters records rather than copying bytes. Quirks 193-194 and exception 25 (no rename in `PromFS`, so the temporary directory is COPIED to its final name — end state identical, crash window not). **So `head.go` is DONE and the WAL no longer grows without bound.** and (i)(t) **the tombstone FILE codec** — `Encode`, `Decode`, `WriteFile`, `ReadTombstones` and the magic/version/CRC framing, in 94 differential cases across TWO arms: a 30-case round trip committing the file's BYTES, and a 64-case CORRUPTION arm modelled on §7c whose input is a file DESCRIPTION (magic, version, body, CRC, trailer, truncation) rather than a write program. 52 controls scoring **48 broke / 4 survived, and all four are proofs**. It found a reachable upstream PANIC — an eight-byte `tombstones` file is `runtime error: slice bounds out of range [1:0]` and `OpenBlock` has no recover (quirk 210) — plus the fact that the CRC skips the version byte, so corrupting it is a version mismatch rather than a checksum failure (quirk 211). Quirks 210-213, exception 29 (`MemTombstones.Iter` sorts, because upstream's Go map means a multi-series tombstone file has NO byte order), and exception 25 gained a second site. **Exception 16 is amended**: the codec is done, what is left is the CALL SITE — `BlockReader` still does not read the file and there is no `Block.Delete`. **Still not started: `compact.go`, `db.go`** — the port still cannot produce a block outside a test, and §6w's two read-path gaps stay open. **The next slice is §7i (`compact.go` + `blockwriter.go`)**, for which the tombstone codec was the prerequisite; §7f's "five slices" list has the ordering |
+| 6 — TSDB | **The READ path is closed.** Twenty-three pinned slices. `chunkenc` in full (metadata half, `bstream`, `xor.go`, `xor2.go`, `varbit.go`), the postings algebra and loser tree, `FindIntersectingPostings`, the index READER and WRITER (byte-identical files), `PromFS` (ADR-15), `chunks.Writer`/`Reader`, `meta.json` + `ULID`, `BlockReader`, `PostingsForMatchers`, the label queries with matchers, the deletion-interval arithmetic, `DeletedIterator`, `blockBaseSeriesSet`, both `populateWithDel*` iterators, and both queriers (§6m-§6w). A block Prometheus wrote can be opened, matched, selected, trimmed and read as samples or chunks, every layer pinned against upstream on real files. **The WRITE path is NOT started**: nothing here touches `compact.go`, `head.go`, `db.go` or the WAL, so the port cannot produce a block outside a test. Two read-path gaps stay open by construction and are Phase 7's (`Err` ordering and the undecodable-encoding path both need malformed or non-XOR chunk bytes). Deliberately unported: `ShardedPostings` and `populateChunksFromIterable` — both need the Head. `tombstones`' file reader was the third; it landed in Phase 7 as §7i(t), so exception 16 is now only about the block reader not CALLING it (and §7i(a) renamed that class from `BlockReader` to `Block`, freeing the name for Go's interface) |
+| 7 — TSDB write | **TEN SLICES LANDED (§7a–§7i(t) and §7i(a)), and the port can now WRITE A BLOCK. §7a: `tsdb/record` in full** — the WAL's wire format, both directions, 469 differential cases. The type table, `MetricType`'s two conversions, and `Encoder`/`Decoder` for Series, Samples V1 **and V2**, Metadata, Tombstones, Exemplars, MmapMarkers and the integer/float histogram records in V1, V2 and custom-buckets flavours. Two new targets mirroring Go's package boundaries: `PromRecord` (`tsdb/record`) and `PromTombstones` (`tsdb/tombstones` — `DeletionIntervals.swift` moved out of `PromBlock`, plus `Stone`). Six quirks recorded, **two of them upstream bugs**: `samplesV2` measures the caller's accumulator to find the record's first entry (quirk 168, which `wlog/checkpoint.go` walks into), and the `minSize` capacity heuristic *discards* that accumulator (exception 18, the one declared divergence — Swift has no `make(len, cap)`). `Decbuf`'s varint reads were quadratic and are not any more. **§7b: `tsdb/wlog`'s segment format** — the 32 KB page framing, the `[type\|flags][BE16 length][BE32 CRC-32C]` fragment header, `WL` with `Log`/`NextSegment`/`Truncate`/`Close`, the segment directory, `SegmentBufReader` and `Reader`'s whole fragment grammar, in a new `PromWAL` target. 43 differential cases driven as a *program* (a segment size, a list of writes, a read range), five of them planting a pre-seeded directory. **§7c: the corruption corpus** — a SECOND input shape whose cases are literal fragments (raw type byte, payload, length/CRC overrides, truncation) rather than a write program, because a write program cannot express "one bit flipped". 37 cases; it took the sweep from **22 survivors to 9** (57 controls, 48 broke) and found a real defect: `NewSegmentsRangeReader`'s two error wraps (`list segment in dir:%v`, `open segment:%v in dir:%v`) were missing. Quirks 179-180, the first being that the faked page padding **erases the torn-record signal**, so a torn final record is normally dropped silently and only a page-aligned cut reports it. **So the port can now write a WAL and read it back, and reject a corrupt one** — uncompressed only (exception 20). Five quirks (174-178), one new declared divergence (exception 19, `Reader.Segment()` returning `-1` where upstream panics), and a `PromFS` POSIX-fidelity fix: a write to a removed path no longer resurrects it. **§7e: `index.MemPostings`** — the Head's in-memory inverted index, deferred from §6d and the first thing `head.go` needs: `add`/`addFor`'s one-pass insert repair, `ensureOrder`, `delete`'s three cleanups, and every reader (`symbols`, `sortedKeys`, `labelNames`, `labelValues`, `all`, `postings`, `postingsForAllLabelValues`, `postingsForLabelMatching`, `iter`). 17 cases, **40 controls scoring 32 broke / 8 survived — and all eight survivors are PROOFS**, argued in the sweep. `Stats` is deferred to Phase 9 with its only caller, the `/status/tsdb` endpoint. Exception 23. **§7d: `tsdb/chunks/head_chunks.go`'s `ChunkDiskMapper`** — the Head's chunk files: the format constants, `ChunkDiskMapperRef`'s arithmetic, `chunkPos`, the writer (`cut`, the CRC discipline, `writeChunk`), the reader (`chunk(ref:)`, `openMMapFiles`, `repairLastChunkFile`), `iterateAllChunks`, `truncate`/`deleteCorrupted`, the out-of-order mask and `GoVarint.uvarintSize` (from `dennwc/varint`, probed against Go over 300k values). 48 differential cases, **61 controls scoring 51 broke / 10 survived**, every survivor argued in the script. Three quirks (181-183) and two exceptions (21-22), and the corpus caught four defects — three of them ADR-15's rather than the format's. **§7f is UNDER WAY and is six sub-slices deep**: (a) `tsdb/isolation.go` in full, (b) `seriesHashmap` + `stripeSeries`, (c) the `Chunk`/`ChunkAppender`/`ChunkIterable` conformances — which also discharged a §6 deferral by teaching `BlockReader` to decode XOR2 — (d) **`memSeries`' in-order chunk state**: the four cut grounds in `appendPreprocessor`, `cutNewHeadChunk`, `append`, `appendable`, `mmapChunks`, `truncateChunksBefore`, the `memChunk` list and `db.go`'s `rangeForTimestamp`, in 58 differential cases with **77 controls scoring 71 broke / 6 survived** and two new quirks (184: `rangeForTimestamp` truncates toward zero; 185: `computeChunkEndTime` relies on Go's wrapping subtraction, which trapped in Swift on the first run). §7f(d) also changed how unexported Go gets verified: the probe is **committed** as `oracle/probe/headmemseries` rather than thrown away, so `verify-fixtures.sh` re-runs it on every pin bump, and (e) **`HeadOptions` and `NewHead`** — the first Head slice with an EXPORTED entry point, so its 25 cases drive `tsdb.NewHead` itself: both validation errors, all four option normalisations, the uninitialised sentinels, `getOrCreate`'s ID allocation, `mmapHeadChunks` and `Close`. 60 controls, **41 broke on the first run and 54 after the corpus was widened** — a constructor-only corpus measures a constructor, not a type. Three quirks (186-188) and exception 24. and (f) **`headAppender`'s float path** — `storage.Appender`, both appenders, `Append`, `Commit`, `commitFloats`, `log()` and `Rollback`, in 40 cases driven through the real `tsdb.Head` and asserted against the accessors, the **WAL records** and the **chunk files** at once; 74 controls, 65 broke. **So the Head ingests**: a sample appended through the port lands in a chunk and in the WAL, byte-compared against Go. Quirks 189-190, the second a defect the corpus found — `Rollback` logs the series records. and (g) **`head_read.go`** — `headIndexReader`, `headChunkReader`, `RangeHead` and the isolation-aware iterator, in 23 cases with 63 controls (51 broke); quirks 191-192, both found by the corpus refusing to generate (an upstream SEGFAULT on a hand-made OOO ref, and `BlockMaxTime` wrapping at `MaxInt64`). **So the Head is now QUERYABLE**: postings, series, chunk metas and chunks come back, and a reader opened mid-commit sees a truncated iterator. and (h)(a) **the Head's GC** — `stripeSeries.gc`, `Head.gc`, `Delete`, `Truncate` and `MemTombstones` (the half exception 16 left out), in 22 cases with 52 controls (41 broke). and (h)(b) **the REPLAY** — `Init`, `loadMmappedChunks`, `removeCorruptedMmappedChunks` and `loadWAL`, in 18 cases whose contract is stated directly (*a replayed Head equals an appended one*) with 47 controls (32 broke). **So a restart works**: a Head reopened on the same directory recovers its series, its samples and its chunk layout, and recovers them from the WAL alone when the chunk files are destroyed. and (h)(c) **`truncateWAL` and `wlog/checkpoint.go`** — the compacted copy a truncation leaves behind so the segments it deletes are not lost, plus `Init`'s backfill of it; 34 differential cases (16 new) committing the checkpoint directory's NAME, its segment BYTES *and* its records decoded, with 24 hand-written assertions for the error strings and the record types the Head cannot produce, and 79 controls scoring 75 broke / 4 survived. `PromWAL` gained `PromRecord`/`PromChunks`/`PromStorage`/`PromTombstones`, because a checkpoint filters records rather than copying bytes. Quirks 193-194 and exception 25 (no rename in `PromFS`, so the temporary directory is COPIED to its final name — end state identical, crash window not). **So `head.go` is DONE and the WAL no longer grows without bound.** and (i)(t) **the tombstone FILE codec** — `Encode`, `Decode`, `WriteFile`, `ReadTombstones` and the magic/version/CRC framing, in 94 differential cases across TWO arms: a 30-case round trip committing the file's BYTES, and a 64-case CORRUPTION arm modelled on §7c whose input is a file DESCRIPTION (magic, version, body, CRC, trailer, truncation) rather than a write program. 52 controls scoring **48 broke / 4 survived, and all four are proofs**. It found a reachable upstream PANIC — an eight-byte `tombstones` file is `runtime error: slice bounds out of range [1:0]` and `OpenBlock` has no recover (quirk 210) — plus the fact that the CRC skips the version byte, so corrupting it is a version mismatch rather than a checksum failure (quirk 211). Quirks 210-213, exception 29 (`MemTombstones.Iter` sorts, because upstream's Go map means a multi-series tombstone file has NO byte order), and exception 25 gained a second site. **Exception 16 is amended**: the codec is done, what is left is the CALL SITE — `PromBlock.Block` (renamed from `BlockReader` by §7i(a)) still does not read the file and there is no `Block.Delete`. and **§7i(a): `tsdb/blockwriter.go` and `LeveledCompactor`'s WRITE path** — `Write`, `write`, `DefaultBlockPopulator.PopulateBlock`, `AllSortedPostings`, the whole of `blockwriter.go`, and `writeMetaFile` plus the two compaction hints from `block.go`, in a new tier-10 `PromCompact` target. 36 differential cases in which upstream's own `BlockWriter`/`LeveledCompactor.Write` writes a block and the port has to produce the same `index`, chunk-segment and `meta.json` BYTES from the same samples, with the ULID scrubbed to a constant and injected back (exception 27, because upstream reads `crypto/rand.Reader` directly and has no seam — quirk 196); the block is then read back with `tsdb.OpenBlock` on one side and `PromBlock.Block` on the other. **62 controls, 53 broke, 9 survived, all nine argued.** Fifteen quirks (195-209) and three exceptions (26 the tombstones-file seam, 27 the ULID source, 28 the copied `.tmp-for-creation` directory). The corpus caught one real defect and it was mis-declared rather than unknown: §6t's XOR-only chunk re-encoder, which turns out to run on **every** compaction of a Head rather than only on a deletion, because the open head chunk's index meta says `MaxInt64` and `trimBack` therefore always fires (quirk 208). Two API decisions were taken here because §7j is the next caller: `PromBlock.BlockReader` was renamed to **`PromBlock.Block`** so `BlockReader` can be Go's interface, and the `Compactor` protocol is declared **in full** with `plan`/`compact` throwing a named error. **So the port can produce a block outside a test.** **Still not started: `db.go`.** One of §6w's two read-path gaps is closed (the undecodable-encoding path) and one is not (`Err` ordering — see §7i(a) for the route in). **The next slice is §7j (`db.go`)** |
 | 8–10 | not started, and the ordering below is a reading of `docs/ROADMAP.md` rather than new work. **8** ingest (scrape pool, target discovery, relabelling); **9** the server (HTTP API, the query endpoints, the prebuilt UI bundle per PORTING.md's "Not ported"); **10** remote read/write, exemplars, the OOO head, agent mode, perf. **Scale, so it is not rediscovered:** these are roughly 95k lines of Go against ~4.5k ported per session at this fidelity bar (an oracle suite plus an argued control sweep per slice). That bar is what caught ADR-10a, the file-index-vs-filename bug, the four survivor-diagnosis modes and — this session — a capacity heuristic that a comment had already dismissed as unobservable; lowering it for 8–10 would be a legitimate decision but must be recorded in PORTING.md as a departure, not taken silently |
 
 Green as of this commit: **340,014 committed fixture lines, 696 tests** across 25 test targets, on both
@@ -89,7 +89,8 @@ Sources/            src     generated
   PromTombstones      617         –
   PromBlock         1,975         –
   PromRecord        1,583         –
-  PromHead          4,196         –
+  PromHead          4,205         –
+  PromCompact       1,047         –
   PromWAL           1,395         –
   PromStorage       1,832         –
   PromTestStorage     522         –
@@ -150,7 +151,8 @@ range queries **12 of 15**, matrix selector **24 of 25**, the Call arm's matrix 
 31**, the vector binops **29 of 34**, the aggregations **27 of 39**, `aggregationK` **23 of 31**, subqueries **13 of 22**,
 `tsdb/record` **53 of 55**, `memSeries`' chunk state **71 of 77**, the Head's core **54 of 60**, the float
 append path **65 of 74**, the read path **51 of 63**, the GC and deletion path **41 of 52**, the WAL replay
-**32 of 47**, the tombstone file codec **48 of 52**, with every survivor's argument written into the source or the
+**32 of 47**, the tombstone file codec **48 of 52**, the block writer **53 of 62**, with every
+survivor's argument written into the source or the
 sweep's tail, next to the code it concerns.
 
 **Never format a float with Swift's defaults.** `Double.description`, `"\(x)"` and
@@ -743,6 +745,13 @@ both accepted without complaint by Xcode 27:
 
 Neither reproduces locally unless you install a 6.1 toolchain, so when you write either shape, assume
 it is broken and restructure it before pushing.
+
+**A third shape, and it is not a budget failure at all — it is a coercion failure.** An untyped integer
+*expression* does not convert inside an ARRAY LITERAL on 6.1: `ranges: [2 * 60 * 60 * 1000]` against an
+`[Int64]` parameter is `cannot convert value of type 'Int' to expected element type 'Int64'` there and
+compiles silently on 6.4. §7i(a) shipped three of them and the floor job was the only thing that noticed. The
+same rule as the bullets above, one step further: **spell an `Int64` constant as the value it denotes, with
+the derivation in a comment**, and give it a name if more than one call site wants it.
 
 **Corpus reproducibility.** Do not mine `$GOROOT` at fixture-generation time. The corpus would depend
 on the local Go version, and CI's Go would produce a different corpus and fail `verify-fixtures.sh`
@@ -3450,6 +3459,175 @@ remainder to be finished in one.
 **`MemPostings` is landed (§7e).** `Head.postings` is a `*index.MemPostings` and `getOrCreate` calls
 `Add`; the insert-time order repair, `ensureOrder` for replay, and `delete`'s three cleanups are all pinned
 already. `head_wal.go` is the caller that wants `newUnordered()` — §7e ported it for exactly that.
+
+### 7i(a). `blockwriter.go` + `LeveledCompactor`'s write path — the port can produce a BLOCK
+
+**The headline of Phase 7's remainder, and it landed byte-identical.** 36 differential cases in
+`Fixtures/block/write.jsonl`, every one of them a block that upstream's own `tsdb.BlockWriter` or
+`tsdb.LeveledCompactor.Write` produced, compared against the port's block as `index` bytes, chunk segment
+bytes, `meta.json` bytes and the directory listing — and then read back with `tsdb.OpenBlock` on one side and
+`PromBlock.Block` on the other. **Twenty-nine of the thirty-one first-run cases matched on the first
+execution**; the two that did not were a real defect, and it is the interesting one (below).
+
+New target `PromCompact`, tier 10 — a tier ABOVE `PromHead`, because a compactor reads a Head and writes a
+block, and nothing beneath it may learn about compaction. 1,050 lines of Swift across four files:
+`LeveledCompactor.swift`, `PopulateBlock.swift`, `BlockWriter.swift`, `BlockReaders.swift`.
+
+#### What landed
+
+`ExponentialBlockRanges`, `LeveledCompactorOptions`, `NewLeveledCompactor`/`NewLeveledCompactorWithOptions`,
+`Write`, `write`, `DefaultBlockPopulator.PopulateBlock`, `AllSortedPostings`, the `BlockPopulator` protocol,
+the whole of `blockwriter.go`, and `writeMetaFile` plus the layout constants and the two compaction hints from
+`block.go`. Plus the four reader protocols and the adapters that let a `Head` or a `RangeHead` stand in for a
+block.
+
+**So the port can now do the thing it could not do before: turn samples into a block on disk that a real
+Prometheus can open.**
+
+#### The corpus, and why it has four observables
+
+`oracle/suites_block_write.go` is `oracle/blockfixture.go` **in reverse**. That helper writes a block by hand
+so the read path has an input; this one drives upstream's writer end to end and commits what came out. Four
+observables, because none subsumes another:
+
+1. the block's **file bytes** — `index`, every `chunks/NNNNNN`, `meta.json`;
+2. the **directory** — what exists under `dest`, and what exists inside the block;
+3. **`tsdb.OpenBlock`** over the result: labels, chunk metas, refs and samples, through real upstream code;
+4. **`Flush`'s return** — the ULID or nothing, and the error string.
+
+Two input modes, both real entry points: `blockwriter` drives `NewBlockWriter`/`Appender`/`Flush`/`Close`, and
+`compactor` drives `tsdb.NewHead` plus `NewLeveledCompactor(...).Write` with an explicit range. The second
+exists because `BlockWriter` cannot express a range or reach `Head.Delete` (`w.head` is unexported), and it is
+the only way to reach the arms that matter most — a range that CLIPS the head, and a non-nil `base`.
+`cw-blockwriter-shape-control` is the case that establishes the two modes agree.
+
+**The ULID is scrubbed, and that is the whole trick.** `Write` names its block
+`ulid.MustNew(ulid.Now(), rand.Reader)` — `crypto/rand`, reached directly, **with no seam of any kind in
+v3.13.2** (the scoping note that said `NewLeveledCompactor` takes a rand source was wrong for this pin;
+quirk 196). Recording the real value would make the fixture differ on every regeneration, which §4 calls worse
+than no fixture. So the generator substitutes the real 26-character identifier with
+`01ARZ3NDEKTSV4RRFFQ69G5FAV` in the directory name and in `meta.json`'s two ULID fields — a length-preserving
+textual substitution, in the same family as the existing `scrubDir` — and the port is handed the same constant
+through `LeveledCompactorOptions.newULID` (exception 27). The index and the chunk segments contain no ULID at
+all and are compared untouched.
+
+#### What the corpus caught
+
+**One real defect, and it was not where the declaration said it would be.** §6t and §6u ported
+`populateWithDelChunkSeriesIterator` with `chunkenc.NewXORChunk()` hard-coded in the re-encode path and a note
+saying the other encodings were Phase 7's — a limitation declared against *deletion*. It turns out
+**compacting a Head always re-encodes its last chunk, deletion or not**: the open head chunk's index meta says
+`MaxTime == MaxInt64` (quirk 195), `PopulateBlock` runs with trimming enabled, so `trimBack` fires for any
+range whatsoever. With `FloatChunkEncoding = EncXOR2` — which is what `promqltest` runs (quirk 36) — the port
+answered `chunk N resolved to neither a chunk nor an iterable`. Two cases found it and **neither was a
+deletion case**. Quirk 208, and the transferable part is the shape: *a limitation declared against one trigger
+gets reached by another.*
+
+The fix also brought `AtST()` into the re-encode loop, which is querier.go:976 and which the port had dropped
+along with the XOR hard-coding.
+
+**One gap closed that the corpus could NOT catch, and finding that out was most of an hour.**
+`ChunkOrIterableWithCopy`'s third return exists to undo the index reader's `MaxInt64` (querier.go:734-737),
+and §6t had not ported it. It is genuinely unobservable from a compaction — the same `trimBack` above sends
+the chunk down the re-encode path, where the meta's bounds come from the surviving samples instead — and it is
+reachable from the QUERIER, where `SelectHints.DisableTrimming` is what a `blockChunkQuerier` over a
+`RangeHead` sets. So it is pinned in `CompactSeamTests` rather than in the corpus. Quirk 195. **Without it,
+every block §7j compacts through a trimming-disabled querier would claim its last chunk ends at `MaxInt64`.**
+
+#### The control sweep: 62 controls, 53 broke, 9 SURVIVED — every survivor a proof
+
+`Scripts/controls-blockwrite.sh`, six source files, zero SKIP and zero COMPILE in the final run. The first run
+scored 45 of 61 with three SKIPs and a COMPILE — all four harness faults, three of them the `\Q…\E`-cannot-hold-a-`$`
+trap `controls-headwaltruncate.sh` already documents, and every one of them found only because the script
+refuses to report a patch that did not apply. Four of the twelve survivors then became breaks once the corpus
+was widened (dense samples across a clip boundary, and start timestamps) or a level was dropped
+(`CompactSeamTests` for the hint sort, the version force, the `.tmp-for-creation` constant and the
+no-readers guard). The nine that remain are argued in the sweep's tail; the two worth repeating here:
+
+* **Two controls on the series-ref counter both survive, and that is quirk 197 arrived at from the other
+  side.** `index.Writer.AddSeries` reads `ref` for exactly one thing — a monotonicity check — and the postings
+  ordinals come from each series record's byte POSITION divided by 16 (quirk 133). So 0,1,2… and 1,2,3… and
+  0,0,0… produce byte-identical files. The number is not in the file, and a corpus is not supposed to be able
+  to see it.
+* **The start-timestamp control survives because upstream never sets one.** `populateCurrForSingleChunk` reads
+  `AtST()` per sample, and the corpus has XOR2 cases with `EnableSTStorage` and an `AppendSTZeroSample`, and
+  replacing `AtST()` with `0` still passes. The reason is head_append.go:496-500 and :540 — `Append` builds
+  `RefSample{Ref, T, V}` and `AppendSTZeroSample` builds `RefSample{Ref, T: st, V: 0}`, storing the start
+  timestamp as a synthetic sample's *timestamp*, not as an `ST`. The only writer of a non-zero `ST` is
+  `loadWAL` (head_wal.go:717). So it becomes observable the first time a compaction runs over a **replayed**
+  head — a §7j corpus. Quirk 209.
+
+#### Two API decisions taken here because §7j is the next caller
+
+1. **`PromBlock.BlockReader` was renamed to `PromBlock.Block`, and `BlockReader` is now the protocol.** §6m's
+   class was always a misnomer — its own doc comment said "Go: `tsdb.Block`" — and upstream keeps the name
+   `BlockReader` for the interface that `*Block`, `*Head` and `*RangeHead` all satisfy. §7i(a) is the first
+   caller of the interface (`write` takes `blocks ...BlockReader`) and §7j is the second (`NewBlockQuerier`,
+   the retention loop), so the collision was settled rather than deferred. The rename touched one declaration
+   and four call sites. The three sub-readers cannot take Go's names the same way — `PromChunks` already has a
+   class `ChunkReader` for `chunks.Reader`, a different type from `tsdb.ChunkReader` — so they are
+   `BlockIndexReader`, `BlockChunkReader` and `BlockTombstoneReader`, narrowed to what `PopulateBlock` calls,
+   on §6n's precedent. Widening them for §7j is additive.
+2. **The `Compactor` protocol is declared in FULL, with `plan` and `compact` throwing.** A `write`-only
+   protocol would be smaller and honest about what this slice ships, and it is the wrong seam: `db.go`'s
+   `compactBlocks` calls `Plan` and `Compact`, `compactHead` calls `Write`, and all three go through one
+   `db.compactor` field — so a narrow protocol would have to be *widened* when §7j lands, which is
+   source-breaking for every conformer and invites a second protocol beside this one. The two deferred methods
+   throw `CompactError.plannerUnported` and `CompactError.verticalCompactionUnported`, both naming the slice
+   that owns them, so a `db.go` built against this fails loudly at the scheduler rather than compiling into a
+   TSDB that silently never compacts. `CompactSeamTests` asserts both messages.
+
+#### What is deferred, and why each is safe
+
+* **`Plan`, `plan`, `selectDirs`, `selectOverlappingDirs`, `splitByRange`** — `db.go`'s compaction scheduler.
+  §7j. Note the §7j scoping's finding that bears on any corpus for it: `DefaultOptions()` has
+  `Min == MaxBlockDuration`, which truncates `rngs` to one element, and `selectDirs` opens with
+  `if len(c.ranges) < 2 … return nil` — so a corpus built on the library defaults would measure a compactor
+  that is switched off. Same shape as quirk 59.
+* **`Compact` and `CompactBlockMetas`** — merging N blocks needs `storage.NewMergeChunkSeriesSet`, and
+  `storage/merge.go` is still unported. `PopulateBlock` therefore **refuses** more than one reader
+  (`CompactError.verticalCompactionUnported`) rather than silently writing the first, and a test asserts it.
+* **Everything out-of-order.** `BlockMetaCompaction.setOutOfOrder` is ported because `Write` reads the hint off
+  `base`, but nothing produces an OOO block. Phase 10.
+* **`CompactorMetrics` and `instrumentedChunkWriter`.** `client_golang` is not a dependency. Quirk 205 records
+  the one non-obvious thing about it: it wraps the chunk writer whenever `Compaction.Level == 1`, and `Write`
+  always sets level 1, so it is not the rare path its name suggests.
+* **The tombstones FILE, and the remainder of exception 16.** The codec landed as §7i(t)
+  (`Sources/PromTombstones/TombstoneFile.swift`); this branch predates it, so `LeveledCompactorOptions`
+  carries a `TombstoneFileWriter` **seam** instead and the block has no `tombstones` file (exception 26).
+  Filling the seam is a two-line follow-up. **The corpus compares `meta.json`, `index` and every chunk segment
+  as BYTES and the tombstones file by NAME — there is no directory-wide `diff` to fail mysteriously.** And
+  exception 29's ordering problem cannot reach this call site: `write` always passes a freshly constructed,
+  *empty* `MemTombstones`, because a block that has just been populated has nothing to delete, and an empty
+  map has one encoding. So the file the seam will produce is byte-comparable against Go.
+
+  **What is left of exception 16 is NOT closed here and is explicitly out of scope**: `Block.init` still does
+  not call `readTombstones`, and there is no `Block.Delete`. Both are `tsdb/block.go`'s call sites rather than
+  `compact.go`'s, and §7i(t)'s codec is not on this branch. Whoever picks it up needs one `readTombstones`
+  call in `PromBlock/BlockReader.swift` and a `Delete` beside it — ROADMAP calls it §7i(b).
+
+#### §6w's two read-path gaps: ONE closed, one still open — stated plainly rather than left ambiguous
+
+The stretch goal was to close both, on the grounds that this is the first slice that can put a non-XOR or a
+malformed chunk into a fixture. Where they stand:
+
+* **The undecodable-encoding path is now REACHED, and the port was wrong about it.** That is quirk 208 above —
+  the port's `iteratorFor` and `populateCurrForSingleChunk` answered "unsupported encoding" for a perfectly
+  good XOR2 chunk, and two corpus cases proved it. Both now dispatch through `newEmptyChunk`, and the
+  histogram encodings will fall out of it for free when `PromChunkEnc` grows them.
+* **`Err` ordering is NOT closed.** It needs a chunk reader that fails *while* a series set is being iterated,
+  and neither writer in this slice can produce one: `PopulateBlock` reads through a Head whose chunks are all
+  in memory or m-mapped, and a corrupted segment is `ChunkDiskMapper`'s subject (§7d), not the compactor's.
+  The route in is a `Block` opened over a *deliberately truncated* chunk segment — which this slice can now
+  produce, because it can write a real block to truncate — driven through `blockChunkQuerierSelect`. That is a
+  `PromBlock` corpus rather than a `PromCompact` one, and it is left for whoever wants it.
+
+#### Where to pick it up
+
+§7j (`db.go`). Everything it schedules now exists. The two things it will want from here on day one are the
+`Compactor` protocol (already the right shape) and `RangeHeadBlockReader` (already written, unused by this
+slice — `BlockWriter.Flush` passes the `Head` itself, blockwriter.go:110, and `db.go` is what wraps it in a
+`RangeHead` per block interval).
 
 ### 7c. The `wlog` CORRUPTION corpus — the reader's rejection paths are now pinned
 

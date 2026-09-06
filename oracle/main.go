@@ -136,6 +136,10 @@ var suites = map[string]func(*emitter){
 	"head/replay":             genHeadReplay,
 	"block/seriesset":         genBlockSeriesSet,
 	"block/meta":              genBlockMeta,
+	// Phase 7 (§7i(a)): `tsdb/blockwriter.go` and `LeveledCompactor`'s write path — the
+	// port's own block, byte-compared against upstream's and then opened with
+	// `tsdb.OpenBlock`. See oracle/suites_block_write.go.
+	"block/write": genBlockWrite,
 	"gocompat/time-rfc3339":   genGoTimeRFC3339,
 	"gocompat/time-unixmilli": genGoTimeUnixMilli,
 	"storage/buffer":          genStorageBuffer,

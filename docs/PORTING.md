@@ -218,7 +218,7 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
 
 16. **A block's tombstones are not read, so a block's deletions are not applied.**
     `tsdb/tombstones` stores the deletion intervals that `Block.Delete()` writes, and `OpenBlock`
-    reads them so a querier can subtract them from a series' samples. `BlockReader` skips the file
+    reads them so a querier can subtract them from a series' samples. `PromBlock.Block` skips the file
     entirely: nothing in the port deletes yet, so there is nothing to subtract (which is also why
     `MemStorage`'s interval subtraction has nothing to subtract, exception 12's neighbour).
 
@@ -231,11 +231,16 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     `ReadTombstones`, byte-exact and pinned by `Fixtures/tombstones/{file,corrupt}.jsonl` (see quirks
     210-213 and exception 29). `MemTombstones` landed earlier, with `Head.Delete` (§7h(a)). So the port can
     write and read a block's `tombstones` file today; what it still does not do is **call
-    `readTombstones` from `BlockReader.open`** and hand the result to the querier, and it has no
-    `Block.Delete`. Both belong with the block writer — `compact.go:739` writes an empty tombstone
-    file for every block it produces and `block.go:370` reads one back — so this exception shrinks to
-    "`BlockReader` does not consult the file it now knows how to parse", and whoever lands
-    `blockwriter.go`/`LeveledCompactor` should close it.
+    `readTombstones` from `PromBlock.Block`'s initialiser** and hand the result to the querier, and it has
+    no `Block.Delete`.
+
+    **AMENDED AGAIN by §7i(a), which did NOT close it.** `blockwriter.go`/`LeveledCompactor` landed on a
+    branch that predated the codec, so the WRITE half is a seam (exception 26) rather than a call, and both
+    remaining call sites turned out to be `tsdb/block.go`'s rather than `compact.go`'s — one
+    `readTombstones` in `Sources/PromBlock/BlockReader.swift` and a `Delete` beside it. §7i(a) also renamed
+    the type from `BlockReader` to **`Block`**, which is what upstream calls it. ROADMAP tracks the
+    remainder as **§7i(b)**, together with filling exception 26's seam; the two are minutes of work each and
+    are only separate from §7i(a) because of branch ordering.
 
 17. **The WAL's label codec cannot carry invalid UTF-8, because `Labels` holds Swift `String`s.**
     `record.EncodeLabels` writes label names and values as `PutUvarintStr` — a byte length then the
@@ -377,6 +382,57 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     `tombstones` file that is a prefix of the real one, which `ReadTombstones` would then reject as a checksum
     failure (or, at exactly eight bytes, panic — quirk 210). A rename in `PromFS` closes both sites at once.
 
+26. **A block the port writes has no `tombstones` file.** `LeveledCompactor.write`'s last act before the
+    rename is `tombstones.WriteFile(logger, tmp, tombstones.NewMemTombstones())` — a nine-byte file for an
+    empty reader (`<BE32 magic><version><encoded><BE32 CRC>`). The FILE codec landed as §7i(t)
+    (`Sources/PromTombstones/TombstoneFile.swift`); conforming it to `TombstoneFileWriter` is a two-line
+    follow-up, tracked as ROADMAP §7i(b), and **this exception should be deleted then.**
+
+    Rather than let the difference be silent, `LeveledCompactorOptions.tombstoneWriter` is a seam: install a
+    `TombstoneFileWriter` and `write` calls it exactly where upstream does. With none installed the file is
+    absent, which `OpenBlock` tolerates — `ReadTombstones` answers an empty `MemTombstones` for a missing file
+    — so the block is fully readable. `Fixtures/block/write.jsonl` commits upstream's file LISTING including
+    `tombstones`, and `BlockWriteTests.expectedBlockFiles` splices the name in with this exception number on
+    it, while `blockDirHasNoTombstonesFile` asserts from the other side that the port really does not write
+    one.
+
+    **Exception 29's ordering problem does not reach this call site.** `tombstones.Encode` ranges a Go map, so
+    a multi-series tombstones file has no byte order at all and upstream's own output is not reproducible —
+    which is why the codec's port sorts by ref. But `write` always passes a *freshly constructed, empty*
+    `MemTombstones`: a block that has just been populated has nothing to delete, because the source's
+    deletions were applied by the populate iterators. An empty map has exactly one encoding, so the file this
+    seam will produce is byte-comparable against Go, and the corpus can compare its bytes rather than only its
+    name. The `block/write` corpus compares `meta.json`, `index` and every chunk segment as BYTES and the
+    tombstones file by NAME; nothing here does a directory-wide `diff`.
+
+27. **`LeveledCompactor` takes its ULID generator as a parameter; upstream reads `crypto/rand.Reader`
+    directly.** `Write` names its block `ulid.MustNew(ulid.Now(), rand.Reader)` (compact.go:583) — the wall
+    clock plus ten bytes of `crypto/rand`, with **no seam of any kind in v3.13.2**. A caller cannot make the
+    identifier reproducible, and neither can a corpus: recording it would make the fixture differ on every
+    regeneration, which §4 of HANDOFF calls worse than no fixture at all.
+
+    `LeveledCompactorOptions.newULID` defaults to exactly upstream's value (`ULID.newRandom()`: 48-bit
+    millisecond timestamp, ten random bytes) and can be replaced. The corpus replaces it with a constant and
+    the generator SCRUBS the same constant over upstream's output, which is length-preserving, so the
+    directory name and both ULID fields of `meta.json` are compared byte for byte instead of being skipped.
+
+    This is an API addition rather than a behaviour change — the default is Go's — but it is recorded because
+    a caller can do something here that a caller of upstream cannot.
+
+28. **A block's `.tmp-for-creation` directory is COPIED to its final name, not renamed.** The same shape as
+    exception 25, for the same reason: `fileutil.Replace(tmp, dir)` is a rename and `PromFS` (ADR-15) has
+    none, so `LeveledCompactor.replaceDirectory` copies the tree and removes the source. The end state is
+    identical and is pinned as bytes — `Fixtures/block/write.jsonl` commits the block directory's listing and
+    every file's contents — and the crash window is not: upstream's failure modes are "the temporary exists"
+    or "the block exists", and the port adds "a block directory with some of its files". Closing it needs a
+    rename in `PromFS`; **anything that adds one closes exceptions 25, 26's `tombstones.tmp` site and this one
+    at once, and all three entries should go together.**
+
+    Two smaller members of the same family, recorded here rather than as their own numbers because they are
+    the same missing primitive: `BlockMeta.writeMetaFile` copies `meta.json.tmp` onto `meta.json` instead of
+    renaming it, and `BlockWriter`'s temporary chunk directory is a **parameter** (defaulting to `head`)
+    rather than `os.MkdirTemp(os.TempDir(), "head")`, because `PromFS` has no temp-directory notion. The
+    lifecycle is upstream's either way, `Close`'s `RemoveAll` included.
 29. **`MemTombstones.Iter` yields series in ASCENDING REF ORDER, where upstream ranges a Go map.**
     Upstream has no order to be byte-exact against, and the consequence is larger than it looks: `Encode`
     walks `Iter`, so a `tombstones` file over more than one series has a **different byte order run to run**,
@@ -2875,6 +2931,135 @@ changing behaviour.
     flattens them. Pinned by `CheckpointTests`, which encodes a two-interval stone and asserts three come back,
     so the negative control that weakens `contains` to `allSatisfy` is read as a proof rather than a corpus gap.
 
+195. **`ChunkOrIterableWithCopy`'s third return exists to UNDO the index reader, and without it every block
+    compacted from a Head claims its last chunk ends at `MaxInt64`.** `appendSeriesChunks` reports the open
+    head chunk's `MaxTime` as `math.MaxInt64`, because it is still being appended to (head_read.go). The
+    compactor writes whatever the meta says straight into the index. querier.go:728-737 is what closes the
+    gap: `hcr, ok := p.cr.(ChunkReaderWithCopy)` — a type assertion that SUCCEEDS for the Head's chunk reader
+    and FAILS for a block's — and when it succeeds, `p.currMeta.MaxTime = maxt`.
+
+    §6t ported `next(copyHeadChunk:)` without the fix-up, correctly, because a block's chunk reader is not a
+    `ChunkReaderWithCopy` and the read-path corpus could not tell. The port models the type assertion as a
+    value: `ChunkOrIterable.maxTime` is nil for a source that does not implement the interface, and the
+    fix-up runs only when it is not.
+
+    **It is unobservable from a compaction and that is not obvious.** `PopulateBlock` runs with
+    `disableTrimming: false`, `MaxInt64` exceeds any `maxt`, so §6s's `trimBack` always fires for the open
+    chunk and adds `[maxt+1, MaxInt64]` — and the WithCopy branch is guarded by
+    `len(p.bufIter.Intervals) == 0`, so the chunk goes down the re-encode path instead, where the meta's
+    bounds come from the surviving samples. It is reachable from the QUERIER, where `SelectHints.DisableTrimming`
+    is what a `blockChunkQuerier` over a `RangeHead` sets. `CompactSeamTests` pins it there.
+
+196. **A block's identity is the wall clock, not its contents.** `ulid.MustNew(ulid.Now(), rand.Reader)` —
+    a 48-bit millisecond timestamp plus ten bytes of `crypto/rand`, taken at the moment `Write` is called and
+    used for the directory name, `meta.json`'s `ulid`, and `meta.json`'s `compaction.sources[0]`. Write the
+    same samples over the same range twice and the two blocks differ in exactly those three places and
+    nowhere else — the index and the chunk segments contain no ULID at all. See exception 27 for what the
+    corpus does about it.
+
+197. **The series reference `PopulateBlock` writes into the index is a COUNTER, and it is not in the file.**
+    `ref := storage.SeriesRef(0)` and `ref++` at the very bottom of the loop, after every `continue` — so
+    the refs are dense positions in *output* order, a series skipped for having no chunks does not consume
+    one, and a Head's series ref never appears in a block's index.
+
+    The number is also less load-bearing than it looks. `index.Writer.AddSeries` reads `ref` for exactly one
+    thing, `ref < lastSeriesRef && !lastSeries.isEmpty`, and the postings ordinals come from each series
+    record's byte POSITION divided by 16 (quirk 133). So **any non-decreasing sequence produces
+    byte-identical output** — 0,1,2… and 1,2,3… and 0,0,0… are indistinguishable, which is why two negative
+    controls on it survive as proofs.
+
+198. **The block stats' encoding switch has no default arm, so `NumSamples` can exceed
+    `NumFloatSamples + NumHistogramSamples`.** Every chunk's sample count goes into `NumSamples`; the
+    breakdown is a `switch` over `EncHistogram`/`EncFloatHistogram` and `EncXOR`/`EncXOR2` and nothing else.
+    A chunk in any other encoding is counted once and attributed to neither.
+
+199. **Three time bounds and two `+1`s that cancel, and dropping either loses a millisecond of every block.**
+    `BlockWriter.Flush` passes `head.MaxTime() + 1` because a block's interval is half-open `[min, max)`
+    while a head's is closed; `Write` stores that as `meta.MaxTime`; `PopulateBlock` then builds its series
+    set with `meta.MaxTime - 1`, because the set's interval is closed again ("Blocks meta is half open:
+    [min, max), so subtract 1 to ensure we don't hold samples with exact meta.MaxTime timestamp"). A sample
+    at exactly `head.MaxTime()` is therefore included, and `meta.MaxTime` is one past it.
+
+    Also note `Flush`'s addition **wraps**: `NewRangeHead` and `Head.MaxTime` put no ceiling on the value, so
+    a head that has seen `Int64.max` answers `Int64.min` — the same arithmetic as quirk 192, and the port
+    uses `&+` for the same reason.
+
+200. **An empty block is written in full and then thrown away, and the caller is told with an empty slice
+    rather than an error.** `write` creates `<dest>/<ulid>.tmp-for-creation`, writes the chunk segments and
+    the whole index into it, and only *then* asks `meta.Stats.NumSamples == 0`. If it is zero it returns
+    early — before `meta.json`, before the tombstones file, before the rename — and the deferred
+    `os.RemoveAll(tmp)` takes the temporary directory with it. So the destination directory is left
+    **untouched**, and `Write` answers `nil, nil`. Upstream states it on the `Compactor` interface: "No Block
+    is written when resulting Block has 0 samples and returns an empty slice."
+
+201. **`writeMetaFile` mutates the meta it is given, and `write` depends on the stats being written into the
+    same struct.** `meta.Version = metaVersion1` is `writeMetaFile`'s first statement (block.go:276), so a
+    `BlockMeta{}` with no version still lands as version 1. More importantly the whole chain is by pointer:
+    `Write` builds the meta, `PopulateBlock` accumulates `NumSeries`/`NumChunks`/`NumSamples` and the two
+    breakdowns into it, `write` serialises it, and `Write` then reads `meta.Stats.NumSamples` to decide what
+    to return. A port that passed a value copy would serialise zeros and report a ULID for an empty block;
+    the port uses `inout` on every hop.
+
+202. **`BlockWriter`'s `blockSize` clips nothing.** It is used twice — as the head's `ChunkRange`, so it
+    decides where `appendPreprocessor` cuts, and as the compactor's only `ranges` entry, which only
+    `plan`/`selectDirs` read and neither runs. `Flush` writes `[head.MinTime(), head.MaxTime()+1)`, the
+    head's whole span. A `BlockWriter` built with the default two-hour block size and fed five hours of
+    samples produces **one five-hour block**, not three. Splitting by range is `db.go`'s job.
+
+203. **`Flush` on an empty head asks for a backwards range and gets no block, and `ErrNoSeriesAppended` is
+    declared in `blockwriter.go` and never returned by it.** An uninitialised head answers `math.MaxInt64`
+    for `MinTime()` and `math.MinInt64` for `MaxTime()`, so `Flush` calls
+    `Write(mint: MaxInt64, maxt: MinInt64+1)` — start greater than end. `PopulateBlock` finds no series,
+    `NumSamples` stays zero, and `Flush` hands back the ZERO ULID with upstream's comment attached: "No block
+    was produced. Caller is responsible to check empty ulid.ULID based on its use case." The port returns
+    `nil` for the same state, because Swift has an optional and Go does not. `ErrNoSeriesAppended` is raised
+    only by `db.go`'s block importer.
+
+204. **`AllSortedPostings` re-sorts by LABEL SET and drops refs whose series is gone, which makes
+    `blockBaseSeriesSet`'s stale-postings skip dead for a Head.** `headIndexReader.SortedPostings` resolves
+    every ref to a `memSeries` up front, silently discarding the ones compaction has collected, and then
+    sorts by `labels.Compare` — the same order a block's index has on disk, which is what lets a querier
+    merge a head and a block without re-sorting. The consequence for §6s's `ErrNotFound` → `continue` arm
+    ("postings may be stale") is that nothing can reach `Series` with a dead ref through this path. The skip
+    is live for a *block* reader, whose `SortedPostings` is the identity.
+
+205. **`instrumentedChunkWriter` wraps the chunk writer for every block a `BlockWriter` produces, and
+    observes nothing a port can see.** `write` installs it when `meta.Compaction.Level == 1`, and `Write`
+    always sets level 1 — so it is not the rare path its name suggests. Its whole body is three `Observe`
+    calls (chunk size, sample count, time range) around a delegating `WriteChunks`. `client_golang` is not a
+    dependency; the type is a comment rather than a class.
+
+206. **The block's chunk segment size is 512 MiB and has nothing to do with the head's.**
+    `NewLeveledCompactor` leaves `MaxBlockChunkSegmentSize` at 0, which
+    `NewLeveledCompactorWithOptions` substitutes with `chunks.DefaultChunkSegmentSize`. The head's chunk
+    files are governed by `ChunkDiskMapper`'s own constants (§7d) and the two are independent.
+
+207. **A block's symbol table can name strings no series in it uses.** `PopulateBlock` drains the source's
+    symbol iterator and writes every symbol before it looks at a single series, and nothing prunes them
+    afterwards. So a block written from a Head whose series all fell outside `[mint, maxt]`, or were fully
+    deleted, still carries every label name and value the Head knew — right up until the `NumSamples == 0`
+    check throws the whole directory away.
+
+208. **Compacting a Head ALWAYS re-encodes its last chunk, and that is what made §6t's XOR-only re-encoder a
+    bug.** The open head chunk's index meta says `MaxTime == MaxInt64` (quirk 195), `PopulateBlock` runs with
+    trimming enabled, so `trimBack` fires for any range whatsoever and `populateWithDelChunkSeriesIterator`
+    takes the re-encode path — not just for deleted samples, but for every compaction of every Head. §6t and
+    §6u hard-coded `chunkenc.NewXORChunk()` there with a note that the other encodings were Phase 7's;
+    upstream builds `chunkenc.NewEmptyChunk(p.currMeta.Chunk.Encoding())`. With
+    `HeadOptions.FloatChunkEncoding = EncXOR2` — which is what `promqltest` runs (quirk 36) — the port
+    answered `chunk N resolved to neither a chunk nor an iterable`. Two corpus cases found it, and **neither
+    of them was a deletion case**, which is the part worth carrying: a limitation declared against one
+    trigger was reached by another.
+
+209. **Nothing in the append path ever sets `record.RefSample.ST`.** `populateCurrForSingleChunk` reads
+    `AtST()` per sample and passes it to the new appender (querier.go:976), which for an XOR2 chunk is how a
+    start timestamp survives a re-encode. It cannot be observed from a Head built by appending:
+    `headAppender.Append` builds `RefSample{Ref, T, V}` (head_append.go:496-500) and `AppendSTZeroSample`
+    builds `RefSample{Ref, T: st, V: 0}` (head_append.go:540) — it stores the start timestamp as a synthetic
+    zero sample's TIMESTAMP, not as an `ST`. The only writer of a non-zero `ST` is `loadWAL`
+    (head_wal.go:717), which decodes it from a samples-V2 record. So `EnableSTStorage` plus `EncXOR2` plus an
+    `AppendSTZeroSample` still yields `AtST() == 0` throughout, and the re-encode has nothing to lose. It
+    becomes observable the first time a compaction runs over a REPLAYED head.
 210. **An eight-byte `tombstones` file PANICS upstream, and `OpenBlock` has no recover.**
     `ReadTombstones` guards `len(b) < tombstonesHeaderSize` — five — and then, forty lines later, writes
     `hash.Write(d.Get()[tombstoneFormatVersionSize:])` with no guard at all. By that point `d.Be32()` has taken

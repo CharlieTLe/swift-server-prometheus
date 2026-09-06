@@ -61,7 +61,14 @@ public struct BlockSeries: Sendable {
 }
 
 /// Go: `tsdb.Block`, reduced to reading.
-public final class BlockReader {
+///
+/// **Named `Block` rather than `BlockReader`, and that rename was §7i(a)'s.** It was `BlockReader` from §6m,
+/// which was always a misnomer — this is the concrete `tsdb.Block`, and upstream keeps the name `BlockReader`
+/// for the INTERFACE that `*Block`, `*Head` and `*RangeHead` all satisfy. §7i(a) is the first slice that needs
+/// the interface (`LeveledCompactor.write` takes `blocks ...BlockReader`) and §7j needs it again for
+/// `NewBlockQuerier` and the retention loop, so the collision was settled here rather than left for the next
+/// caller: the interface is `PromCompact.BlockReader` and this is `PromBlock.Block`.
+public final class Block {
     public let dir: String
     public let meta: BlockMeta
     private let fs: any PromFS

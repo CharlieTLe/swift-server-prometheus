@@ -214,11 +214,29 @@ public final class BlockSampleSeriesSet {
 public final class BlockChunkSeriesSet {
     private let set: BlockBaseSeriesSet
     private let source: any BlockChunkSource
+    /// Go: `blockBaseSeriesSet.blockID` — interpolated into `cannot populate chunk %d from block %s`.
+    private let blockID: String
     public private(set) var current: (labels: [(name: String, value: String)], iterator: PopulateWithDelChunkSeriesIterator)?
 
-    init(set: BlockBaseSeriesSet, source: any BlockChunkSource) {
+    /// Go: `NewBlockChunkSeriesSet(id, i, c, t, p, mint, maxt, disableTrimming)` — the exported constructor
+    /// `compact.go`'s `PopulateBlock` calls, which is why this is public while the querier's path builds the
+    /// set through ``blockChunkQuerierSelect``.
+    public convenience init(
+        blockID: String, index: any SeriesIndex, chunks: any BlockChunkSource, postings: any Postings,
+        mint: Int64, maxt: Int64, disableTrimming: Bool,
+        tombstonesFor: @escaping (SeriesRef) throws -> [DeletionInterval] = { _ in [] }
+    ) {
+        self.init(
+            set: BlockBaseSeriesSet(
+                index: index, postings: postings, mint: mint, maxt: maxt,
+                disableTrimming: disableTrimming, tombstonesFor: tombstonesFor),
+            source: chunks, blockID: blockID)
+    }
+
+    init(set: BlockBaseSeriesSet, source: any BlockChunkSource, blockID: String = "") {
         self.set = set
         self.source = source
+        self.blockID = blockID
     }
 
     public func next() -> Bool {
@@ -229,7 +247,7 @@ public final class BlockChunkSeriesSet {
         current = (
             cur.labels,
             PopulateWithDelChunkSeriesIterator(
-                blockID: "", source: source, metas: cur.chunks, intervals: cur.intervals)
+                blockID: blockID, source: source, metas: cur.chunks, intervals: cur.intervals)
         )
         return true
     }

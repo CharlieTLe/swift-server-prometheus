@@ -59,12 +59,26 @@ public struct ChunkOrIterable {
     /// Non-nil when the meta names SEVERAL chunks that must be merged on read — the out-of-order head's
     /// shape, Phase 7's. A block leaves this nil.
     public var iterable: (any ChunkIterable)?
+    /// Go: the third return of `ChunkReaderWithCopy.ChunkOrIterableWithCopy`.
+    ///
+    /// **Nil means "this source is not a `ChunkReaderWithCopy`"**, which is Go's type assertion
+    /// (`hcr, ok := p.cr.(ChunkReaderWithCopy)`) expressed as a value. A block's chunk reader does not
+    /// implement the interface, so it leaves this nil and `currMeta.MaxTime` is untouched; the Head's does,
+    /// and querier.go:734-737 then OVERWRITES the meta's `MaxTime` with it.
+    ///
+    /// That overwrite is not cosmetic. `appendSeriesChunks` reports the open head chunk's `MaxTime` as
+    /// `math.MaxInt64` because it is still being appended to (head_read.go), and the compactor writes
+    /// whatever the meta says straight into the index. Without the fix-up every block compacted from a Head
+    /// claims its last chunk ends at `MaxInt64`. Quirk 195.
+    public var maxTime: Int64?
 
     public init(
-        chunk: (encoding: Encoding, bytes: [UInt8])? = nil, iterable: (any ChunkIterable)? = nil
+        chunk: (encoding: Encoding, bytes: [UInt8])? = nil, iterable: (any ChunkIterable)? = nil,
+        maxTime: Int64? = nil
     ) {
         self.chunk = chunk
         self.iterable = iterable
+        self.maxTime = maxTime
     }
 }
 
@@ -85,7 +99,7 @@ public enum PopulateError: Error, CustomStringConvertible {
     case neitherChunkNorIterable(ref: UInt64)
     /// Go: `fmt.Errorf("iterate chunk while re-encoding: %w", err)` and its three siblings.
     case iterateWhileReEncoding(underlying: any Error)
-    case createChunkWhileReEncoding(encoding: Encoding)
+    case createChunkWhileReEncoding(underlying: any Error)
     case createAppenderWhileReEncoding(underlying: any Error)
     case mixedValueTypes(found: ValueType, expected: ValueType)
     case unsupportedValueType(ValueType)
@@ -99,8 +113,8 @@ public enum PopulateError: Error, CustomStringConvertible {
         case .neitherChunkNorIterable(let r):
             return "chunk \(r) resolved to neither a chunk nor an iterable"
         case .iterateWhileReEncoding(let e): return "iterate chunk while re-encoding: \(e)"
-        case .createChunkWhileReEncoding(let enc):
-            return "create new chunk while re-encoding: unsupported encoding \(enc)"
+        case .createChunkWhileReEncoding(let e):
+            return "create new chunk while re-encoding: \(e)"
         case .createAppenderWhileReEncoding(let e):
             return "create appender while re-encoding: \(e)"
         case .mixedValueTypes(let f, let e): return "found value type \(f) in chunk with \(e)"
@@ -171,6 +185,13 @@ public final class PopulateWithDelGenericSeriesIterator {
         }
         currChunk = resolved.chunk
 
+        // querier.go:734-737 — `if p.currMeta.Chunk != nil { p.currMeta.MaxTime = maxt }`. Only when a chunk
+        // came back, and only from the WithCopy branch: `maxTime` is nil for a source that is not a
+        // `ChunkReaderWithCopy`, and for the plain `ChunkOrIterable` call. See `ChunkOrIterable.maxTime`.
+        if resolved.chunk != nil, let fixed = resolved.maxTime {
+            currMeta?.maxTime = fixed
+        }
+
         if let chunk = resolved.chunk {
             if chunkIntervals.isEmpty {
                 // No overlap and a single chunk: take it as it is.
@@ -198,14 +219,18 @@ public final class PopulateWithDelGenericSeriesIterator {
         return true
     }
 
-    /// Go: `chunkenc.Chunk.Iterator` after the pool lookup. Only XOR is decodable so far; the histogram
-    /// encodings are Phase 7's, and returning nil here produces the explicit error above rather than an
-    /// empty series.
+    /// Go: `chunkenc.Chunk.Iterator` after the pool lookup.
+    ///
+    /// §6t hard-coded `XORChunk` here with a note that the other encodings were Phase 7's. §7i(a) is what
+    /// made that reachable: the Head's OPEN chunk always carries a synthetic trimming interval (its index
+    /// meta says `MaxTime == MaxInt64`, so `trimBack` fires for any range at all), so **every** compaction of
+    /// a Head re-encodes its last chunk — and with `FloatChunkEncoding = EncXOR2` the hard-coded XOR chunk
+    /// turned that into `chunk N resolved to neither a chunk nor an iterable`. Two corpus cases, and neither
+    /// of them a deletion case. Quirk 208.
     func iteratorFor(_ chunk: (encoding: Encoding, bytes: [UInt8])) -> (any ChunkIterator)? {
-        guard chunk.encoding == .xor else { return nil }
-        let c = XORChunk()
+        guard let c = try? newEmptyChunk(chunk.encoding) else { return nil }
         c.reset(chunk.bytes)
-        return BoxedFloatChunkIterator(c.iterator())
+        return c.iterator(nil)
     }
 
     func err() -> (any Error)? { error }
@@ -370,19 +395,22 @@ public final class PopulateWithDelChunkSeriesIterator {
         var newMeta = meta
         newMeta.minTime = del.atT()
 
-        // Only XOR is encodable so far; the histogram encodings are Phase 7's. Upstream builds an empty chunk
-        // of the SOURCE chunk's encoding, so a non-XOR source is an explicit error rather than a wrong chunk.
-        guard source.encoding == .xor else {
-            error = PopulateError.createChunkWhileReEncoding(encoding: source.encoding)
+        // Go: `chunkenc.NewEmptyChunk(p.currMeta.Chunk.Encoding())` — the SOURCE chunk's encoding, so an
+        // XOR2 head chunk is re-encoded as XOR2 and its start timestamps survive. §6t/§6u hard-coded XOR;
+        // see `iteratorFor` and quirk 208 for why that only became reachable here.
+        let newChunk: any Chunk
+        do {
+            newChunk = try newEmptyChunk(source.encoding)
+        } catch {
+            self.error = PopulateError.createChunkWhileReEncoding(underlying: error)
             return false
         }
-        let newChunk = XORChunk()
-        let app: XORAppender
+        let app: any ChunkAppender
         do {
-            app = try newChunk.appender()
-        } catch let e {
+            app = try newChunk.makeAppender()
+        } catch {
             // `error` shadows the property inside a `catch`, hence the explicit binding.
-            error = PopulateError.createAppenderWhileReEncoding(underlying: e)
+            self.error = PopulateError.createAppenderWhileReEncoding(underlying: error)
             return false
         }
 
@@ -397,9 +425,13 @@ public final class PopulateWithDelChunkSeriesIterator {
                 error = PopulateError.unsupportedValueType(vt)
                 return false
             }
+            // querier.go:976 — `st = p.currDelIter.AtST()` is read for EVERY value type, before the switch,
+            // and passed on. The XOR appender discards it (quirk 36); the XOR2 one does not, which is what
+            // makes a re-encoded XOR2 chunk differ from a re-encoded XOR one by more than its header byte.
+            let st = del.atST()
             let (ts, v) = del.at()
             t = ts
-            app.append(t, v)
+            app.append(st, t, v)
             vt = del.next()
         }
         if let e = del.err() {
@@ -408,7 +440,7 @@ public final class PopulateWithDelChunkSeriesIterator {
         }
 
         newMeta.maxTime = t
-        current = (meta: newMeta, bytes: newChunk.bytes, encoding: .xor)
+        current = (meta: newMeta, bytes: newChunk.bytes, encoding: newChunk.encoding)
         return true
     }
 

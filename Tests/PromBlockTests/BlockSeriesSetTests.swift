@@ -75,7 +75,7 @@ struct SeriesSetOut: Decodable, Equatable, Sendable {
 /// A `SeriesIndex` and `LabelQueryIndex` over one index file's bytes.
 ///
 /// The same shim `BlockLabelQueryTests` uses, extended with `series(_:)`. It stays a test type until the
-/// querier slice gives `BlockReader` these conformances for real.
+/// querier slice gives `Block` these conformances for real.
 private struct SeriesSetFileIndex: SeriesIndex, PostingsIndex {
     let bytes: [UInt8]
     let toc: IndexTOC

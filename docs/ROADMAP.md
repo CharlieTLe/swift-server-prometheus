@@ -3,11 +3,11 @@
 Full-server port of Prometheus v3.13.2 to Swift. See `PORTING.md` for the fidelity contract,
 `DECISIONS.md` for ADRs, `HANDOFF.md` for the current state in detail.
 
-**Where things stand: phases 0–6 are done, phase 7 is six slices in.** 58,700 lines of Swift across
+**Where things stand: phases 0–6 are done, phase 7 is nine slices in.** 58,700 lines of Swift across
 28 targets, 20,539 lines of tests, 30,597 lines of Go oracle. 639 tests in 150 suites, green on Swift
 6.4 and the 6.1 floor. The query engine passes all 2,183 of upstream's `eval` assertions; the TSDB
-read path is closed; the Head ingests samples into chunks and WAL records, but nothing can turn them
-into a block yet.
+read path is closed; the Head ingests, is queried, forgets and survives a restart, and §7i(a) can turn it into
+a **byte-identical block**. What is missing is `db.go` — the orchestration that decides when.
 
 **One budget correction, because it is the largest miss in this plan.** The original estimate was
 "≈85k lines of Swift plus **~3k** lines of Go test-oracle harness". The oracle is at **30,597 lines**
@@ -60,7 +60,7 @@ tree.
 | **4** ✅ | **`PromQLParser` — lexer ported 1:1, hand-written precedence-climbing parser replacing goyacc.** Plus `ast.go`, `printer.go`, `prettier.go`, `model.Duration`, `strutil.Unquote` | 5.9k → **6.5k** | **DONE** — 6,154 parse cases across six option sets: AST JSON via `translate_ast.go`, every error message and `PositionRange`, `String()`, `Prettify()`, `Tree()`, and `parse(print(parse(x))) == parse(x)`. Plus 1,685 series descriptions, 834 `ParseMetric`, 842 `ParseMetricSelector`, 1,685 `model.Duration`, 408 `strconv.ParseInt`/`ParseUint`. See ADR-11, ADR-12 |
 | **5** ✅ | **`PromQL` engine + storage protocols.** Shippable library milestone | 12k → **17.6k** | **DONE — 2,183 of 2,183 `eval` assertions, zero failures, zero skips.** Every evaluator arm, every runner directive, every start-timestamp assertion; the gate has nothing left to measure. The count reads 2,183 rather than the 2,201 planned for because `@st` lines are no longer counted as assertions. Deliberately deferred: `storage/merge.go`, `generic.go`, `lazy.go`, every `MarshalJSON`. `storage.Appender` was deferred "to the phase that first has a caller" and duly landed in §7f(f) — the deferral policy working as intended |
 | **6** ✅ | **TSDB read path** | 9k → **9.6k** | **READ PATH CLOSED** — 23 pinned slices. A block Prometheus wrote can be opened, matched, selected, trimmed and read as samples or chunks, every layer pinned on real files. Two of the three clauses originally written for this gate are **deferred to the phases that own their tooling**: `tsdb dump` byte-equals `promtool` needs `promtool` (Phase 9), and re-running the evals on a block querier needs the Head (§7g). The first clause was met by a stronger route than planned — rather than reading upstream's committed `tsdb/testdata/` blocks, `oracle/blockfixture.go` writes real blocks with upstream's own writer and opens them with `tsdb.OpenBlock`, so the corpus controls the input. Two read-path gaps stay open by construction and are §7i's (`Err` ordering, the undecodable-encoding path — both need malformed or non-XOR chunk bytes the port cannot yet write) |
-| **7** 🔨 | **TSDB write path** | 14k → **5.3k so far** | **NINE SLICES IN (§7a–§7h plus §7i(t)), and `head.go` is DONE.** §7a `tsdb/record` (the WAL wire format, both directions) · §7b `tsdb/wlog`'s segment format · §7c the corruption corpus (took that sweep from 22 survivors to 9) · §7d `ChunkDiskMapper` · §7e `index.MemPostings` · **§7f the Head, six sub-slices**: `isolation.go`, `seriesHashmap`/`stripeSeries`, the `chunkenc` conformances, `memSeries`' in-order chunk state, `HeadOptions`/`NewHead`, and **the float append path** (§7f(f)) — 40 cases through the real `tsdb.Head`, each asserted in the three places a committed sample lands: the accessors, the WAL records byte for byte, and the chunk files · **§7g `head_read.go`**, so the Head is QUERYABLE · **§7h `head_wal.go` in three sub-slices**: (a) the GC (`gc`, `Delete`, `Truncate`, `MemTombstones`), (b) the REPLAY (`Init`, `loadMmappedChunks`, `loadWAL`), (c) the WAL TRUNCATION and `wlog/checkpoint.go`. **So the Head ingests, is queried, forgets, comes back from a restart, and no longer grows its WAL without bound.** · **§7i(t) the tombstone FILE codec** — `Encode`/`Decode`/`WriteFile`/`ReadTombstones` and the magic/version/CRC framing, in a 30-case round trip over the file's BYTES plus a 64-case CORRUPTION arm modelled on §7c; it found a reachable upstream panic on an eight-byte file (quirk 210). `compact.go` and `db.go` are untouched, so the port still cannot produce a block outside a test. What remains inside §7f is deferred by feature rather than omitted: histograms and exemplars in the appender, `UpdateMetadata`, the out-of-order arm. Gate unchanged: **byte-identical block** vs Go (ULID pinned); `promtool tsdb verify` accepts ours; WAL replay both ways. Remaining order below |
+| **7** 🔨 | **TSDB write path** | 14k → **6.3k so far** | **TEN SLICES IN (§7a–§7h plus §7i(t) and §7i(a)), `head.go` is DONE and the port can WRITE A BLOCK.** §7a `tsdb/record` (the WAL wire format, both directions) · §7b `tsdb/wlog`'s segment format · §7c the corruption corpus (took that sweep from 22 survivors to 9) · §7d `ChunkDiskMapper` · §7e `index.MemPostings` · **§7f the Head, six sub-slices**: `isolation.go`, `seriesHashmap`/`stripeSeries`, the `chunkenc` conformances, `memSeries`' in-order chunk state, `HeadOptions`/`NewHead`, and **the float append path** (§7f(f)) — 40 cases through the real `tsdb.Head`, each asserted in the three places a committed sample lands: the accessors, the WAL records byte for byte, and the chunk files · **§7g `head_read.go`**, so the Head is QUERYABLE · **§7h `head_wal.go` in three sub-slices**: (a) the GC (`gc`, `Delete`, `Truncate`, `MemTombstones`), (b) the REPLAY (`Init`, `loadMmappedChunks`, `loadWAL`), (c) the WAL TRUNCATION and `wlog/checkpoint.go`. **So the Head ingests, is queried, forgets, comes back from a restart, and no longer grows its WAL without bound.** · **§7i(t) the tombstone FILE codec** — `Encode`/`Decode`/`WriteFile`/`ReadTombstones` and the magic/version/CRC framing, in a 30-case round trip over the file's BYTES plus a 64-case CORRUPTION arm modelled on §7c; it found a reachable upstream panic on an eight-byte file (quirk 210). · **§7i(a) `blockwriter.go` + `LeveledCompactor`'s write path** in a new tier-10 `PromCompact` target — 36 differential cases in which upstream's own writer produces a block and the port has to produce the same `index`, chunk-segment and `meta.json` bytes, with the ULID scrubbed and injected (upstream reads `crypto/rand.Reader` directly and has no seam); 62 controls, 53 broke, 9 argued survivors; quirks 195-209 and exceptions 26-28. **So the first clause of this gate is MET: the port writes a byte-identical block, ULID pinned.** `db.go` is untouched. What remains inside §7f is deferred by feature rather than omitted: histograms and exemplars in the appender, `UpdateMetadata`, the out-of-order arm. Gate: the byte-identical-block clause is met; `promtool tsdb verify` accepts ours is Phase 9's tooling; WAL replay both ways landed in §7h(b). Remaining order below |
 | 8 | Ingest: text parse, relabel, config, discovery, scrape | 9k | All 217 `config/testdata/` fixtures incl. **byte-identical error strings**; live scrape differential |
 | 9 | Server: web API, rules, notifier, template, UI bundle, `prometheus`/`promtool` | 14k | **HTTP differential** — Go and Swift over the same TSDB dir, byte-compare JSON across the API corpus |
 | 10 | Remote read/write, exemplars, OOO head, agent mode, perf | 8k | `compliance/` remote-write suite; benchmark parity |
@@ -76,37 +76,36 @@ decision but must be recorded in PORTING.md as a departure, not taken silently.
 Each is independently pinnable; HANDOFF §7f–§7h has the research. §7g and §7h have both landed, so
 the list starts at §7i.
 
-1. **§7i — `compact.go` + `blockwriter.go`** (1,071 lines): Head to block. **Closes §6w's two
-   declared read-path gaps**, being the first thing that can put a non-XOR or malformed chunk in a
-   fixture. Order inside it: `blockwriter.go` (132 lines) first, because `BlockWriter` is the
-   smallest thing that writes a block and its corpus is `oracle/blockfixture.go` in reverse — write
-   with the port, open with `tsdb.OpenBlock`. Then `LeveledCompactor.Write`/`write`/`populateBlock`,
-   deferring `CompactBlockMetas`, `plan`/`selectDirs` and everything OOO.
-   **The tombstone FILE codec is no longer part of this** — it landed ahead of the block writer as
-   §7i(t) (`Encode`, `Decode`, `WriteFile`, `ReadTombstones`, 94 cases in two arms, 48 of 52
-   controls), because `compact.go:739` writes an empty tombstone file for every block it produces.
-   What is left of exception 16 is the CALL SITE: `BlockReader.open` still does not call
-   `readTombstones`, and there is no `Block.Delete`. Both belong here.
-2. **§7j — `db.go`** (2,666 lines): the orchestration — `Open`, the block list, retention, the
+1. **§7i(a) — `blockwriter.go` + `LeveledCompactor`'s write path — LANDED.** See HANDOFF §7i(a).
+   It closed one of §6w's two read-path gaps (the undecodable-encoding path, which turned out to be
+   reached by *every* compaction of a Head rather than only by a non-XOR chunk) and left the other
+   (`Err` ordering) open with the route in written down. Deferred with it: `CompactBlockMetas`,
+   `Compact` (which needs `storage/merge.go`), `plan`/`selectDirs`, and everything out-of-order — all
+   of them reached only from `db.go`'s driver, so they travel with §7j.
+2. **§7i(b) — the two loose ends, neither of which is a session.** Fill §7i(a)'s
+   `TombstoneFileWriter` seam with §7i(t)'s codec, which is two lines and deletes exception 26; and
+   close what is left of exception 16 — `PromBlock.Block.init` still does not call `readTombstones`
+   and there is no `Block.Delete`, both of them `tsdb/block.go` call sites rather than `compact.go`'s.
+3. **§7j — `db.go`** (2,666 lines): the orchestration — `Open`, the block list, retention, the
    compaction *driver*, and `DB.Appender`/`Querier`. Last, because everything it schedules has to
    exist first, and it is where `storage/merge.go` finally has a caller. **Read HANDOFF §7j
    (scoping) before starting**: it splits the file into **five** independently pinnable sub-slices
    with a corpus each — (a) the head-only DB, (b) `reloadBlocks`, (c) retention, (d) the compaction
    driver, (e) `DB.Querier` — and corrects the three-way split this entry used to name. The
    corrections worth carrying up here: `Open` *calls* `reload()`, so "`Open` + `reloadBlocks`" is
-   not a seam; `plan`/`selectDirs` are `LeveledCompactor`'s and stay inside §7i above — they are not
-   `db.go`'s, as an earlier version of item 1 claimed — so db.go's share of "compaction scheduling"
-   is only the driver; `rangeForTimestamp` is **already ported** (§7f(d),
+   not a seam; `plan`/`selectDirs` are `LeveledCompactor`'s — they are not `db.go`'s, as an earlier version of
+   item 1 claimed — but §7i(a) DEFERRED them rather than porting them, because their only caller is
+   the driver, so they come with this slice and `LeveledCompactor.plan` currently throws
+   `CompactError.plannerUnported`; db.go's share of "compaction scheduling" is the driver plus those; `rangeForTimestamp` is **already ported** (§7f(d),
    quirk 184); and the split omitted `DB.Querier`, which is what finally collects Phase 6's deferred
    exit-gate clause and therefore probably belongs second rather than last. §7j needs **no probe
    package** — `tsdb.Open` and `DB` expose almost everything, and even retention's
    `BeyondTimeRetention`/`BeyondSizeRetention` are exported.
 
-**Scale, so it is not rediscovered:** these two are ~3,700 lines of Go at a bar of one oracle suite
-plus one argued control sweep per slice. An earlier version of this line said "at least two or three
-further sessions"; HANDOFF §7j's scoping costs that out against the §7f–§7h evidence and the honest
-number is **six to eight** — one or two for §7i and five for §7j, which is five sub-slices at the
-one-session-each rate the last nine sub-slices set.
+**Scale, so it is not rediscovered:** what is left is ~2,700 lines of Go at a bar of one oracle suite
+plus one argued control sweep per slice. HANDOFF §7j's scoping costs that out against the §7f–§7h
+evidence and the honest number is **five or six** — §7i(b) is not a session, and §7j is five
+sub-slices at the one-session-each rate the last ten sub-slices set.
 
 Plus the parts of the appender §7f(f) deferred **by feature rather than by omission**: histograms and
 exemplars, `UpdateMetadata`, and the out-of-order arm.
@@ -156,7 +155,12 @@ Tier 9  PromHead → PromBlock, PromChunkEnc, PromChunks, PromFS, PromHistogram,
                    PromIndex, PromLabels, PromStorage, PromWAL, GoCompat
         PromQLTest → PromQL, PromQLParser, PromTestStorage, PromStorage, PromChunks,
                      PromHistogram, PromConvertNHCB, PromLabels, PromModel, PromRegex, GoCompat
-Tier 10 (Phase 8) PromTextParse, PromRelabel, PromDiscoveryCore, PromConfig,
+Tier 10 PromCompact → PromBlock, PromChunkEnc, PromChunks, PromFS, PromHead,
+                      PromIndex, PromLabels, PromStorage, PromTombstones, GoCompat
+                      (§7i(a): a compactor READS a Head and WRITES a block, so it
+                       sits above PromHead and nothing below it knows about
+                       compaction. `db.go` joins it here in §7j.)
+        (Phase 8) PromTextParse, PromRelabel, PromDiscoveryCore, PromConfig,
                   PromDiscovery, PromScrape
 Tier 11 (Phase 9) PromTemplate, PromRules, PromNotifier, PromRemote, PromWebUI,
                   PromWebAPI, PromServer

@@ -8,6 +8,7 @@
     "block/meta.jsonl": { "sha256": "156998aedb669f9fb9215a35ad9d563664b1098d4714617b507bf6b93ff9f4d3", "lines": 25 },
     "block/seriesset.jsonl": { "sha256": "c2296d68d291c9d59215bb74998d8bedec899e33d746fdb3ddc6c8a82ba51b66", "lines": 8 },
     "block/tsintervals.jsonl": { "sha256": "4d7dac3c8ae231f73ede9ce9566648120270f18965db09c1ac56de49c8286a52", "lines": 38 },
+    "block/write.jsonl": { "sha256": "7afef10a816ccc5658720d462ad2b4c89c31f66072587b63e2461adf046378d6", "lines": 36 },
     "chunkenc/chunkmeta.jsonl": { "sha256": "32475dd0955ef4d422b5eae7e9481989d66baadf654568e88d8c5ae871cd136b", "lines": 140 },
     "chunkenc/compatible.jsonl": { "sha256": "705caedcd4167985825cbcb5ecb43ce9699d8894e024e55d071c9c9b8af76481", "lines": 36 },
     "chunkenc/encoding.jsonl": { "sha256": "c97b97d5bbde77bcd681bdf3cbdd4ec7724dca35476379ee71b3d458147462d6", "lines": 10 },

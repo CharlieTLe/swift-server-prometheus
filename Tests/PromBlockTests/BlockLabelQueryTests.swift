@@ -51,8 +51,8 @@ struct BlockLabelsOut: Decodable, Equatable, Sendable {
 
 /// A `LabelQueryIndex` over one index file's bytes.
 ///
-/// Deliberately a *test* type rather than a method set on `BlockReader`: the querier slice that gives
-/// `BlockReader` this conformance for real is the next one, and wiring it here first would leave the corpus
+/// Deliberately a *test* type rather than a method set on `Block`: the querier slice that gives
+/// `Block` this conformance for real is the next one, and wiring it here first would leave the corpus
 /// checking a shim it was about to replace.
 private struct LabelFileIndex: LabelQueryIndex {
     let bytes: [UInt8]

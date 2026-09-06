@@ -38,6 +38,8 @@
 internal import Foundation
 internal import GoCompat
 
+public import PromFS
+
 /// Go: `ulid.ULID` — 16 bytes, rendered as 26 Crockford base32 characters.
 public struct ULID: Sendable, Hashable, CustomStringConvertible {
     public var bytes: [UInt8]
@@ -88,6 +90,41 @@ public struct ULID: Sendable, Hashable, CustomStringConvertible {
             }
         }
         self.bytes = out
+    }
+
+    /// Go: `ulid.New(ms uint64, entropy io.Reader)` — the six-byte big-endian millisecond timestamp followed
+    /// by ten bytes of entropy.
+    ///
+    /// `ulid.MustNew(ulid.Now(), rand.Reader)` is how `compact.go` names every block it writes, so the six
+    /// leading bytes are the WALL CLOCK at write time and the rest is `crypto/rand`. A block's identity is
+    /// therefore not a function of its contents: write the same samples twice and the two blocks differ in
+    /// their directory name and in two fields of `meta.json` and nowhere else. Quirk 196.
+    ///
+    /// `ulid.New` errors with `ulid: timestamp too big` above 2**48-1; `MustNew` panics on it, and no caller
+    /// in `tsdb` can reach it because `ulid.Now()` is `uint64(time.Now().UnixMilli())`.
+    public init(timestampMS: UInt64, entropy: [UInt8]) {
+        precondition(entropy.count == 10, "a ULID's entropy is 10 bytes")
+        // 2**48 - 1, spelled as the value it denotes: HANDOFF §4 on untyped integer expressions and the
+        // Swift 6.1 floor.
+        precondition(timestampMS <= 281_474_976_710_655, "ulid: timestamp too big")
+        var out = [UInt8](repeating: 0, count: 16)
+        out[0] = UInt8(truncatingIfNeeded: timestampMS >> 40)
+        out[1] = UInt8(truncatingIfNeeded: timestampMS >> 32)
+        out[2] = UInt8(truncatingIfNeeded: timestampMS >> 24)
+        out[3] = UInt8(truncatingIfNeeded: timestampMS >> 16)
+        out[4] = UInt8(truncatingIfNeeded: timestampMS >> 8)
+        out[5] = UInt8(truncatingIfNeeded: timestampMS)
+        for i in 0..<10 { out[6 + i] = entropy[i] }
+        self.bytes = out
+    }
+
+    /// Go: `ulid.MustNew(ulid.Now(), rand.Reader)`.
+    public static func newRandom() -> ULID {
+        let ms = UInt64(Date().timeIntervalSince1970 * 1000)
+        var rng = SystemRandomNumberGenerator()
+        var entropy = [UInt8](repeating: 0, count: 10)
+        for i in 0..<10 { entropy[i] = UInt8.random(in: 0...255, using: &rng) }
+        return ULID(timestampMS: ms, entropy: entropy)
     }
 
     /// Go: `ulid.ULID.String()`.
@@ -153,6 +190,32 @@ public struct BlockMetaCompaction: Sendable, Equatable {
     public var hints: [String] = []
 
     public init() {}
+
+    /// Go: `CompactionHintFromOutOfOrder`.
+    public static let hintFromOutOfOrder = "from-out-of-order"
+    /// Go: `CompactionHintFromStaleSeries`.
+    public static let hintFromStaleSeries = "from-stale-series"
+
+    /// Go: `SetOutOfOrder` — idempotent, and it **re-sorts the whole hint list** afterwards rather than
+    /// appending in call order. So the two hints always come out alphabetically, whichever was set first.
+    public mutating func setOutOfOrder() {
+        if fromOutOfOrder() { return }
+        hints.append(Self.hintFromOutOfOrder)
+        hints.sort()
+    }
+
+    /// Go: `FromOutOfOrder`.
+    public func fromOutOfOrder() -> Bool { hints.contains(Self.hintFromOutOfOrder) }
+
+    /// Go: `SetStaleSeries`.
+    public mutating func setStaleSeries() {
+        if fromStaleSeries() { return }
+        hints.append(Self.hintFromStaleSeries)
+        hints.sort()
+    }
+
+    /// Go: `FromStaleSeries`.
+    public func fromStaleSeries() -> Bool { hints.contains(Self.hintFromStaleSeries) }
 }
 
 /// Go: `BlockMeta`.
@@ -330,5 +393,64 @@ extension BlockMeta {
                     BlockDesc(ulid: u, minTime: i64(p["minTime"]), maxTime: i64(p["maxTime"])))
             }
         }
+    }
+}
+
+// MARK: - Writing meta.json, and the block directory's layout
+
+/// Go: `indexFilename`.
+public let indexFilename = "index"
+/// Go: `metaFilename`.
+public let metaFilename = "meta.json"
+/// Go: `tombstones.TombstonesFilename`. Named here because the LAYOUT is `block.go`'s; the file CODEC is
+/// `tsdb/tombstones`' and is not ported (exception 16 for reading, exception 26 for writing).
+public let tombstonesFilename = "tombstones"
+
+/// Go: `chunkDir(dir)`.
+public func blockChunkDir(_ dir: String) -> String { dir + "/chunks" }
+
+extension BlockMeta {
+
+    /// Go: `writeMetaFile(logger, dir, meta)` — returns the number of bytes written.
+    ///
+    /// Two things about it that the name does not give:
+    ///
+    ///   * **it MUTATES the caller's meta.** `meta.Version = metaVersion1` is the first statement
+    ///     (block.go:276), so a `BlockMeta{}` built with no version still lands as version 1. The port takes
+    ///     `inout` rather than defaulting the field, because the mutation is observable: `compact.go`'s
+    ///     caller keeps reading the same struct afterwards.
+    ///   * **the write is `<path>.tmp` then `fileutil.Replace`**, so a reader never sees a half-written
+    ///     `meta.json`, and the `.tmp` is removed on *every* exit path — success included, which is why the
+    ///     removal is in Go's `defer`. ADR-15 gives `PromFS` no rename, so the port copies and removes; the
+    ///     end state is identical and the crash window is not (exception 28, the same arrangement as
+    ///     exception 25's).
+    ///
+    /// The returned count is `len(jsonMeta)` — the length of the JSON, which is what `Block.numBytesMeta`
+    /// records. It is not `Stat`ed off the file.
+    @discardableResult
+    public static func writeMetaFile(fs: any PromFS, dir: String, meta: inout BlockMeta) throws -> Int64 {
+        meta.version = 1
+
+        let path = dir + "/" + metaFilename
+        let tmp = path + ".tmp"
+
+        let jsonMeta = meta.encodeJSON()
+        let f = try fs.createFile(tmp)
+        try f.append(jsonMeta)
+        try f.flush()
+        try f.sync()
+        try f.close()
+
+        let r = try fs.openForReading(tmp)
+        let bytes = try r.read(offset: 0, length: r.size)
+        try r.close()
+        let final = try fs.createFile(path)
+        try final.append(bytes)
+        try final.flush()
+        try final.sync()
+        try final.close()
+        try? fs.remove(tmp)
+
+        return Int64(jsonMeta.count)
     }
 }
