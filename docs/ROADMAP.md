@@ -81,20 +81,32 @@ the list starts at §7i.
    fixture. Order inside it: `blockwriter.go` (132 lines) first, because `BlockWriter` is the
    smallest thing that writes a block and its corpus is `oracle/blockfixture.go` in reverse — write
    with the port, open with `tsdb.OpenBlock`. Then `LeveledCompactor.Write`/`write`/`populateBlock`,
-   deferring `CompactBlockMetas`, `plan`/`selectDirs` (`db.go`'s scheduler) and everything OOO.
+   deferring `CompactBlockMetas`, `plan`/`selectDirs` and everything OOO.
    **The tombstone FILE codec is no longer part of this** — it landed ahead of the block writer as
    §7i(t) (`Encode`, `Decode`, `WriteFile`, `ReadTombstones`, 94 cases in two arms, 48 of 52
    controls), because `compact.go:739` writes an empty tombstone file for every block it produces.
    What is left of exception 16 is the CALL SITE: `BlockReader.open` still does not call
    `readTombstones`, and there is no `Block.Delete`. Both belong here.
-2. **§7j — `db.go`** (2,666 lines): the orchestration — retention, compaction scheduling, `Open`,
-   `DB.Appender`/`Querier`, and `rangeForTimestamp`'s real home. Last, because everything it
-   schedules has to exist first, and it is where `storage/merge.go` finally has a caller. Expect to
-   split it: `Open` + `reloadBlocks`, then compaction scheduling, then retention.
+2. **§7j — `db.go`** (2,666 lines): the orchestration — `Open`, the block list, retention, the
+   compaction *driver*, and `DB.Appender`/`Querier`. Last, because everything it schedules has to
+   exist first, and it is where `storage/merge.go` finally has a caller. **Read HANDOFF §7j
+   (scoping) before starting**: it splits the file into **five** independently pinnable sub-slices
+   with a corpus each — (a) the head-only DB, (b) `reloadBlocks`, (c) retention, (d) the compaction
+   driver, (e) `DB.Querier` — and corrects the three-way split this entry used to name. The
+   corrections worth carrying up here: `Open` *calls* `reload()`, so "`Open` + `reloadBlocks`" is
+   not a seam; `plan`/`selectDirs` are `LeveledCompactor`'s and stay inside §7i above — they are not
+   `db.go`'s, as an earlier version of item 1 claimed — so db.go's share of "compaction scheduling"
+   is only the driver; `rangeForTimestamp` is **already ported** (§7f(d),
+   quirk 184); and the split omitted `DB.Querier`, which is what finally collects Phase 6's deferred
+   exit-gate clause and therefore probably belongs second rather than last. §7j needs **no probe
+   package** — `tsdb.Open` and `DB` expose almost everything, and even retention's
+   `BeyondTimeRetention`/`BeyondSizeRetention` are exported.
 
 **Scale, so it is not rediscovered:** these two are ~3,700 lines of Go at a bar of one oracle suite
-plus one argued control sweep per slice, which on the evidence of §7f–§7h is **at least two or three
-further sessions**, not a remainder to be finished in one.
+plus one argued control sweep per slice. An earlier version of this line said "at least two or three
+further sessions"; HANDOFF §7j's scoping costs that out against the §7f–§7h evidence and the honest
+number is **six to eight** — one or two for §7i and five for §7j, which is five sub-slices at the
+one-session-each rate the last nine sub-slices set.
 
 Plus the parts of the appender §7f(f) deferred **by feature rather than by omission**: histograms and
 exemplars, `UpdateMetadata`, and the out-of-order arm.
