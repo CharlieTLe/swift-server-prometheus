@@ -19,10 +19,11 @@
 //
 // ## What is absent
 //
-//   * The file codec (`WriteFile`, `Encode`, `Decode`, `ReadTombstones`) — exception 16, and §7i is the slice
-//     that will need it to write a block.
 //   * `NewTestMemTombstones`, a test helper.
 //   * The `sync.RWMutex`, as everywhere else in the port.
+//
+// The file codec (`WriteFile`, `Encode`, `Decode`, `ReadTombstones`) is no longer absent — it is
+// `TombstoneFile.swift`, and exception 16 is amended to say what is left of it.
 //===----------------------------------------------------------------------===//
 
 public import PromStorage
@@ -83,12 +84,20 @@ public final class MemTombstones: TombstoneReader {
         }
     }
 
-    /// Go: `Iter`. Ranges a Go map upstream, so the ORDER is arbitrary there — exception 11's situation again.
-    /// Callers that commit output must sort; `Head.Tombstones` is read by the block writer (§7i), which sorts by
-    /// ref because the tombstone file is ordered.
+    /// Go: `Iter`. **Yields series in ASCENDING REF ORDER, where upstream ranges a Go map** — PORTING.md
+    /// exception 29.
+    ///
+    /// Upstream has no order to be byte-exact against: `Encode` walks this method, so a `tombstones` file
+    /// over more than one series has a *different byte order run to run*, and `Block.Delete` therefore
+    /// produces a different file each time it is called with the same deletions. Exception 11's situation
+    /// exactly, and it is resolved the same way — the port picks the one order that is stable, and the
+    /// corpus hands Go a reader that yields the same one so the bytes can still be compared.
+    ///
+    /// The interval list within a ref is already ordered by `Intervals.Add`'s invariant, so this is the only
+    /// axis that needed deciding.
     public func iter(_ f: (SeriesRef, [DeletionInterval]) throws -> Void) throws {
-        for (ref, ivs) in intervalGroups {
-            try f(ref, ivs)
+        for ref in intervalGroups.keys.sorted() {
+            try f(ref, intervalGroups[ref]!)
         }
     }
 
