@@ -513,9 +513,8 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     nothing a caller could measure. The method is kept rather than deleted, for the call-site symmetry §4
     asks for, and the corpus calls it on every finished chunk and re-reads `Bytes()` afterwards — so the one
     property that IS observable, *`Compact` never changes the bytes*, is pinned rather than assumed.
-240. **`mergeGenericQuerier.Select`'s concurrent branch is not reproduced; the port always selects in querier
-    order.** (Numbered 240 because only exception 30 was reserved for this slice and it needed two; the
-    parallel-PR numbering convention says to take spare numbers from 240 upward.)
+33. **`mergeGenericQuerier.Select`'s concurrent branch is not reproduced; the port always selects in querier
+    order.**
 
     Upstream runs the per-querier `Select`s in goroutines whenever there is at least one **secondary**
     querier, collecting the resulting sets off an UNBUFFERED channel:
@@ -3229,7 +3228,7 @@ changing behaviour.
     `t` has two legal answers, and which one you get depends on the Go scheduler. It is the `promqltest`
     unsorted-`Select` situation (exception 11) one layer down: **upstream being nondeterministic is a finding,
     not an obstacle**, and the corpus stays on the deterministic side of the line rather than pinning a coin
-    flip. Every duplicate-value case in `Fixtures/storage/merge.jsonl` uses primaries only; exception 240
+    flip. Every duplicate-value case in `Fixtures/storage/merge.jsonl` uses primaries only; exception 33
     records why the port never takes the concurrent branch at all.
 
     The consequence for `GoHeap`: this is a second call site where **the heap's internal array order is

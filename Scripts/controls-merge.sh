@@ -337,7 +337,7 @@ cat <<'ARGUED'
 
   * "secondaries are ordered BEFORE primaries". A DELIBERATE gap, not an oversight. The order of
     `seriesSets` is observable only through the label-set heap's tie-break, and upstream randomises
-    exactly that whenever a secondary is present (goroutines, unbuffered channel — exception 240).
+    exactly that whenever a secondary is present (goroutines, unbuffered channel — exception 33).
     Every case with a secondary is therefore built so no tie can arise. Closing this would mean
     pinning a coin flip. **Unclosable by construction**, and recorded as such rather than left to
     look like an omission.

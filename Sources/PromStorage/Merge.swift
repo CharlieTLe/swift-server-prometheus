@@ -31,7 +31,7 @@
 // against `genericSeriesSet`/`Labels` is written here against a generic element
 // type, so the unchecked downcasts are gone.
 //
-// ## Exception 31 — `concurrentSelect` is not concurrent here
+// ## Exception 33 — `concurrentSelect` is not concurrent here
 //
 // Upstream runs the per-querier `Select`s in goroutines whenever there is at
 // least one secondary querier, collecting the resulting sets off an UNBUFFERED
@@ -52,7 +52,7 @@
 //
 // The corpus keeps this honest rather than hiding it: cases that pin a duplicate
 // timestamp with differing values use PRIMARIES ONLY, where upstream is
-// sequential and deterministic. See PORTING.md exception 31 and quirk 215.
+// sequential and deterministic. See PORTING.md exception 33 and quirk 215.
 //===----------------------------------------------------------------------===//
 
 public import PromLabels

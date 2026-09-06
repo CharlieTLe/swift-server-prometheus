@@ -57,7 +57,7 @@ package main
 //     the first one it meets;
 //   - warnings are emitted SORTED, because `annotations.Annotations` is a Go map.
 //
-// The port does not reproduce the goroutines at all (PORTING.md exception 240); the constraints
+// The port does not reproduce the goroutines at all (PORTING.md exception 33); the constraints
 // above are what make that unobservable.
 
 import (
