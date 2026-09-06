@@ -166,9 +166,10 @@ public final class Block {
             let (enc, bytes) = try chunk(meta)
             // §6 skipped everything but XOR here, with a note that the dispatch "needs the same dispatch the
             // Head will need, which is Phase 7's". §7f(c) built it: `newEmptyChunk` plus the `Chunk`
-            // conformance is that dispatch, so both float encodings now decode. The histogram encodings are
-            // still absent from `PromChunkEnc` entirely, so `newEmptyChunk` reports them by name rather than
-            // this silently skipping them — a block carrying one is now a loud failure instead of a short read.
+            // conformance is that dispatch, so both float encodings decode. The histogram encodings are now
+            // ported too (§7k) but they are still skipped HERE, because this convenience returns
+            // `(t, Double)` and a histogram sample is not one — the shape a block's histogram chunks need is
+            // the `ChunkSeriesSet` iterator upstream hands out, which is a later slice.
             guard enc == .xor || enc == .xor2 else { continue }
             let c = try newEmptyChunk(enc)
             c.reset(bytes)

@@ -107,6 +107,10 @@ var suites = map[string]func(*emitter){
 	"chunkenc/compatible":       genChunkEncCompatible,
 	"chunkenc/xor":              genChunkEncXOR,
 	"chunkenc/xor2":             genChunkEncXOR2,
+	// Phase 7: the two native-histogram chunk encodings, and with them the encoding half of
+	// histogram_meta.go. See oracle/suites_chunkenc_histogram.go.
+	"chunkenc/histogram":       genChunkEncHistogram,
+	"chunkenc/float-histogram": genChunkEncFloatHistogram,
 	"index/postings":            genIndexPostings,
 	"chunks/headref":            genChunksHeadRef,
 	"chunks/blockref":           genChunksBlockRef,

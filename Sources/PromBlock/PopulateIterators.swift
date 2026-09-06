@@ -405,7 +405,8 @@ public final class PopulateWithDelChunkSeriesIterator {
             self.error = PopulateError.createChunkWhileReEncoding(underlying: error)
             return false
         }
-        let app: any ChunkAppender
+        // `var`: Go reassigns `app` from `AppendHistogram`'s third return on every histogram sample.
+        var app: any ChunkAppender
         do {
             app = try newChunk.makeAppender()
         } catch {
@@ -421,17 +422,62 @@ public final class PopulateWithDelChunkSeriesIterator {
                 error = PopulateError.mixedValueTypes(found: vt, expected: firstType)
                 return false
             }
-            guard vt == .float else {
-                error = PopulateError.unsupportedValueType(vt)
-                return false
-            }
             // querier.go:976 — `st = p.currDelIter.AtST()` is read for EVERY value type, before the switch,
             // and passed on. The XOR appender discards it (quirk 36); the XOR2 one does not, which is what
             // makes a re-encoded XOR2 chunk differ from a re-encoded XOR one by more than its header byte.
             let st = del.atST()
-            let (ts, v) = del.at()
-            t = ts
-            app.append(st, t, v)
+            switch vt {
+            case .float:
+                let (ts, v) = del.at()
+                t = ts
+                app.append(st, t, v)
+            case .histogram:
+                // §7k. Upstream's second arm, and it was missing here until the histogram chunk encodings
+                // existed to reach it — the loop guarded on `.float` and answered
+                // `populateCurrForSingleChunk: value type histogram unsupported`. Since quirk 208 established
+                // that this function runs on EVERY compaction of a Head rather than only on a deletion, that
+                // would have made a histogram series uncompactable the moment the Head could append one.
+                //
+                // `appendOnly: true` and `prev: nil`, both upstream's. Appending a chunk's own samples back
+                // into a fresh chunk of the same encoding cannot need a recode — every sample reads back with
+                // the chunk's single layout — with ONE exception upstream shares: a stale sample makes the
+                // chunk take only stale samples afterwards (quirk 223), so a chunk with a stale sample in the
+                // middle fails to re-encode, in Go and here alike.
+                let (ts, h) = del.atHistogram(nil)
+                t = ts
+                guard var h else {
+                    error = PopulateError.unsupportedValueType(vt)
+                    return false
+                }
+                do {
+                    let r = try app.appendHistogram(
+                        prev: nil, st: st, t: t, h: &h, appendOnly: true)
+                    app = r.appender
+                } catch {
+                    self.error = PopulateError.iterateWhileReEncoding(underlying: error)
+                    return false
+                }
+            case .floatHistogram:
+                let (ts, h) = del.atFloatHistogram(nil)
+                t = ts
+                guard var h else {
+                    error = PopulateError.unsupportedValueType(vt)
+                    return false
+                }
+                do {
+                    let r = try app.appendFloatHistogram(
+                        prev: nil, st: st, t: t, h: &h, appendOnly: true)
+                    app = r.appender
+                } catch {
+                    self.error = PopulateError.iterateWhileReEncoding(underlying: error)
+                    return false
+                }
+            default:
+                // Go's `default` reports `valueType`, the FIRST sample's type, not `vt` — and since the
+                // mixed-type check above has already rejected anything else, the two are the same value here.
+                error = PopulateError.unsupportedValueType(vt)
+                return false
+            }
             vt = del.next()
         }
         if let e = del.err() {

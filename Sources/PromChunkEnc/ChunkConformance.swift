@@ -81,17 +81,38 @@ public final class BoxedFloatChunkIterator<I: FloatChunkIteratorValue>: ChunkIte
 ///     panic("appended a histogram sample to a float chunk")
 ///     panic("appended a float histogram sample to a float chunk")
 ///
-/// Unreachable by contract — `appendPreprocessor` cuts a new chunk when the encoding changes, so a histogram
-/// never reaches a float chunk's appender — so this takes PORTING.md exception 9's treatment: raise with Go's
-/// exact text rather than trap, and rather than the reachable-panic treatment `extendFloats` gets.
+/// …and their four counterparts on the histogram appenders, which are four DIFFERENT strings:
+///
+///     panic("appended a float sample to a histogram chunk")            // both histogram appenders
+///     panic("appended a float histogram sample to a histogram chunk")  // HistogramAppender
+///     panic("appended a histogram sample to a float histogram chunk")  // FloatHistogramAppender
+///
+/// Note the third and fourth are not symmetric with the first two: a `HistogramAppender` refusing a
+/// float histogram says "to a histogram chunk" while an `xorAppender` refusing one says "to a float
+/// chunk", and the *float histogram* chunk's refusal of a float sample reuses the integer chunk's
+/// wording ("a histogram chunk") rather than saying "float histogram chunk". All six are reproduced
+/// verbatim.
+///
+/// Unreachable by contract — `appendPreprocessor` cuts a new chunk when the encoding changes, so a
+/// sample never reaches the wrong chunk's appender — so this takes PORTING.md exception 9's
+/// treatment: raise with Go's exact text rather than trap, and rather than the reachable-panic
+/// treatment `extendFloats` gets. The two `Append(st, t, v)` arms cannot raise, because the protocol
+/// method does not throw and Go's does not either; those keep the message in a `preconditionFailure`.
 public enum FloatChunkAppenderError: Error, CustomStringConvertible, Equatable {
     case histogramToFloatChunk
     case floatHistogramToFloatChunk
+    case floatHistogramToHistogramChunk
+    case histogramToFloatHistogramChunk
 
     public var description: String {
         switch self {
         case .histogramToFloatChunk: return "appended a histogram sample to a float chunk"
-        case .floatHistogramToFloatChunk: return "appended a float histogram sample to a float chunk"
+        case .floatHistogramToFloatChunk:
+            return "appended a float histogram sample to a float chunk"
+        case .floatHistogramToHistogramChunk:
+            return "appended a float histogram sample to a histogram chunk"
+        case .histogramToFloatHistogramChunk:
+            return "appended a histogram sample to a float histogram chunk"
         }
     }
 }
@@ -104,13 +125,13 @@ extension XORAppender: ChunkAppender {
     }
 
     public func appendHistogram(
-        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: Histogram, appendOnly: Bool
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout Histogram, appendOnly: Bool
     ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
         throw FloatChunkAppenderError.histogramToFloatChunk
     }
 
     public func appendFloatHistogram(
-        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: FloatHistogram, appendOnly: Bool
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout FloatHistogram, appendOnly: Bool
     ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
         throw FloatChunkAppenderError.floatHistogramToFloatChunk
     }
@@ -118,15 +139,56 @@ extension XORAppender: ChunkAppender {
 
 extension XOR2Appender: ChunkAppender {
     public func appendHistogram(
-        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: Histogram, appendOnly: Bool
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout Histogram, appendOnly: Bool
     ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
         throw FloatChunkAppenderError.histogramToFloatChunk
     }
 
     public func appendFloatHistogram(
-        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: FloatHistogram, appendOnly: Bool
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout FloatHistogram, appendOnly: Bool
     ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
         throw FloatChunkAppenderError.floatHistogramToFloatChunk
+    }
+}
+
+extension HistogramAppender: ChunkAppender {
+    /// Go: `panic("appended a float sample to a histogram chunk")`.
+    public func append(_ st: Int64, _ t: Int64, _ v: Double) {
+        preconditionFailure("appended a float sample to a histogram chunk")
+    }
+
+    /// Go: `AppendHistogram(prev Appender, _, t int64, ...)` — the start timestamp is discarded here
+    /// too, exactly as in `xorAppender`. Start timestamps ride on XOR2 only.
+    public func appendHistogram(
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout Histogram, appendOnly: Bool
+    ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
+        try appendHistogram(prev: prev, t: t, h: &h, appendOnly: appendOnly)
+    }
+
+    public func appendFloatHistogram(
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout FloatHistogram, appendOnly: Bool
+    ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
+        throw FloatChunkAppenderError.floatHistogramToHistogramChunk
+    }
+}
+
+extension FloatHistogramAppender: ChunkAppender {
+    /// Go: `panic("appended a float sample to a histogram chunk")` — the *same* text as the integer
+    /// appender's, not "float histogram chunk".
+    public func append(_ st: Int64, _ t: Int64, _ v: Double) {
+        preconditionFailure("appended a float sample to a histogram chunk")
+    }
+
+    public func appendHistogram(
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout Histogram, appendOnly: Bool
+    ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
+        throw FloatChunkAppenderError.histogramToFloatHistogramChunk
+    }
+
+    public func appendFloatHistogram(
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout FloatHistogram, appendOnly: Bool
+    ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender) {
+        try appendFloatHistogram(prev: prev, t: t, h: &h, appendOnly: appendOnly)
     }
 }
 
@@ -153,14 +215,42 @@ extension XOR2Chunk: Chunk {
     }
 }
 
+extension HistogramChunk: Chunk {
+    public func makeAppender() throws -> any ChunkAppender { try appender() }
+
+    /// Go: `HistogramChunk.iterator(it)` — the reuse argument is honoured by `Reset`ing an existing
+    /// `*histogramIterator` and ignored otherwise. Unlike the float chunks this needs no box: the
+    /// iterator is already a class, because Go's is a pointer whose `Reset` IS the reuse mechanism.
+    public func iterator(_ reuse: (any ChunkIterator)?) -> any ChunkIterator {
+        if let hi = reuse as? HistogramIterator {
+            hi.reset(b.bytes)
+            return hi
+        }
+        return iterator()
+    }
+}
+
+extension FloatHistogramChunk: Chunk {
+    public func makeAppender() throws -> any ChunkAppender { try appender() }
+
+    public func iterator(_ reuse: (any ChunkIterator)?) -> any ChunkIterator {
+        if let hi = reuse as? FloatHistogramIterator {
+            hi.reset(b.bytes)
+            return hi
+        }
+        return iterator()
+    }
+}
+
 // MARK: - NewEmptyChunk
 
 /// Go: `chunkenc.NewEmptyChunk`.
 ///
-/// **The histogram encodings are not ported yet** (`PromChunkEnc` has `XORChunk`, `XOR2Chunk`, `Bstream`,
-/// `Varbit` and `HistogramMeta`, but no `HistogramChunk`/`FloatHistogramChunk`), so this answers for the two
-/// float encodings and reports the rest by name. That is consistent rather than a new gap: §7f defers
-/// histogram appends, and `chunkOpts.useXOR2` selects between exactly these two.
+/// **All four encodings answer.** The note that stood here through §7f(c) — that the histogram
+/// encodings were absent from `PromChunkEnc` and so could only be reported by name — is discharged:
+/// `HistogramChunk.swift` and `FloatHistogramChunk.swift` exist, so `EncHistogram` and
+/// `EncFloatHistogram` build a real chunk. `EncNone` and any unknown byte are the only failures, and
+/// they are Go's failure with Go's text.
 ///
 /// Note what `cutNewHeadChunk` does with an INVALID encoding: it does not fail, it falls back to
 /// `NewXORChunk()`. So the caller checks `Encoding.isValid` first and only reaches here for a valid one —
@@ -168,18 +258,42 @@ extension XOR2Chunk: Chunk {
 public func newEmptyChunk(_ e: Encoding) throws -> any Chunk {
     switch e {
     case .xor: return XORChunk()
+    case .histogram: return HistogramChunk()
+    case .floatHistogram: return FloatHistogramChunk()
     case .xor2: return XOR2Chunk()
-    default: throw NewEmptyChunkError.unsupportedEncoding(e)
+    default: throw NewEmptyChunkError.invalidEncoding(e)
+    }
+}
+
+/// Go: `chunkenc.FromData` — a chunk over existing bytes, with `count: 0` so the last byte reads as
+/// full. That is exactly `NewEmptyChunk` followed by `Reset`, since `Reset` zeroes `count` too.
+///
+/// Named apart from Go's `FromData` because a free function called `fromData` reads badly at a call
+/// site; the two are the same function.
+public func chunkFromData(_ e: Encoding, _ d: [UInt8]) throws -> any Chunk {
+    let c = try newEmptyChunk(e)
+    c.reset(d)
+    return c
+}
+
+extension ValueType {
+    /// Go: `ValueType.NewChunk`. `ValNone` maps to `EncNone`, which is not a valid encoding, so this
+    /// raises for it — exactly as `NewEmptyChunk` does upstream.
+    public func newChunk(useXOR2: Bool) throws -> any Chunk {
+        try newEmptyChunk(chunkEncoding(useXOR2: useXOR2))
     }
 }
 
 public enum NewEmptyChunkError: Error, CustomStringConvertible, Equatable {
-    case unsupportedEncoding(Encoding)
+    case invalidEncoding(Encoding)
 
+    /// Go: `fmt.Errorf("invalid chunk encoding %q", e)`. `%q` on a `Stringer` quotes the `String()`
+    /// result, so `EncNone` renders as `"none"` and an unknown byte as `"<unknown>"` — not as a
+    /// number, which is what a naive reading of `%q` on a `uint8` would give.
     public var description: String {
         switch self {
-        case .unsupportedEncoding(let e):
-            return "chunk encoding \(e) is not implemented in this port yet"
+        case .invalidEncoding(let e):
+            return "invalid chunk encoding \"\(e)\""
         }
     }
 }
