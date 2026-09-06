@@ -260,44 +260,126 @@ echo
 echo "Every SURVIVED above is argued below. A survivor is a hypothesis until it is."
 cat <<'ARGUED'
 
-  * "(equivalence probe, MUST SURVIVE) a no-op statement after the pop" — the deliberately inert
-    control. `_ = iter` cannot change anything. If it ever reports `broke`, the sweep is measuring
-    build noise rather than behaviour and every other verdict in this run is suspect.
+  THE TWO DELIBERATELY INERT CONTROLS, which must survive or the sweep is measuring nothing:
 
-  * "the consecutive flag is inverted" — INERT for this corpus by construction. `consecutive` is
-    read in exactly two places, `AtHistogram` and `AtFloatHistogram`, where it downgrades a
-    counter-reset hint. `PromChunkEnc` has no histogram chunk encoding yet (`newEmptyChunk` answers
-    for XOR and XOR2 only), so `blockfixture.go` can only write float chunks and no case can reach
-    either accessor. This is quirk 159's shape — a corpus gap with a named closing slice — and the
-    slice is the histogram encodings, not this one. Recorded rather than closed.
+  * "(equivalence probe, MUST SURVIVE) a no-op statement after the pop" — `_ = iter` cannot change
+    anything.
+  * "a secondary LabelValues error path is reshaped (equivalence probe, MUST SURVIVE)" — an extra
+    `catch let e where false` arm, which can never be entered.
 
-  * "the chained series takes its labels from the LAST input" — INERT, and provably so rather than
-    by inspection: `ChainedSeriesMerge` is only ever called from `genericMergeSeriesSet.At()`, which
-    only ever passes it the series of sets the heap judged EQUAL by `labels.Compare`. So
-    `series[0].Labels()` and `series[n-1].Labels()` are the same bytes for every reachable call.
-    Upstream's own comment says as much ("It expects the same labels for each given series"). This
-    is quirk 160's shape, a tautology — but note it is a tautology about the CALLER, so a future
-    caller that merges unequal labels would make it live.
+    If either reports `broke`, the sweep is measuring build noise and every other verdict in the run
+    is suspect.
 
-  * "the reuse slots are never offered back" — INERT for a block. `getChainSampleIterator`'s reuse
-    exists to avoid an allocation; the argument reaches `Series.Iterator(it)`, and
-    `BlockSeriesEntry.iterator(_:)` ignores it and returns the populate iterator the set already
-    built. So there is no observable difference until a `Series` implementation honours the reuse
-    buffer — `NewListSeries` does, and it is not in this corpus's path. Quirk 163's shape: an inert
-    patch, inert because of what the *other* side of the interface does.
+  PROVABLE TAUTOLOGIES — the perturbation is the same program, and here is why:
 
-  * "Select after the first Next is allowed" — INERT, and it is the corpus's own shape that makes it
-    so, deliberately. `secondaryQuerier` panics upstream on a second `Select`; the port throws
-    instead (a divergence recorded in `Secondary.swift`), and every one of the four corpus passes
-    builds FRESH queriers precisely because upstream would panic otherwise. So the guard is
-    unreachable from any case that upstream could also generate. It is covered by a hand-written
-    assertion instead — see `StorageMergeUnitTests`.
+  * "the retry loop exits even with an empty currentSets". `currentSets` is never empty at that
+    point. `currentLabels` is read from `heap.peek()` immediately after the `heap.isEmpty` guard, so
+    the first pop of the following loop always compares equal and always appends. Upstream's
+    `if len(c.currentSets) != 0 { break }` is defensive against a shape its own `Next` cannot
+    produce. Quirk 160's shape.
 
-  * "maxt IS reset when a chunk is cut" — INERT, and upstream says why in a comment repeated three
-    times: "maxt is immediately overwritten below which is why setting it here won't make a
-    difference." The reset would happen at the top of the cut branch and `maxt = t` runs
-    unconditionally at the bottom of every iteration, before anything reads it. Reproduced anyway,
-    because it is upstream's shape and because the symmetry with `mint` — which is NOT dead, the
-    `Int64.max` sentinel is how the first sample of a chunk is recognised — is what makes the code
-    readable.
+  * "the empty-querier base case is removed". `mergeResults` is reached only from
+    `mergeGenericQuerier`, which by construction holds at least two queriers, and `count / 2 >= 1`
+    for `count >= 2` — so both halves of every split are non-empty and `lq.isEmpty` is unreachable.
+
+  * "truncateToLimit fires on an exactly-limit-sized list". `s[0..<limit]` of a list of exactly
+    `limit` elements is that list. `>` versus `>=` differ only in whether a copy is made.
+
+  * "the no-op branch seeks to t rather than to lastT". The branch is entered only when
+    `lastT >= t`, and the current iterator is positioned AT `lastT`. `Seek` is "advance to the first
+    sample at or after X" and never moves backwards, so `seek(lastT)` and `seek(t <= lastT)` both
+    leave it exactly where it is and return the same value type. Upstream could have written either.
+
+  * "mergeResults folds left instead of splitting by half", "mergeResults splits off the LAST
+    querier", "the halves are not truncated before merging" — three controls, one proof. With a
+    limit of k, every truncation keeps a list's k SMALLEST values, and the global k smallest values
+    are each among their own querier's k smallest. So any binary tree over the same leaves, with or
+    without intermediate truncation, produces the same k. `SplitByHalf` and the two inner
+    `truncateToLimit` calls are a cost saving — smaller merges at every level — and not a contract.
+    Note the boundary: "the merged result is not truncated" BROKE, because that one loses the limit.
+
+  ESTABLISHED EQUIVALENCES — argued from behaviour the corpus records, not from inspection:
+
+  * "a single-set series still goes through the merge function". `ChainedSeriesMerge([s])` builds a
+    chain over one iterator, which for a block series yields the same samples in the same order; the
+    two chunk mergers over one series find no overlap and pass the chunks through untouched. The
+    corpus records the chunk BYTES and the seek script's VALUES, so a re-encode or a repositioning
+    would show up — this is established over that evidence rather than assumed, which is quirk 159's
+    rule. Upstream's early return is a cost saving. Kept because it is upstream's shape, and because
+    a Head series (whose iterator can fail mid-way) may yet make it live.
+
+  * "the current iterator never keeps the cursor". Forcing the push-and-pop path pushes `curr` onto
+    a heap whose root is strictly later, so `curr` is immediately popped back and `seek(currT)`
+    repositions it where it already was. The only difference is `iteratorChanged`, which feeds
+    `consecutive`, which only the two histogram accessors read — see the next entry.
+
+  * "the duplicate test always compares against the FIRST chunk". `prev` tracks the last chunk ADDED
+    to the overlap so that a run of identical chunks collapses. Comparing against `curr` forever
+    admits chunks the real code would skip — but a chunk admitted twice contributes the same
+    timestamps, and `chainSampleIterator` drops a duplicate timestamp, so the merged samples are
+    identical. `oMaxTime` cannot differ either, because a skipped chunk has the same bounds as the
+    one it duplicates. `prev` is a decoding cost saving.
+
+  * "an exhausted seek leaves curr in place". After the fan-out finds nothing, every base iterator
+    has been seeked past its end, so the next `Next()` exhausts and nils `curr` anyway. The
+    difference is only visible to a caller that reads `At()` after a failed `Seek` — where upstream
+    PANICS on the nil, which a fixture cannot record (quirk 191's family). Reproduced because
+    upstream's nil is the thing that turns that misuse into a crash rather than a stale sample.
+
+  DECLARED CORPUS GAPS, each with the slice that closes it:
+
+  * "the fan-out forwards sortSeries instead of forcing true". Every corpus case selects unsorted,
+    and a block querier honours `sortSeries` by doing nothing — `Reader.SortedPostings` is the
+    identity for a block, because postings are in ref order and refs are assigned in label order
+    (§6v). So the flag cannot change a block's answer. **Closed by the HEAD**, whose
+    `SortedPostings` really does sort; that is §7j, which is the first slice to merge a Head with a
+    block.
+
+  * "secondaries are ordered BEFORE primaries". A DELIBERATE gap, not an oversight. The order of
+    `seriesSets` is observable only through the label-set heap's tie-break, and upstream randomises
+    exactly that whenever a secondary is present (goroutines, unbuffered channel — exception 240).
+    Every case with a secondary is therefore built so no tie can arise. Closing this would mean
+    pinning a coin flip. **Unclosable by construction**, and recorded as such rather than left to
+    look like an omission.
+
+  * "the consecutive flag is inverted", and with it the `iteratorChanged` half of "the current
+    iterator never keeps the cursor". `consecutive` is read in exactly two places, `AtHistogram` and
+    `AtFloatHistogram`, where it downgrades a counter-reset hint across a change of source
+    iterator. `PromChunkEnc` has no histogram chunk encoding yet (`newEmptyChunk` answers for XOR
+    and XOR2 only), so `blockfixture.go` can only write float chunks and no case can reach either
+    accessor. **Closed by the histogram encodings** (§7f's deferral), not by this slice.
+
+  * "a duplicate timestamp is emitted rather than dropped" and "any non-increasing timestamp is
+    dropped" — the `if currT == lastT { continue }` at the TOP of `Next`'s loop. This is worth
+    reading carefully, because it is not the duplicate rule you would expect it to be: the
+    cross-iterator de-duplication is done by the `if currT != lastT { break }` at the BOTTOM, and
+    that control breaks. The top check fires only when `curr.next()` itself yields a timestamp equal
+    to the last one emitted — which needs two samples with the same timestamp inside ONE base
+    iterator, i.e. a chunk with a repeated timestamp. A block writer cannot produce one. **Closed by
+    malformed chunk bytes**, the same input §6w's two remaining read-path gaps wait on, and §7i(a)
+    has now made those producible.
+
+  * "an erroring iterator does not abort the seek" and "an erroring iterator is skipped rather than
+    stopping the concatenation". Both need a chunk iterator that FAILS mid-iteration. A block's
+    cannot. Same closing input as the entry above.
+
+  * "the reuse slots are never offered back" and "the reuse capacity test is off by one". Go's
+    `getChainSampleIterator` reuse exists to avoid an allocation: the recycled iterator is passed to
+    `Series.Iterator(it)`, and `BlockSeriesEntry.iterator(_:)` ignores it and returns the populate
+    iterator the set already built. So there is nothing to observe until a `Series` that HONOURS the
+    reuse buffer is merged — `NewListSeries` is one, and it reaches the merge through
+    `NewMergeSeriesSet`, which is Phase 9's caller. Quirk 163's shape.
+
+  * "the chained series takes its labels from the LAST input". A tautology about the CALLER:
+    `ChainedSeriesMerge` is only ever reached from `genericMergeSeriesSet.At()`, which only passes
+    it series the heap judged EQUAL by `labels.Compare`. Upstream's own comment says the same ("It
+    expects the same labels for each given series"). A future caller that merged unequal labels
+    would make it live, which is why the port keeps `series[0]`.
+
+  * "maxt IS reset when a chunk is cut". Upstream says why, in a comment repeated three times:
+    "maxt is immediately overwritten below which is why setting it here won't make a difference."
+    The reset would sit at the top of the cut branch, and `maxt = t` runs unconditionally at the
+    bottom of every iteration before anything reads it. Reproduced anyway, because the symmetry with
+    `mint` — which is NOT dead; the `Int64.max` sentinel is how the first sample of a chunk is
+    recognised, and perturbing it breaks — is what makes the loop readable.
 ARGUED
