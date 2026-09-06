@@ -173,6 +173,7 @@
     "storage/mem-labels.jsonl": { "sha256": "6c014d18e98870f13f64ea59e8238ee1aa9b1ba647ca2af8292c16fef543d338", "lines": 15 },
     "storage/mem-select.jsonl": { "sha256": "51c08a76b4e309f3e524848025b906de7affd0567244b0dbde558278c80c3895", "lines": 25 },
     "storage/memoized.jsonl": { "sha256": "827103284edf312725c249d423007992105197849e633379f6f6f8b863d113ca", "lines": 17 },
+    "storage/merge.jsonl": { "sha256": "1953760a988022c4a742f7a38778aff1fa6baf35ff5e0bb735e17c665d5ae148", "lines": 96 },
     "tombstones/corrupt.jsonl": { "sha256": "474cde978541d7eab5f1da367ed92dff18f976866d60953a7ec79e896d042183", "lines": 64 },
     "tombstones/file.jsonl": { "sha256": "ff43eca2d2fa54de3006edfc6f3943af77210406925eb5e70280b78a7dcd9280", "lines": 30 },
     "wal/corrupt.jsonl": { "sha256": "2bbdfce1e6175632a044ac2601b106c967960ab3bf57f5bcc92d1501c6443c1e", "lines": 37 },

@@ -139,4 +139,50 @@ extension Annotations {
     ) -> Annotations {
         add(make(pos))
     }
+
+    /// Go: `Add` with an error that is **not** an `annoError`.
+    ///
+    /// `Annotations` is a `map[string]error` and takes any error at all;
+    /// `storage/secondary.go` is the caller that matters — it turns a secondary
+    /// querier's failure into a warning with `w.Add(err)`, where `err` is a
+    /// plain `errors.New` from a remote read.
+    ///
+    /// Two behaviours come straight from annotations.go and are reproduced by
+    /// ``PlainAnnotation``:
+    ///
+    ///   - annotations.go:45 merges only when `errors.As(err, &anErr)` succeeds,
+    ///     which it does not for a plain error — so a duplicate message simply
+    ///     OVERWRITES, which is what `merge` returning `self` does here.
+    ///   - annotations.go:102 classifies by `errors.Is(err, PromQLInfo)`, whose
+    ///     default arm is *warning*. A plain error is therefore a warning, never
+    ///     an info.
+    ///
+    /// Spelled `add(error:)` rather than overloading `add(_:)`: an existential
+    /// argument makes the two overloads ambiguous at every call site.
+    @discardableResult
+    public mutating func add(error err: any Error) -> Annotations {
+        add(PlainAnnotation(err))
+    }
+}
+
+/// Not in Go: the box that lets an arbitrary `error` sit in ``Annotations``,
+/// whose Swift element type is ``AnnotationError`` rather than Go's bare `error`.
+///
+/// Behaviourally transparent — the description is the wrapped error's message,
+/// so deduplication keys on exactly what Go's `err.Error()` would.
+public final class PlainAnnotation: AnnotationError {
+    public let underlying: any Error
+
+    public init(_ underlying: any Error) { self.underlying = underlying }
+
+    /// annotations.go:102's default arm.
+    public var kind: AnnotationKind { .warning }
+
+    public var description: String { String(describing: underlying) }
+
+    /// A plain error has no position, so there is nothing to set.
+    public func setQuery(_: String) {}
+
+    /// `errors.As` fails for a non-`annoError`, so Go keeps the INCOMING error.
+    public func merge(_: any AnnotationError) -> any AnnotationError { self }
 }
