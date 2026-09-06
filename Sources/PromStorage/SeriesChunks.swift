@@ -24,11 +24,14 @@
 //     (Phase 10). `chunkSetToSeriesSet.At()` calls `ChainedSeriesMerge`, so it
 //     is *cheap* now — but adding a public type with no caller is how a port
 //     accumulates untested surface.
-//   - The HISTOGRAM arms of `seriesToChunkEncoder.Iterator` throw. `PromChunkEnc`
-//     has no `HistogramChunk`/`FloatHistogramChunk` yet (see `newEmptyChunk`), so
-//     `ValueType.histogram.newChunk(...)` cannot produce one. This is the
-//     existing §7f gap surfacing, not a new one: the arms are written out in
-//     full so that porting the encodings is the only thing left to do.
+//   - Nothing. The HISTOGRAM arms of `seriesToChunkEncoder.Iterator` are ported
+//     in full and now WORK: §7k landed `HistogramChunk`/`FloatHistogramChunk`,
+//     so `newEmptyChunk` answers for all four encodings. They are nonetheless
+//     UNREACHED by this slice's corpus, because `oracle/blockfixture.go` writes
+//     float chunks only — a corpus gap recorded in `Scripts/controls-merge.sh`
+//     and closed by whichever slice teaches `blockfixture.go` to write a
+//     histogram chunk. `chainSampleIterator`'s `consecutive` flag has a
+//     surviving control for the same reason.
 //===----------------------------------------------------------------------===//
 
 public import PromChunkEnc
@@ -213,14 +216,14 @@ public final class SeriesToChunkEncoder: ChunkSeries {
                 t = ts
                 app?.append(st, ts, v)
             case .histogram:
-                let (ts, h) = seriesIter.atHistogram(nil)
+                let (ts, hOpt) = seriesIter.atHistogram(nil)
                 t = ts
-                guard let h else {
+                guard var h = hOpt else {
                     return ErrChunksIterator(SeriesToChunkEncoderError.unknownSampleType(typ))
                 }
                 do {
                     let (newChk, recoded, newApp) = try app!.appendHistogram(
-                        prev: nil, st: st, t: ts, h: h, appendOnly: false)
+                        prev: nil, st: st, t: ts, h: &h, appendOnly: false)
                     app = newApp
                     if let newChk {
                         if !recoded {
@@ -234,14 +237,14 @@ public final class SeriesToChunkEncoder: ChunkSeries {
                     return ErrChunksIterator(SeriesToChunkEncoderError.appendHistogram(error))
                 }
             case .floatHistogram:
-                let (ts, fh) = seriesIter.atFloatHistogram(nil)
+                let (ts, fhOpt) = seriesIter.atFloatHistogram(nil)
                 t = ts
-                guard let fh else {
+                guard var fh = fhOpt else {
                     return ErrChunksIterator(SeriesToChunkEncoderError.unknownSampleType(typ))
                 }
                 do {
                     let (newChk, recoded, newApp) = try app!.appendFloatHistogram(
-                        prev: nil, st: st, t: ts, h: fh, appendOnly: false)
+                        prev: nil, st: st, t: ts, h: &fh, appendOnly: false)
                     app = newApp
                     if let newChk {
                         if !recoded {

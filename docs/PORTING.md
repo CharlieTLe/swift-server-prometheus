@@ -3300,6 +3300,11 @@ changing behaviour.
     exhausted the chain returns `tlast` where a "once exhausted, always exhausted" iterator would return
     `ValNone`, and the port matched only because it had been transcribed literally.
 
+    Two of this slice's surviving controls concern the sibling accessors rather than `Seek`:
+    `AtHistogram`/`AtFloatHistogram` are the only readers of `consecutive`, and
+    `oracle/blockfixture.go` writes float chunks only, so no merge case reaches them. §7k landed the
+    histogram encodings, so the gap is in the fixture generator and not in the port.
+
     The neighbouring behaviour, and the reason the corpus records the seek script's VALUES and not only its
     timestamps: when the guard DOES fire it returns `c.curr.Seek(c.lastT)` — a seek of the current iterator to
     the timestamp it is already at, which repositions nothing. Two controls (`lastT > t` instead of `>=`, and

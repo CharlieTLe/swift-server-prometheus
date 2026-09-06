@@ -344,10 +344,12 @@ cat <<'ARGUED'
 
   * "the consecutive flag is inverted", and with it the `iteratorChanged` half of "the current
     iterator never keeps the cursor". `consecutive` is read in exactly two places, `AtHistogram` and
-    `AtFloatHistogram`, where it downgrades a counter-reset hint across a change of source
-    iterator. `PromChunkEnc` has no histogram chunk encoding yet (`newEmptyChunk` answers for XOR
-    and XOR2 only), so `blockfixture.go` can only write float chunks and no case can reach either
-    accessor. **Closed by the histogram encodings** (§7f's deferral), not by this slice.
+    `AtFloatHistogram`, where it downgrades a counter-reset hint across a change of source iterator.
+    `oracle/blockfixture.go` writes float chunks only, so no case can reach either accessor. Note
+    what this is NOT: §7k landed `HistogramChunk`/`FloatHistogramChunk` while this slice was in
+    flight, so the encodings exist and `seriesToChunkEncoder`'s histogram arms work — the gap is now
+    purely in the FIXTURE GENERATOR. **Closed by teaching `blockfixture.go` to write a histogram
+    chunk**, which is a two-line change and belongs with whichever slice first needs one.
 
   * "a duplicate timestamp is emitted rather than dropped" and "any non-increasing timestamp is
     dropped" — the `if currT == lastT { continue }` at the TOP of `Next`'s loop. This is worth
