@@ -121,7 +121,7 @@ private let sampleSeries: [WantSeries] = [
 ]
 
 @Suite("block: opening a directory and joining index to chunks")
-struct BlockReaderTests {
+struct BlockTests {
 
     @Test("a written block reopens, and every series' labels and samples survive")
     func roundTrip() throws {
@@ -129,7 +129,7 @@ struct BlockReaderTests {
         // 256 bytes forces a multi-segment block, which is the only shape that can catch quirk 142.
         let written = try writeBlock(fs, dir: "b1", series: sampleSeries, segmentSize: 256)
 
-        let r = try BlockReader(fs: fs, dir: "b1")
+        let r = try Block(fs: fs, dir: "b1")
         #expect(r.meta.ulid.description == written.ulid.description)
         #expect(r.meta.minTime == written.minTime)
         #expect(r.meta.maxTime == written.maxTime)
@@ -178,7 +178,7 @@ struct BlockReaderTests {
 
         _ = try writeBlock(fs, dir: base + "/01ARZ3NDEKTSV4RRFFQ69G5FAV", series: sampleSeries,
             segmentSize: 256)
-        let r = try BlockReader(fs: fs, dir: base + "/01ARZ3NDEKTSV4RRFFQ69G5FAV")
+        let r = try Block(fs: fs, dir: base + "/01ARZ3NDEKTSV4RRFFQ69G5FAV")
         let ids = try r.postings(name: "__name__", values: ["http_requests", "up"])
         #expect(ids.count == 3)
         #expect(try r.samples(ids[2]).count == 5)
@@ -205,7 +205,7 @@ struct BlockReaderTests {
         try w.close()
 
         #expect(throws: BlockError.unexpectedMetaVersion(2)) {
-            _ = try BlockReader(fs: fs, dir: "b2")
+            _ = try Block(fs: fs, dir: "b2")
         }
     }
 
@@ -226,7 +226,7 @@ struct BlockReaderTests {
         try w.append(Array(extended.utf8))
         try w.close()
 
-        let r = try BlockReader(fs: fs, dir: "b3")
+        let r = try Block(fs: fs, dir: "b3")
         #expect(r.meta.stats.numSeries == 3)
         #expect(try r.samples(try r.postings(name: "__name__", values: ["up"])[0]).count == 5)
     }

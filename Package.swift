@@ -36,6 +36,7 @@ let package = Package(
         .library(name: "PromRecord", targets: ["PromRecord"]),
         .library(name: "PromWAL", targets: ["PromWAL"]),
         .library(name: "PromHead", targets: ["PromHead"]),
+        .library(name: "PromCompact", targets: ["PromCompact"]),
         .library(name: "PromChunks", targets: ["PromChunks"]),
         .library(name: "PromStorage", targets: ["PromStorage"]),
         .library(name: "PromTestStorage", targets: ["PromTestStorage"]),
@@ -133,6 +134,17 @@ let package = Package(
             dependencies: [
                 "PromBlock", "PromChunkEnc", "PromChunks", "PromFS", "PromHistogram", "PromIndex",
                 "PromLabels", "PromModel", "PromRecord", "PromStorage", "PromWAL", "GoCompat",
+            ]),
+
+        // Phase 7 (§7i(a)): `tsdb/blockwriter.go` and `LeveledCompactor`'s WRITE path — Head to block. A
+        // tier ABOVE `PromHead`, because a compactor reads a Head and writes a block and nothing under it
+        // may learn about compaction. The scheduler half (`Plan`/`plan`/`selectDirs`) and `Compact` stay
+        // with `db.go` in §7j.
+        .target(
+            name: "PromCompact",
+            dependencies: [
+                "PromBlock", "PromChunkEnc", "PromChunks", "PromFS", "PromHead", "PromIndex",
+                "PromLabels", "PromStorage", "PromTombstones", "GoCompat",
             ]),
 
         // Phase 7: `tsdb/record` — the WAL's wire format. Byte-exact, exported and stateless, which
@@ -313,6 +325,14 @@ let package = Package(
             name: "PromHeadTests",
             dependencies: [
                 "PromHead", "PromChunkEnc", "PromChunks", "PromFS", "PromHistogram", "PromLabels",
+                "GoOracleSupport", "GoCompat",
+            ]
+        ),
+        .testTarget(
+            name: "PromCompactTests",
+            dependencies: [
+                "PromCompact", "PromBlock", "PromChunkEnc", "PromChunks", "PromFS", "PromHead",
+                "PromIndex", "PromLabels", "PromStorage", "PromTombstones",
                 "GoOracleSupport", "GoCompat",
             ]
         ),

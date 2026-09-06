@@ -37,7 +37,7 @@ struct PFMOut: Decodable, Equatable, Sendable {
 /// A `PostingsIndex` over one index file's bytes.
 ///
 /// The three methods delegate to the pinned reader functions; nothing here decides anything, which is the
-/// point — `PostingsForMatchers` is what is under test and this is the seam it needs. `BlockReader` will
+/// point — `PostingsForMatchers` is what is under test and this is the seam it needs. `Block` will
 /// grow the same conformance once the querier lands, and then this exists only for the corpus.
 private struct FileIndex: PostingsIndex {
     let bytes: [UInt8]

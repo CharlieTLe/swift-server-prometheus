@@ -339,6 +339,14 @@ public struct DecodedChunkMeta: Sendable, Equatable {
     public var ref: UInt64
     public var minTime: Int64
     public var maxTime: Int64
+
+    /// Public so a caller outside `PromIndex` can build one — `PromCompact` converts the Head's
+    /// `chunks.Meta` into this shape (§7i(a)).
+    public init(ref: UInt64, minTime: Int64, maxTime: Int64) {
+        self.ref = ref
+        self.minTime = minTime
+        self.maxTime = maxTime
+    }
 }
 
 /// Go: `Decoder.Series` — the series record's payload.
