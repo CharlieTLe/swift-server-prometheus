@@ -452,6 +452,37 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     functions, so the entry point is still upstream's and the intervals still come from real `AddInterval`
     calls; only the one axis upstream leaves undefined is fixed. `TombstoneFileTests.iterIsOrdered` asserts the
     port's half directly, and two negative controls (unsorted, and descending) break on the file's bytes.
+30. **`storage/generic.go` Part A's type erasure is replaced by a Swift generic.** Go 1.15 had no generics, so
+    `merge.go` was made to serve both `SeriesSet` and `ChunkSeriesSet` by erasing the element to an interface
+    — `genericSeriesSet.At() Labels` — and downcasting it back at every boundary with an **unchecked type
+    assertion**:
+
+    ```go
+    func (a *seriesSetAdapter) At() Series { return a.genericSeriesSet.At().(Series) }
+    func (a *chunkSeriesSetAdapter) At() ChunkSeries { return a.genericSeriesSet.At().(ChunkSeries) }
+    ```
+
+    Nothing in the type system says a set built by `newGenericQuerierFrom` is only ever unwrapped by
+    `querierAdapter`; pair them wrongly and it panics at run time. `ROADMAP.md` called this out as a
+    pre-generics workaround to replace rather than port, and this is the record of doing so.
+
+    `GenericSeriesSet` and `GenericQuerier` take a primary associated type, `MergeGenericQuerier` and
+    `GenericMergeSeriesSet` are generic over it, and every downcast is gone. **The behaviour is identical**
+    and the corpus proves it rather than the reasoning: `Fixtures/storage/merge.jsonl` drives BOTH
+    instantiations through `NewMergeQuerier` and `NewMergeChunkQuerier`, the same two entry points Go's own
+    adapters sit behind, and records the merged samples and the merged chunk bytes.
+
+    Two shapes fall out of it, both visible in `Sources/PromStorage/Generic.swift`:
+
+    - Swift existentials do not self-conform, so `any Series` cannot satisfy `Element: LabelsProvider`. The
+      generic is instantiated at two one-field wrappers, `AnySeries` and `AnyChunkSeries`. They are the price
+      of the exception, and they are still strictly better than the assertions — an `AnySeries` cannot be
+      mistaken for an `AnyChunkSeries`, which is exactly the mistake the assertions cannot rule out.
+    - `genericQuerierAdapter` has two fields (`q`, `cq`) and a "One-of. If both are set, Querier will be
+      used." comment. With the element type in the signature that one-of is expressible as two types, so
+      `GenericQuerierAdapter` and `GenericChunkQuerierAdapter` are separate and the run-time branch is gone.
+      There is no behaviour to lose: nothing upstream ever sets both.
+
 31. **The histogram iterators' slice RECYCLING is not ported, because Swift arrays already give what it
     buys.** `histogramIterator` and `floatHistogramIterator` each track `atHistogramCalled` /
     `atFloatHistogramCalled`, and on the next `Next()` they copy any slice they have already handed out
@@ -482,6 +513,35 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     nothing a caller could measure. The method is kept rather than deleted, for the call-site symmetry §4
     asks for, and the corpus calls it on every finished chunk and re-reads `Bytes()` afterwards — so the one
     property that IS observable, *`Compact` never changes the bytes*, is pinned rather than assumed.
+240. **`mergeGenericQuerier.Select`'s concurrent branch is not reproduced; the port always selects in querier
+    order.** (Numbered 240 because only exception 30 was reserved for this slice and it needed two; the
+    parallel-PR numbering convention says to take spare numbers from 240 upward.)
+
+    Upstream runs the per-querier `Select`s in goroutines whenever there is at least one **secondary**
+    querier, collecting the resulting sets off an UNBUFFERED channel:
+
+    ```go
+    for r := range seriesSetChan { seriesSets = append(seriesSets, r) }
+    ```
+
+    so `seriesSets` ends up in *completion* order, which is scheduler-dependent. **That is observable**, and
+    it means upstream has no deterministic answer for one class of query — see quirk 215. The port runs the
+    non-concurrent branch unconditionally.
+
+    Three reasons, in order of weight. There is no contract to be byte-exact against in the concurrent
+    branch, so reproducing the goroutines would buy nondeterminism rather than fidelity. ADR-3 makes the
+    query path synchronous and non-`Sendable`, and `Querier` is not `Sendable`, so the goroutines would need
+    a concurrency model this port deliberately does not have. And the field's own TODO says "Remove once
+    remote queries are asynchronous" — it is a latency optimisation for remote read, which is Phase 10's, and
+    whoever lands remote read should revisit this entry rather than inherit it silently.
+
+    **The corpus is built to keep this honest rather than to hide it**: every case that pins a duplicate
+    timestamp with differing values, or two chunks with identical bounds and different bytes, uses PRIMARIES
+    ONLY — the branch where upstream is sequential too.
+
+    The `matchersCopy` the concurrent branch makes (merge.go:157, guarding against "some queriers may alter
+    the slice", upstream issue 14723) is not needed either: a Swift `[Matcher]` is a value, so every querier
+    already gets its own copy.
 
 ## Replicated Go quirks
 
@@ -3154,6 +3214,97 @@ changing behaviour.
     arms above them: it survives today, and stops surviving the moment either arm is reordered. The companion
     control that moves `Decode`'s check *above* the format check breaks, which is what says the ordering — not
     the check — is the contract.
+215. **Which of two duplicate samples survives a vertical merge is decided by a HEAP TIE-BREAK, and upstream
+    makes that nondeterministic whenever a secondary querier is present.** Three facts compose into it:
+
+    - `genericSeriesSetHeap.Less` compares LABEL SETS only, so two sets positioned on the same series compare
+      equal both ways and their relative order is whatever `container/heap`'s sift left them in — which is
+      decided by the order they were PUSHED.
+    - `chainSampleIterator.Next` drops a sample whose timestamp equals the last one emitted, so at a duplicate
+      timestamp the FIRST iterator to reach it wins and the others' values are discarded.
+    - `mergeGenericQuerier.Select` pushes in `seriesSets` order, and `seriesSets` is built by ranging an
+      unbuffered channel fed by goroutines the moment any querier is secondary.
+
+    So `NewMergeQuerier([]{a}, []{b}, ChainedSeriesMerge)` over two queriers that disagree about the value at
+    `t` has two legal answers, and which one you get depends on the Go scheduler. It is the `promqltest`
+    unsorted-`Select` situation (exception 11) one layer down: **upstream being nondeterministic is a finding,
+    not an obstacle**, and the corpus stays on the deterministic side of the line rather than pinning a coin
+    flip. Every duplicate-value case in `Fixtures/storage/merge.jsonl` uses primaries only; exception 240
+    records why the port never takes the concurrent branch at all.
+
+    The consequence for `GoHeap`: this is a second call site where **the heap's internal array order is
+    observable**, after `limitk`'s. Two controls confirm it — reversing the series-set comparator and removing
+    it both break the corpus.
+
+216. **`LabelValues` and `LabelNames` DISCARD the warnings they accumulated when they wrap an error.**
+    `mergeResults` is careful about warnings: `ws.Merge(w)` runs *before* every `if err != nil`, and the error
+    path returns `nil, ws, err` so the caller still has them. Then the caller throws them away:
+
+    ```go
+    res, ws, err := q.mergeResults(...)
+    if err != nil {
+        return nil, nil, fmt.Errorf("LabelValues() from merge generic querier for label %s: %w", name, err)
+    }
+    ```
+
+    A three-querier case where one warns, one fails and one succeeds therefore reports the failure and loses
+    the warning entirely — the successful querier's contribution vanishes with it. Reproduced, and pinned by a
+    corpus case built for exactly that shape. Note the asymmetry with `Select`, where a failure keeps the
+    warnings: `genericMergeSeriesSet` exposes `Err()` and `Warnings()` separately and neither suppresses the
+    other.
+
+    The two message prefixes are a contract surface (`LabelValues() from merge generic querier for label %s:`
+    and `LabelNames() from merge generic querier:`, parentheses and all) and four controls pin them.
+
+217. **A merge over ONE set returns that set unwrapped, so neither the limit nor the merge function applies to
+    it.** `newGenericMergeSeriesSet` opens with `if len(sets) == 1 { return sets[0] }`, before `seriesLimit`
+    is ever stored — so `NewMergeSeriesSet([]SeriesSet{s}, 1, ChainedSeriesMerge)` over a two-series set
+    yields both series, and `ChainedSeriesMerge` never runs.
+
+    Unreachable through `NewMergeQuerier`, which filters down to zero, one or many queriers and returns early
+    for the first two — so a merge querier always has at least two sets. It IS reachable through
+    `NewMergeSeriesSet`, which `web/api` and the remote-read path call directly, so it will matter in Phase 9.
+    Covered by a hand-written assertion in `StorageMergeUnitTests` rather than by the corpus, because the
+    corpus goes through `NewMergeQuerier` and cannot build a one-set merge.
+
+    A second early return in the same family, and the same reasoning: `genericMergeSeriesSet.At()` bypasses
+    the merge function entirely when only one set held the current label set, so a merge over
+    non-overlapping queriers never allocates a `SeriesEntry` and never chains.
+
+218. **A secondary querier attributes another set's failure to the set the caller touched FIRST, and empties
+    every set it produced.** `secondaryQuerier`'s all-or-nothing rule reads as if the failing set carries its
+    own error; it does not. On the first `Next()` of any set, the `once` block walks every set the querier has
+    produced, and when one fails it writes the error onto `asyncSets[curr]` — `curr` being the set whose
+    `Next()` is currently running — and replaces every OTHER set with `noopGenericSeriesSet{}`. Upstream's
+    comment states the intent ("consistent partial response strategy, where you have either full results or
+    none"), and the mechanism is not a bug, but the attribution surprises: set 0's warnings can name a failure
+    that happened in set 1, and set 1 then reports nothing at all — not even the warnings it had.
+
+    **This is unreachable from `NewMergeQuerier`**, which selects each querier exactly once, so a secondary
+    querier only ever holds one set. It is reachable only from a caller that selects the same secondary twice
+    before iterating — which upstream does only in `merge_test.go`. Six negative controls survived the first
+    sweep for that one reason; they are closed by `SecondaryQuerierMultiSetTests`, hand-written against the
+    source's stated contract, because `secondary.go` cannot be lifted into `oracle/probe/` (its
+    `genericQuerier` and `genericSeriesSet` dependencies are unexported, so the lift would not compile).
+
+    The port diverges in one detail, recorded next to the code: a `Select` after that first `Next()` PANICS
+    upstream, and the port returns an `errorOnlySeriesSet` carrying Go's panic string verbatim instead.
+
+219. **`chainSampleIterator.Seek` RESURRECTS an exhausted iterator.** The no-op guard is
+    `if c.curr != nil && c.lastT >= t`, and `Next` sets `c.curr = nil` when the last iterator runs out — so a
+    `Seek` after exhaustion skips the guard, falls into the fan-out, re-seeks every base iterator from
+    scratch and repositions the chain. A caller that treats `Next() == ValNone` as terminal and then seeks
+    backwards gets samples again.
+
+    Found by the corpus rather than by reading: the seek script's `Seek(tlast)` after the `Next` that
+    exhausted the chain returns `tlast` where a "once exhausted, always exhausted" iterator would return
+    `ValNone`, and the port matched only because it had been transcribed literally.
+
+    The neighbouring behaviour, and the reason the corpus records the seek script's VALUES and not only its
+    timestamps: when the guard DOES fire it returns `c.curr.Seek(c.lastT)` — a seek of the current iterator to
+    the timestamp it is already at, which repositions nothing. Two controls (`lastT > t` instead of `>=`, and
+    `seek(t)` instead of `seek(lastT)`) survived a first sweep that recorded timestamps only, because both
+    perturbations return the same timestamp from a different iterator. Only the value distinguishes them.
 220. **The two histogram encodings disagree about what a schema change MEANS, and write different chunk
     headers for the same pair of samples.** `HistogramAppender.appendable` returns a `CounterResetHeader` as
     its last value; `FloatHistogramAppender.appendable` returns a `bool`. So the schema / zero-threshold arm,

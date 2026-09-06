@@ -3633,6 +3633,126 @@ malformed chunk into a fixture. Where they stand:
 `Compactor` protocol (already the right shape) and `RangeHeadBlockReader` (already written, unused by this
 slice — `BlockWriter.Flush` passes the `Head` itself, blockwriter.go:110, and `db.go` is what wraps it in a
 `RangeHead` per block interval).
+### 7j(a). `storage/merge.go` — the VERTICAL MERGE. ROADMAP's oldest deferral is closed.
+
+`Sources/PromStorage/{Merge,Lazy,Secondary,Generic,SeriesChunks}.swift` plus
+`Sources/PromBlock/BlockQuerierConformance.swift`. Several queriers over the same time range,
+interleaved by label set and then by timestamp. ROADMAP assumed this would land in Phase 6; it did
+not, because a single block querier does not merge. It lands **ahead of §7j**, which is its first
+caller (`DB.Querier` merges the Head with the persisted blocks), and Phase 9 is the second.
+
+**What is in it.** `merge.go` in full — `NewMergeQuerier`/`NewMergeChunkQuerier` and their four-arm
+switch, `mergeGenericQuerier`, `NewMergeSeriesSet`/`NewMergeChunkSeriesSet`, `genericMergeSeriesSet`
+and its three heaps, `ChainedSeriesMerge` + `chainSampleIterator`,
+`NewCompactingChunkSeriesMerger` + `compactChunkIterator`, `NewConcatenatingChunkSeriesMerger`,
+`mergeResults`/`mergeStrings`/`truncateToLimit`, and the error and warning propagation. `lazy.go` in
+full. `generic.go` **Part A**. And two things it could not be ported without:
+
+- **`secondary.go`** minus its `Searcher` half. `NewMergeQuerier`'s second and fourth arms call
+  `newSecondaryQuerierFrom`, and the primary/secondary distinction is the whole of what makes the
+  error handling interesting. Splitting it would have left `NewMergeQuerier` unable to take a
+  secondary, which is most of what a corpus wants to exercise.
+- **the chunk half of `series.go`** — `ChunkSeriesEntry`, `listChunkSeriesIterator`,
+  `errChunksIterator`, `newChunkToSeriesDecoder`, `seriesToChunkEncoder`. `Series.swift`'s header
+  deferred these to "Phase 6, with the chunk encodings they need"; `NewCompactingChunkSeriesMerger`
+  is *built out of them* — compacting an overlap means decoding each chunk into a `Series`, merging
+  the samples and re-encoding.
+
+Plus two `GoCompat` additions: `GoHeap.popped` (`container/heap.Pop`) and `GoErrors` (`errors.Join`,
+whose `\n`-joined message four `Err()` methods render through).
+
+**The protocol shape is a deliberate output of this slice, not a by-product.** §6v/§6w landed the
+block query path as free functions over narrowed protocols (`SeriesIndex`, `PostingsIndex`,
+`LabelQueryIndex`) returning concrete types — which was right while the block was the only querier,
+because nothing needed the protocol. `NewMergeQuerier` takes `[]storage.Querier`, so this slice had
+to decide what a `Querier` actually is in Swift. `BlockQuerierConformance.swift` is the answer and it
+is **conformances and nothing else**: `BlockQuerier` and `BlockChunkQuerier` (each holding an index,
+a chunk source and a range, delegating to `blockQuerierSelect`/`blockChunkQuerierSelect` unchanged),
+`SeriesSet`/`ChunkSeriesSet` on the two block series sets, and `BlockSeriesEntry`/
+`BlockChunkSeriesEntry` as the `Series`/`ChunkSeries` they hand out. Every behavioural decision stays
+where §6v/§6w put it. **§7j's `DB.Querier` and Phase 9 both build on that shape** — if it is wrong,
+this is the file to change, not `BlockQuerier.swift`.
+
+Two seams inside it worth knowing before §7j: `Select` cannot throw in `storage.Querier` and the
+port's select can (`postingsForMatchers`, the sharding refusal), so it returns `errSeriesSet(err)`
+exactly as upstream's `blockQuerier.Select` does; and a querier's `LabelValues` is
+`SortedLabelValues`, so a querier's values are sorted where an index reader's are in index order
+(§6p).
+
+**The corpus.** `Fixtures/storage/merge.jsonl`, 94 cases, driven through `storage.NewMergeQuerier`
+and `storage.NewMergeChunkQuerier` over **real block queriers** — `oracle/blockfixture.go` writes the
+blocks, `tsdb.OpenBlock` opens them, `tsdb.NewBlockQuerier` queries them, and the port reads the same
+bytes through `BlockQuerier`. Each case is a program: a list of sources (blocks, or leaf stubs),
+which are primary and which secondary, a select with matchers and a limit, a chunk merger, and a
+label query. It records the merged label sets, the sample **timestamps and values**, a seek script's
+timestamps **and values**, the chunk ranges and **bytes**, both label queries, the warnings, the
+errors, `Close`'s joined error, and the Go type name of what each constructor returned.
+
+The only hand-written queriers are the ones a real block cannot be: one that errors, one that warns,
+one that closes badly, and one that yields series and *then* errors. Upstream's own `merge_test.go`
+does the same, and they are LEAVES — every line of merge logic above them is upstream's.
+
+**Control score: 89 of 139 on the first sweep, 111 of 139 after the corpus was widened**
+(`Scripts/controls-merge.sh`, seven source files). What the first sweep's survivors bought, because
+this is the part that generalises:
+
+- **A corpus that records only timestamps pins only timestamps.** Two `Seek` controls survived —
+  `lastT > t` instead of `>=`, and `seek(t)` instead of `seek(lastT)` — because both perturbations
+  return the same timestamp from a *different iterator*. Adding the seek script's VALUES broke both.
+  Quirk 59's lesson, one axis further along.
+- **`genericMergeSeriesSet.Err()` was unreachable**, and not by accident: a set that errors on its
+  first `Next()` is caught by `newGenericMergeSeriesSet`'s pre-advance and collapses the whole merge
+  into an `errorOnlySeriesSet`, so `Err()` only ever fires for a set that fails *after* yielding. A
+  real block querier cannot do that. A `delayedErrSeriesSet` stub closed it, and pinned something
+  worth knowing: the merge keeps returning the other queriers' series and reports the failure only
+  through `Err()`, so a caller that ignores `Err()` silently sees a partial answer.
+- **The chunk heap's tie-break** (equal min times ordered by max time) needed two chunks starting at
+  the same timestamp with different values; **the perfect-duplicate skip** needed a duplicate LONGER
+  than 120 samples, because below that the re-encoded bytes are identical to the original and the
+  skip is invisible. That is §6u's `currDelIter` finding again, and the same fix: make the case
+  large enough that re-encoding changes the shape.
+- **A whole family was structurally unreachable.** Six controls on `secondaryQuerier`'s
+  all-or-nothing rule survived because it only does anything when one secondary querier has produced
+  SEVERAL sets — several `Select`s before the first `Next()` — and `NewMergeQuerier` selects each
+  querier exactly once. Nothing in the tree selects twice. `secondary.go` cannot be lifted into
+  `oracle/probe/` either (its `genericQuerier`/`genericSeriesSet` dependencies are unexported), so
+  they are closed by `SecondaryQuerierMultiSetTests`, hand-written against the source's stated
+  contract. Quirk 218.
+
+**The corpus caught one bug and one near-miss.** The bug was in the harness and is the kind that
+passes its first case: `String(format: "%016x", v.bitPattern)` reads a **32-bit** argument, so every
+double whose low word is zero — 0.0, 1.0, 2.0, 100.0 — rendered as `0000000000000000` and 39 of 85
+cases mismatched with correct timestamps and zero values. `%016llx`. The near-miss was upstream's
+own nondeterminism, below.
+
+**Upstream is nondeterministic here, and the corpus is built around it rather than pinning a coin
+flip.** `mergeGenericQuerier.Select` runs the per-querier selects in goroutines whenever there is a
+secondary, collecting the sets off an unbuffered channel — so `seriesSets` is in *completion* order.
+That order seeds the label-set heap, the heap breaks ties between equal label sets, and
+`chainSampleIterator` resolves a duplicate timestamp by keeping the first sample it sees. So
+"secondary + duplicate timestamp + different values" has two legal answers. Every duplicate-value
+case therefore uses PRIMARIES ONLY, warnings are emitted sorted (`Annotations` is a Go map), and no
+case has more than one erroring primary. The port drops the goroutines entirely — exception 240,
+quirk 215. **This is the `promqltest` unsorted-`Select` situation (exception 11) one layer down**, and
+the same rule applies: separate "no order to be exact against" from "an order the port got wrong".
+
+Two other quirks worth carrying to §7j: `LabelValues`/`LabelNames` **discard** the warnings they
+accumulated when they wrap an error (quirk 216, and note `Select` does not — it exposes `Err()` and
+`Warnings()` separately); and a merge over ONE set returns that set **unwrapped**, so neither the
+limit nor the merge function applies (quirk 217) — unreachable through `NewMergeQuerier`, which
+filters to zero/one/many first, but reachable through `NewMergeSeriesSet`, which Phase 9 calls
+directly.
+
+**Deferred, each with its caller named.** `generic.go` **Part B** — `Searcher`, `SearchResultSet`,
+the top-K heaps and relevance scoring upstream appended to the same file in `e1f4380b2` without
+updating its header — is Phase 9's, with the HTTP API; the three references omitted with it are
+`var _ Searcher = &querierAdapter{}`, `searcherFromGenericQuerier`, and `secondary.go`'s two
+`Search*` methods plus `warningsOnErrorSearchSet`. `storage/fanout.go` is Phase 10's, with remote
+read. `series.go`'s `chunkSetToSeriesSet`/`seriesSetToChunkSet` likewise. And the HISTOGRAM arms of
+`seriesToChunkEncoder` are written out in full but throw, because `PromChunkEnc` has no
+`HistogramChunk`/`FloatHistogramChunk` yet — the existing §7f gap surfacing, not a new one, and the
+reason `chainSampleIterator`'s `consecutive` flag (which only the two histogram accessors read) has
+a surviving control.
 
 ### 7c. The `wlog` CORRUPTION corpus — the reader's rejection paths are now pinned
 

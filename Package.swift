@@ -295,6 +295,9 @@ let package = Package(
             dependencies: [
                 "PromStorage", "PromChunkEnc", "PromChunks", "PromHistogram", "PromLabels",
                 "PromAnnotations", "PromModel", "GoCompat", "GoOracleSupport",
+                // The merge corpus drives REAL block queriers, the same ones the oracle
+                // builds with `tsdb.NewBlockQuerier`. See StorageMergeTests.swift.
+                "PromBlock", "PromIndex", "PromFS", "PromEncoding", "PromTombstones",
             ]
         ),
         .testTarget(

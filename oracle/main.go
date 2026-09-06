@@ -139,6 +139,10 @@ var suites = map[string]func(*emitter){
 	"head/gc":                 genHeadGC,
 	"head/replay":             genHeadReplay,
 	"block/seriesset":         genBlockSeriesSet,
+	// storage/merge.go + lazy.go + secondary.go + generic.go Part A, driven through
+	// `NewMergeQuerier`/`NewMergeChunkQuerier` over REAL block queriers.
+	// See oracle/suites_storage_merge.go.
+	"storage/merge": genStorageMerge,
 	"block/meta":              genBlockMeta,
 	// Phase 7 (§7i(a)): `tsdb/blockwriter.go` and `LeveledCompactor`'s write path — the
 	// port's own block, byte-compared against upstream's and then opened with

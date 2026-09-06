@@ -60,6 +60,24 @@ public enum GoHeap: Sendable {
         }
     }
 
+    /// Go: `heap.Pop` — swap the root to the end, sift the new root down over the *shortened* heap.
+    ///
+    /// The caller removes the last element afterwards, for the same reason ``pushed(count:less:swap:)``
+    /// leaves the append to the caller: Go's `Pop` is a method on the user's type and does the removal
+    /// itself, so the storage stays the caller's.
+    ///
+    /// **`down` runs over `n - 1`, not `n`.** Sifting over the full length would pull the popped element
+    /// back into the heap. `storage/merge.go` pops in three places and the resulting order is observable —
+    /// which sample survives a duplicate timestamp is decided by the order equal-labelled sets come off
+    /// this heap.
+    public static func popped(
+        count: Int, less: (Int, Int) -> Bool, swap: (Int, Int) -> Void
+    ) {
+        let n = count - 1
+        swap(0, n)
+        _ = down(0, n, less, swap)
+    }
+
     /// Go: `heap.Fix` — restore the invariant after the element at `i` changed.
     ///
     /// `down` first, `up` only if `down` did not move it. Not both.

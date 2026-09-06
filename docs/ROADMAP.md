@@ -58,7 +58,7 @@ tree.
 | **2** ✅ | **`PromRegex` — RE2 in Swift.** Parser, Simplify, compiler, Pike VM, FastRegexMatcher | 3.4k → **7.8k** | **DONE** — 4,221 parse cases (tree + exact error text), 40,768 `MatchString`, 675 `SetMatches`. `Matcher` uses it; the literal-only stand-in is gone. Over budget by 2×, half of it generated tables; capture tracking was added later in §5e(e) for `label_replace` |
 | **3** ✅ | **`PromHistogram` — native histograms** | 4.5k → **4.3k** | **DONE** — field-by-field bit-pattern parity on `Add/Sub/Mul/Div/KahanAdd/Compact/DetectReset/ToFloat/Validate/Equals/CopyTo/ReduceResolution`, plus `TrimBuckets` and `convert.go` |
 | **4** ✅ | **`PromQLParser` — lexer ported 1:1, hand-written precedence-climbing parser replacing goyacc.** Plus `ast.go`, `printer.go`, `prettier.go`, `model.Duration`, `strutil.Unquote` | 5.9k → **6.5k** | **DONE** — 6,154 parse cases across six option sets: AST JSON via `translate_ast.go`, every error message and `PositionRange`, `String()`, `Prettify()`, `Tree()`, and `parse(print(parse(x))) == parse(x)`. Plus 1,685 series descriptions, 834 `ParseMetric`, 842 `ParseMetricSelector`, 1,685 `model.Duration`, 408 `strconv.ParseInt`/`ParseUint`. See ADR-11, ADR-12 |
-| **5** ✅ | **`PromQL` engine + storage protocols.** Shippable library milestone | 12k → **17.6k** | **DONE — 2,183 of 2,183 `eval` assertions, zero failures, zero skips.** Every evaluator arm, every runner directive, every start-timestamp assertion; the gate has nothing left to measure. The count reads 2,183 rather than the 2,201 planned for because `@st` lines are no longer counted as assertions. Deliberately deferred: `storage/merge.go`, `generic.go`, `lazy.go`, every `MarshalJSON`. `storage.Appender` was deferred "to the phase that first has a caller" and duly landed in §7f(f) — the deferral policy working as intended |
+| **5** ✅ | **`PromQL` engine + storage protocols.** Shippable library milestone | 12k → **17.6k** | **DONE — 2,183 of 2,183 `eval` assertions, zero failures, zero skips.** Every evaluator arm, every runner directive, every start-timestamp assertion; the gate has nothing left to measure. The count reads 2,183 rather than the 2,201 planned for because `@st` lines are no longer counted as assertions. Deliberately deferred: `storage/merge.go`, `generic.go`, `lazy.go`, every `MarshalJSON`. `storage.Appender` was deferred "to the phase that first has a caller" and duly landed in §7f(f); `merge.go`, `lazy.go` and `generic.go` Part A landed the same way in §7j(a), ahead of the `db.go` slice that needs them — the deferral policy working as intended |
 | **6** ✅ | **TSDB read path** | 9k → **9.6k** | **READ PATH CLOSED** — 23 pinned slices. A block Prometheus wrote can be opened, matched, selected, trimmed and read as samples or chunks, every layer pinned on real files. Two of the three clauses originally written for this gate are **deferred to the phases that own their tooling**: `tsdb dump` byte-equals `promtool` needs `promtool` (Phase 9), and re-running the evals on a block querier needs the Head (§7g). The first clause was met by a stronger route than planned — rather than reading upstream's committed `tsdb/testdata/` blocks, `oracle/blockfixture.go` writes real blocks with upstream's own writer and opens them with `tsdb.OpenBlock`, so the corpus controls the input. Two read-path gaps stay open by construction and are §7i's (`Err` ordering, the undecodable-encoding path — both need malformed or non-XOR chunk bytes the port cannot yet write) |
 | **7** 🔨 | **TSDB write path** | 14k → **7.9k so far** | **ELEVEN SLICES IN (§7a–§7h plus §7i(t), §7i(a) and §7k), `head.go` is DONE and the port can WRITE A BLOCK.** §7a `tsdb/record` (the WAL wire format, both directions) · §7b `tsdb/wlog`'s segment format · §7c the corruption corpus (took that sweep from 22 survivors to 9) · §7d `ChunkDiskMapper` · §7e `index.MemPostings` · **§7f the Head, six sub-slices**: `isolation.go`, `seriesHashmap`/`stripeSeries`, the `chunkenc` conformances, `memSeries`' in-order chunk state, `HeadOptions`/`NewHead`, and **the float append path** (§7f(f)) — 40 cases through the real `tsdb.Head`, each asserted in the three places a committed sample lands: the accessors, the WAL records byte for byte, and the chunk files · **§7g `head_read.go`**, so the Head is QUERYABLE · **§7h `head_wal.go` in three sub-slices**: (a) the GC (`gc`, `Delete`, `Truncate`, `MemTombstones`), (b) the REPLAY (`Init`, `loadMmappedChunks`, `loadWAL`), (c) the WAL TRUNCATION and `wlog/checkpoint.go`. **So the Head ingests, is queried, forgets, comes back from a restart, and no longer grows its WAL without bound.** · **§7i(t) the tombstone FILE codec** — `Encode`/`Decode`/`WriteFile`/`ReadTombstones` and the magic/version/CRC framing, in a 30-case round trip over the file's BYTES plus a 64-case CORRUPTION arm modelled on §7c; it found a reachable upstream panic on an eight-byte file (quirk 210). · **§7i(a) `blockwriter.go` + `LeveledCompactor`'s write path** in a new tier-10 `PromCompact` target — 36 differential cases in which upstream's own writer produces a block and the port has to produce the same `index`, chunk-segment and `meta.json` bytes, with the ULID scrubbed and injected (upstream reads `crypto/rand.Reader` directly and has no seam); 62 controls, 53 broke, 9 argued survivors; quirks 195-209 and exceptions 26-28. **So the first clause of this gate is MET: the port writes a byte-identical block, ULID pinned.** · **§7k `chunkenc`'s two HISTOGRAM encodings** — `histogram.go`, `float_histogram.go` and the encoding half of `histogram_meta.go`, in 288 cases across two corpora generated from one shape list so the places the two encodings genuinely disagree are a diff rather than a coincidence; 108 controls, 96 broke; quirks 220-229 and exceptions 31-32. `db.go` is untouched. What remains inside §7f is deferred by feature rather than omitted: histograms and exemplars in the appender, `UpdateMetadata`, the out-of-order arm — and **§7k has now paid the chunk-encoding half of the histogram deferral**, so what is left of it is `memSeries.appendHistogram` and `headAppender`'s histogram arms rather than a missing encoding. Gate: the byte-identical-block clause is met; `promtool tsdb verify` accepts ours is Phase 9's tooling; WAL replay both ways landed in §7h(b). Remaining order below |
 | 8 | Ingest: text parse, relabel, config, discovery, scrape | 9k | All 217 `config/testdata/` fixtures incl. **byte-identical error strings**; live scrape differential |
@@ -210,17 +210,44 @@ doing it later is a target rename, not a redesign. Treat it as closed unless som
 needs to depend on the protocols without the algorithms. The same trick is still *planned* for
 `PromDiscoveryCore`, so `PromConfig` need not depend on providers.
 
-### Still open: `merge.go`, `generic.go`, `lazy.go`
+### Closed: `merge.go` and `lazy.go`. Still open: `generic.go` Part B
 
-`storage/merge.go` is **not ported.** This plan assumed it would land in Phase 6; it did not, because
-nothing in the read path needed it — a single block querier does not merge, and `PromTestStorage`
-sorts instead. It becomes load-bearing at §7j (`db.go` merges Head and blocks) and again in Phase 9.
-Budget it there.
+`storage/merge.go`, `storage/lazy.go`, `storage/secondary.go` and **`generic.go` Part A** are
+**ported and pinned** — see HANDOFF §7j(a). This plan's oldest open deferral is discharged: it
+assumed the merge would land in Phase 6, it did not (a single block querier does not merge), and it
+landed ahead of §7j instead, which is the first caller that needs it.
 
-**`generic.go` is not the merge boilerplate its header claims.** Only ~145 of its 822 lines are the
-`genericSeriesSet` adapters. Upstream commit `e1f4380b2` ("web/api: add search API endpoint")
-appended a whole label-search subsystem — top-K heaps, streaming two-way merges, relevance scoring —
-to the same file without updating the header. Part A belongs with `merge.go`; Part B belongs with the
-HTTP API in Phase 9, and neither was a PromQL dependency. Part A is also a pre-generics type-erasure
-workaround (`At()` returns an interface that the adapters downcast with unchecked assertions), so a
-real Swift generic replaces it rather than porting it.
+What that closed, beyond the four files:
+
+- **`PromBlock` now has a `Querier`.** §6v/§6w had landed the block query path as free functions over
+  narrowed protocols (`SeriesIndex`, `PostingsIndex`, `LabelQueryIndex`), which was right while the
+  block was the only querier — nothing needed the protocol. `NewMergeQuerier` takes
+  `[]storage.Querier`, so this slice had to decide what that protocol is in Swift, and
+  `Sources/PromBlock/BlockQuerierConformance.swift` is the answer: `BlockQuerier`,
+  `BlockChunkQuerier`, and `SeriesSet`/`ChunkSeriesSet` conformances on the two block series sets.
+  **§7j (`DB.Querier`) and Phase 9 both build on that shape**; it is conformances only, with every
+  behavioural decision left where §6v/§6w put it.
+- **The chunk half of `series.go`** — `ChunkSeriesEntry`, `listChunkSeriesIterator`,
+  `errChunksIterator`, `newChunkToSeriesDecoder` and `seriesToChunkEncoder` — which
+  `NewCompactingChunkSeriesMerger` is built out of. `Series.swift`'s header had deferred these to
+  "Phase 6, with the chunk encodings they need"; they arrive here because the compacting merger
+  decodes, merges and re-encodes.
+- Two small `GoCompat` additions the merge needed: `heap.Pop` (`GoHeap.popped`) and `errors.Join`.
+
+**Still open, and it is Phase 9's:** `generic.go` **Part B**. Only ~145 of the file's 822 lines are
+the merge boilerplate; upstream commit `e1f4380b2` ("web/api: add search API endpoint") appended a
+whole label-search subsystem — `Searcher`, `SearchResultSet`, `SearchHints`, top-K heaps, streaming
+two-way merges, relevance scoring — to the same file without updating its header. It belongs with
+the HTTP API and nothing in the TSDB or the engine reads it. Three references to it were omitted
+along with it and are the trail to follow when it lands: `var _ Searcher = &querierAdapter{}`,
+`searcherFromGenericQuerier`, and `secondary.go`'s `SearchLabelNames`/`SearchLabelValues` plus
+`warningsOnErrorSearchSet`.
+
+Also deferred, each with its caller: `storage/fanout.go` (Phase 10, with remote read — it is the
+other `NewMergeQuerier` caller), and `series.go`'s `chunkSetToSeriesSet` / `seriesSetToChunkSet`
+(Phase 10, the remote-read conversions).
+
+Part A was a **pre-generics type-erasure workaround** — `At()` returned an interface the adapters
+downcast with unchecked assertions — and a real Swift generic replaced it rather than being ported
+verbatim, as this plan directed. PORTING.md exception 30 records the decision and what it cost
+(two one-field wrappers, because Swift existentials do not self-conform).
