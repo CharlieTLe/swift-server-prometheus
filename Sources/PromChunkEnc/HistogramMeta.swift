@@ -135,6 +135,20 @@ struct BucketIterator {
     }
 }
 
+/// The "count of bucket `i` in `a`" that `expandFloatSpansAndBuckets` reads.
+///
+/// Upstream's `a` side is `[]xorValue` (the appender's per-bucket XOR state) and Phase 5 ported the
+/// function against a plain `[]float64`, because the metadata half had no appender to read from. Both
+/// call sites are live now — `floatHistogramAppendable` passes the plain counts, `FloatHistogramAppender`
+/// passes its `[XORValue]` — so the bucket type is a protocol rather than a second copy of the loop.
+public protocol FloatBucketCount {
+    var bucketCount: Double { get }
+}
+
+extension Double: FloatBucketCount {
+    public var bucketCount: Double { self }
+}
+
 /// Go: `expandFloatSpansAndBuckets` — can layout `b` be written into a chunk whose current layout is
 /// `a`, and is the transition a counter reset?
 ///
@@ -142,8 +156,12 @@ struct BucketIterator {
 /// a reset. A bucket missing from `b` whose count in `a` was **zero** is fine: it is noted as an
 /// insert and the walk continues. That is the whole subtlety — an empty bucket disappearing is not a
 /// reset, a used one is.
-func expandFloatSpansAndBuckets(
-    _ a: [Span], _ b: [Span], _ aBuckets: [Double], _ bBuckets: [Double]
+///
+/// **`aCount` is ASSIGNED here and ACCUMULATED in the integer twin** (`expandIntSpansAndBuckets`),
+/// because float histogram buckets are absolute counts and integer ones are deltas. The two loops are
+/// otherwise identical, which is exactly why upstream keeps them as two functions rather than one.
+func expandFloatSpansAndBuckets<A: FloatBucketCount>(
+    _ a: [Span], _ b: [Span], _ aBuckets: [A], _ bBuckets: [Double]
 ) -> (forward: [Insert], backward: [Insert], ok: Bool) {
     var ai = BucketIterator(a)
     var bi = BucketIterator(b)
@@ -160,7 +178,7 @@ func expandFloatSpansAndBuckets(
     var bCount = 0.0
     var aCountIdx = 0
     var bCountIdx = 0
-    if aOK, aCountIdx < aBuckets.count { aCount = aBuckets[aCountIdx] }
+    if aOK, aCountIdx < aBuckets.count { aCount = aBuckets[aCountIdx].bucketCount }
     if bOK, bCountIdx < bBuckets.count { bCount = bBuckets[bCountIdx] }
 
     func addInsert(_ inserts: inout [Insert], _ insert: inout Insert, _ otherIdx: Int) {
@@ -183,7 +201,7 @@ func expandFloatSpansAndBuckets(
         (aIdx, aOK) = ai.next()
         aInter.pos += 1
         aCountIdx += 1
-        if aOK, aCountIdx < aBuckets.count { aCount = aBuckets[aCountIdx] }
+        if aOK, aCountIdx < aBuckets.count { aCount = aBuckets[aCountIdx].bucketCount }
     }
 
     func advanceB() {

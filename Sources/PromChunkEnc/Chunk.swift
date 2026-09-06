@@ -193,12 +193,21 @@ public protocol ChunkAppender: AnyObject {
     func append(_ st: Int64, _ t: Int64, _ v: Double)
 
     /// Go: `AppendHistogram`.
+    ///
+    /// **`h` is `inout` because Go's is a pointer that gets WRITTEN THROUGH.** The backward-insert
+    /// path replaces `h.PositiveSpans`/`h.NegativeSpans` and `recodeHistogram` rewrites the buckets,
+    /// and the mutation escapes the call: `memSeries.appendHistogram` stores the same pointer as
+    /// `s.lastHistogramValue` immediately afterwards. A by-value parameter would be a silent
+    /// divergence that only surfaces in the Head.
+    ///
+    /// Go returns `(nil, false, a, err)` on the `appendOnly` refusals — the appender it hands back
+    /// alongside the error is the receiver, which the caller already holds, so throwing loses nothing.
     func appendHistogram(
-        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: Histogram, appendOnly: Bool
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout Histogram, appendOnly: Bool
     ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender)
 
     /// Go: `AppendFloatHistogram`.
     func appendFloatHistogram(
-        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: FloatHistogram, appendOnly: Bool
+        prev: (any ChunkAppender)?, st: Int64, t: Int64, h: inout FloatHistogram, appendOnly: Bool
     ) throws -> (chunk: (any Chunk)?, isRecoded: Bool, appender: any ChunkAppender)
 }

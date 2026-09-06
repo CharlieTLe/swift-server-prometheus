@@ -12,6 +12,8 @@
     "chunkenc/chunkmeta.jsonl": { "sha256": "32475dd0955ef4d422b5eae7e9481989d66baadf654568e88d8c5ae871cd136b", "lines": 140 },
     "chunkenc/compatible.jsonl": { "sha256": "705caedcd4167985825cbcb5ecb43ce9699d8894e024e55d071c9c9b8af76481", "lines": 36 },
     "chunkenc/encoding.jsonl": { "sha256": "c97b97d5bbde77bcd681bdf3cbdd4ec7724dca35476379ee71b3d458147462d6", "lines": 10 },
+    "chunkenc/float-histogram.jsonl": { "sha256": "1ca842b152ed729fb9a9cb1956410926a71a621cb6621b0e51df16acb0b7e398", "lines": 151 },
+    "chunkenc/histogram.jsonl": { "sha256": "845027e4ca4194ce375af6a285335e60fecdc58d097e385368caddf42afdd4cf", "lines": 137 },
     "chunkenc/valuetype.jsonl": { "sha256": "cc70b980e039bfbfaf8ef7a132673d7418d388b5556833360c25fe60bc1afddb", "lines": 7 },
     "chunkenc/xor.jsonl": { "sha256": "023e77d4eab1330254c4d03b8f7c608b4a5e015042e21fdab1fda4b5ba47b83b", "lines": 70 },
     "chunkenc/xor2.jsonl": { "sha256": "bb08795b0c941b6d0f3ff727461284a36ab7fe63a1295f264fec9d7c8caf6736", "lines": 183 },

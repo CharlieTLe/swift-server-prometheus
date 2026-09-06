@@ -67,13 +67,15 @@ struct ChunkConformanceTests {
     func histogramToFloatChunkIsRefused() throws {
         for chunk in [XORChunk() as any Chunk, XOR2Chunk() as any Chunk] {
             let app = try chunk.makeAppender()
+            var h = Histogram()
+            var fh = FloatHistogram()
             #expect(throws: FloatChunkAppenderError.histogramToFloatChunk) {
                 _ = try app.appendHistogram(
-                    prev: nil, st: 0, t: 1, h: Histogram(), appendOnly: false)
+                    prev: nil, st: 0, t: 1, h: &h, appendOnly: false)
             }
             #expect(throws: FloatChunkAppenderError.floatHistogramToFloatChunk) {
                 _ = try app.appendFloatHistogram(
-                    prev: nil, st: 0, t: 1, h: FloatHistogram(), appendOnly: false)
+                    prev: nil, st: 0, t: 1, h: &fh, appendOnly: false)
             }
         }
         #expect(
@@ -84,26 +86,44 @@ struct ChunkConformanceTests {
                 == "appended a float histogram sample to a float chunk")
     }
 
-    /// `newEmptyChunk` answers for the two float encodings and reports the rest **by name** rather than
-    /// silently substituting XOR. The histogram chunk encodings are genuinely not ported yet.
-    @Test("newEmptyChunk builds the float encodings and names the rest")
+    /// `newEmptyChunk` answers for **all four** encodings now that the histogram chunks are ported, and
+    /// reports `EncNone` with Go's own `invalid chunk encoding %q` text.
+    @Test("newEmptyChunk builds every encoding and names the invalid one")
     func newEmptyChunkCoverage() throws {
         #expect(try newEmptyChunk(.xor).encoding == .xor)
         #expect(try newEmptyChunk(.xor2).encoding == .xor2)
+        #expect(try newEmptyChunk(.histogram).encoding == .histogram)
+        #expect(try newEmptyChunk(.floatHistogram).encoding == .floatHistogram)
         #expect(try newEmptyChunk(.xor).numSamples == 0)
+        #expect(try newEmptyChunk(.histogram).numSamples == 0)
+        #expect(try newEmptyChunk(.floatHistogram).numSamples == 0)
 
-        for missing in [Encoding.histogram, .floatHistogram] {
-            #expect(throws: NewEmptyChunkError.unsupportedEncoding(missing)) {
-                _ = try newEmptyChunk(missing)
-            }
-        }
         // `.none` is not a valid encoding at all — `Encoding.isValid` says so, and `cutNewHeadChunk` checks
         // that first and falls back to an XOR chunk rather than calling this.
         #expect(!Encoding.none.isValid)
         #expect(Encoding.xor.isValid && Encoding.xor2.isValid)
-        #expect(throws: NewEmptyChunkError.unsupportedEncoding(Encoding.none)) {
+        #expect(Encoding.histogram.isValid && Encoding.floatHistogram.isValid)
+        #expect(throws: NewEmptyChunkError.invalidEncoding(Encoding.none)) {
             _ = try newEmptyChunk(.none)
         }
+        #expect(
+            NewEmptyChunkError.invalidEncoding(Encoding.none).description
+                == "invalid chunk encoding \"none\"")
+        #expect(
+            NewEmptyChunkError.invalidEncoding(Encoding(rawValue: 9)).description
+                == "invalid chunk encoding \"<unknown>\"")
+
+        // `FromData` is `NewEmptyChunk` plus `Reset`, and it round-trips a chunk's own bytes.
+        let src = HistogramChunk()
+        let a = try src.appender()
+        var h = Histogram(count: 3, sum: 6, positiveSpans: [Span(offset: 0, length: 1)],
+                          positiveBuckets: [3])
+        _ = try a.appendHistogram(prev: nil, st: 0, t: 1, h: &h, appendOnly: false)
+        let copy = try chunkFromData(.histogram, src.bytes)
+        #expect(copy.bytes == src.bytes)
+        #expect(copy.numSamples == 1)
+        #expect(try ValueType.histogram.newChunk(useXOR2: false).encoding == .histogram)
+        #expect(try ValueType.float.newChunk(useXOR2: true).encoding == .xor2)
     }
 
     /// The boxed iterator forwards, and its histogram accessors answer `(Int64.min, nil)` — the pairing Go's

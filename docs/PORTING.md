@@ -452,6 +452,36 @@ These are deliberate. Do not "fix" them silently; if one changes, update this li
     functions, so the entry point is still upstream's and the intervals still come from real `AddInterval`
     calls; only the one axis upstream leaves undefined is fixed. `TombstoneFileTests.iterIsOrdered` asserts the
     port's half directly, and two negative controls (unsorted, and descending) break on the file's bytes.
+31. **The histogram iterators' slice RECYCLING is not ported, because Swift arrays already give what it
+    buys.** `histogramIterator` and `floatHistogramIterator` each track `atHistogramCalled` /
+    `atFloatHistogramCalled`, and on the next `Next()` they copy any slice they have already handed out
+    before mutating it — six branches in the integer iterator and five in the float one. That machinery
+    exists because a Go slice ALIASES: `AtHistogram(nil)` returns a `*Histogram` whose `PositiveBuckets` is
+    the iterator's own slice, so without the flag the next `Next()` would rewrite a histogram the caller is
+    still holding. Swift's arrays are copy-on-write, so `h.positiveBuckets = pBuckets` followed by
+    `pBuckets[i] += x` copies automatically and the caller's histogram is already isolated. Every branch of
+    the bookkeeping is therefore unobservable, and the port omits it.
+
+    **The reuse path has the mirror-image consequence and it is the one to know about.**
+    `AtHistogram(reuse)` in Go returns the buffer it was handed, mutated in place, so two samples read
+    through one reuse buffer are the SAME object; in the port they are two independent values. Nothing
+    upstream reads a previous sample after asking for the next one — the buffer is a buffer — so this is
+    safe, but it does mean **a corpus must snapshot**. The first run of `chunkenc/histogram` recorded the
+    slice header rather than a copy and reported 83 of 130 cases "mismatched" against a port whose only sin
+    was value semantics; `hgcHistOut` now copies the bucket slices, and the comment there says why.
+
+    What IS ported is everything the flags gate that has a value: `AtHistogram(reuse)`'s field-by-field
+    overwrite and `AtFloatHistogram(reuse)`'s recomputation of the cumulative buckets from the deltas (which
+    the nil path reads out of `pFloatBuckets` instead). Both are in the corpus, four read passes per case,
+    precisely so the two paths cannot drift.
+
+32. **`Chunk.Compact()` is a no-op in every ported encoding.** Go's is
+    `if cap(stream) > len(stream) + chunkCompactCapacityThreshold { copy into a right-sized buffer }` — it
+    hands memory back after a chunk stops taking appends. Swift's `Array` has no observable capacity
+    (`reserveCapacity` is advisory and `capacity` is not a contract), so there is nothing to shrink and
+    nothing a caller could measure. The method is kept rather than deleted, for the call-site symmetry §4
+    asks for, and the corpus calls it on every finished chunk and re-reads `Bytes()` afterwards — so the one
+    property that IS observable, *`Compact` never changes the bytes*, is pinned rather than assumed.
 
 ## Replicated Go quirks
 
@@ -3051,6 +3081,16 @@ changing behaviour.
     of them was a deletion case**, which is the part worth carrying: a limitation declared against one
     trigger was reached by another.
 
+    **§7k amends the second half of that fix, and the amendment is the interesting part.** §7i(a)'s note said
+    "the histogram encodings will fall out of it for free when `PromChunkEnc` grows them". Half of that was
+    right: `newEmptyChunk(source.encoding)` is encoding-agnostic and needed nothing. The sample LOOP was not.
+    Upstream's has three arms — `ValFloat`, `ValHistogram`, `ValFloatHistogram` (querier.go:977-999) — and the
+    port had one, behind `guard vt == .float`, because until §7k no encoding could produce the other two. So a
+    histogram chunk would have met `populateCurrForSingleChunk: value type histogram unsupported` on **every
+    compaction of a Head**, by this quirk's own argument. Both arms are ported now, with upstream's
+    `appendOnly: true` and `prev: nil`. The generalisation is the one §7i(a) was already making, applied to
+    itself: **"it will fall out for free" is a claim about one line, and the function has more than one.**
+
 209. **Nothing in the append path ever sets `record.RefSample.ST`.** `populateCurrForSingleChunk` reads
     `AtST()` per sample and passes it to the new appender (querier.go:976), which for an XOR2 chunk is how a
     start timestamp survives a re-encode. It cannot be observed from a Head built by appending:
@@ -3114,6 +3154,117 @@ changing behaviour.
     arms above them: it survives today, and stops surviving the moment either arm is reordered. The companion
     control that moves `Decode`'s check *above* the format check breaks, which is what says the ordering — not
     the check — is the contract.
+220. **The two histogram encodings disagree about what a schema change MEANS, and write different chunk
+    headers for the same pair of samples.** `HistogramAppender.appendable` returns a `CounterResetHeader` as
+    its last value; `FloatHistogramAppender.appendable` returns a `bool`. So the schema / zero-threshold arm,
+    which genuinely does not know whether a reset happened, answers `UnknownCounterReset` in the integer
+    chunk and is forced to answer "no reset" in the float one. Upstream's comment says why the integer side
+    declines to guess: a full counter reset detection is not worth paying for while
+    prometheus/prometheus#15346 is open.
+
+    The consequence is not confined to `appendable`. Take one histogram at schema 0 and the next at schema 2,
+    append them to an `EncHistogram` chunk and to an `EncFloatHistogram` chunk, and the second chunk's flag
+    byte is `0x00` in one case and `0x40` (`NotCounterReset`) in the other — see quirk 221 for the second
+    mechanism that pushes them apart. `Fixtures/chunkenc/histogram.jsonl` and
+    `Fixtures/chunkenc/float-histogram.jsonl` are generated from the SAME shape list for exactly this reason:
+    the divergence is a line-for-line diff between two fixture files rather than a fact buried in two
+    unrelated corpora.
+
+221. **A cut float-histogram chunk writes its counter-reset header only when there WAS a reset; the integer
+    one writes its verdict unconditionally.** `HistogramAppender.AppendHistogram` does
+    `happ.setCounterResetHeader(counterResetHint)` on the new chunk whatever the hint says;
+    `FloatHistogramAppender.AppendFloatHistogram` guards it with `if counterReset`. Since a fresh chunk's flag
+    byte is already zero and `UnknownCounterReset` is zero, the guard is only visible when the verdict was
+    `NotCounterReset` — which the float version cannot produce here anyway (quirk 220), so on this path the
+    two are equivalent. It matters on the OTHER path: when the caller cuts the chunk itself and passes `prev`,
+    the float side writes `NotCounterReset` explicitly and the integer side writes whatever `appendable`
+    returned, which for a schema change is `UnknownCounterReset`. Two controls, one per side, and both break.
+
+222. **`Appender()` on a ONE-sample chunk does not reproduce the appender that wrote it.** The replay lifts
+    the decoder's final state, and the decoder has no `0xff` sentinel: `leading` and `trailing` are plain
+    zeros until the first XOR'd value is read, which on a one-sample chunk never happens. A fresh appender
+    starts at `leading = 0xff`, so its second sample takes `xorWrite`'s new-window path (1 + 1 + 5 + 6 +
+    sigbits); a replayed one has `leading == 0`, passes `*leading != 0xff && newLeading >= 0 && newTrailing >=
+    0`, and takes the reuse-window path (1 + 1 + 64 bits). **Both decode to the same value** — the reader
+    reconstructs `mbits = 64 - 0 - 0` — so this is a size difference, not a correctness one, and it means a
+    chunk that has been through `Reset`/`FromData` between its first and second append has different bytes
+    from one that has not. The corpus drives `reappend/1` for precisely this.
+
+223. **A stale sample leaves the ENCODER's state and the DECODER's state disagreeing, permanently, and that
+    is by design.** `appendHistogram` replaces a stale-NaN sample with `&histogram.Histogram{Sum: h.Sum}` —
+    count 0, zero count 0, no spans, no buckets — then computes `cntDelta`/`zCntDelta` against those zeros
+    and **forces the emitted dods to 0** while storing the real deltas on the appender. The decoder reads the
+    zero dods, so its `cnt` and `cntDelta` are not the appender's. Nothing observable breaks, because
+    `AtHistogram` short-circuits on a stale sum and returns a bare `{Sum: staleNaN}` — with **no counter
+    reset hint**, no schema and no layout, whatever the chunk header says. But `Appender()` recovers the
+    decoder's state, so appending to a stale-tailed chunk after a round trip through `Reset` produces
+    different bytes from appending to the original. `stale/middle`, `stale/run` and `stale/after-reappend`
+    commit all three sides of that.
+
+    Two more consequences worth stating: `copy(a.pBuckets, h.PositiveBuckets)` copies `min(len, len)`
+    elements, so a stale sample leaves the appender's bucket VALUES untouched while zeroing its counts; and
+    the decoder skips the bucket dods entirely on a stale sum, which is what keeps the two streams aligned
+    even though the state does not agree.
+
+224. **A histogram iterator's initial timestamp is `math.MinInt64` when it is constructed and `0` when it is
+    `Reset`.** `newHistogramIterator` sets `t: math.MinInt64`; `Reset` sets `it.t, it.cnt, it.zCnt = 0, 0, 0`.
+    Both iterators have it, both encodings. It is invisible through `Seek`, whose loop is
+    `for t > it.t || it.numRead == 0` and whose second clause forces an advance regardless — so the only way
+    to see it is `AtT()` before the first `Next()`, which upstream's interface calls "unspecified". The port
+    reproduces it anyway and the corpus commits both values (`preT`, `resetPreT`), because "unspecified"
+    describes the *contract*, not the *bytes*, and a control that changed `reset`'s 0 to `Int64.min` survived
+    until those two fields existed.
+
+225. **Integer histogram buckets are DELTAS and float histogram buckets are ABSOLUTE, and the whole file pair
+    turns on that one fact.** `expandIntSpansAndBuckets` accumulates the running count
+    (`aCount += aBuckets[aCountIdx]`) where `expandFloatSpansAndBuckets` assigns it
+    (`aCount = aBuckets[aCountIdx].value`); `insert` takes a `deltas` flag and its two arms are different
+    arithmetic — a delta insert emits `-v` to bring the running value to zero and then re-adds `v` to the
+    following delta, an absolute insert just writes 0. The two `expand*` functions are otherwise
+    line-for-line identical, which is exactly why upstream keeps them as two copies rather than one generic.
+
+    The trap this sets for a corpus is that `[3, 0, 0]` is **three buckets of 3**, not one of 3 and two
+    empties, so a case meant to produce a backward insert produces a counter reset instead. The first draft of
+    `layout/backward` did that and the fixture said so; the running count has to be driven to zero, which is
+    `[3, -3, 0]`. Five controls hang off this line and all five break.
+
+226. **`putCustomBound`'s three-way condition is what makes its unchecked float-to-unsigned conversion safe,
+    and `math.Round` there is observable.** The guard is `tf < 0 || tf > 33554430 || !isWholeWhenMultiplied(f)`
+    and Go evaluates left to right, so `isWholeWhenMultiplied` — whose body is `uint(math.Round(in * 1000))`,
+    an unchecked conversion that Swift would trap on — only ever sees `[0, 33554430]`. The port spells the
+    saturation out anyway, because a `precondition` justified by "no caller can reach this" is a time bomb.
+
+    The rounding is not decoration. `1.001 * 1000` is `1000.9999999999999` in float64, so `Round` gives 1001
+    and the bound encodes in a four-byte varbit, while a floor would give 1000, decide the bound is not a
+    whole multiple of 0.001, and spend nine bytes on it. Every other bound in the first draft of the corpus
+    multiplied exactly, so the control for that rounding survived; `1.001` is a harvested witness, in the same
+    spirit as `gocompat/log`'s (quirk 30).
+
+227. **The chunk layout writes a span's LENGTH before its OFFSET**, which is the reverse of how a
+    `histogram.Span` reads in source and the reverse of the order the two fields are compared in everywhere
+    else. `putHistogramChunkLayoutSpans` is `putVarbitUint(len(spans))` then, per span,
+    `putVarbitUint(Length)` and `putVarbitInt(Offset)`. Length is unsigned and offset is signed, so swapping
+    them does not merely permute bytes — it changes which varbit predicate frames each value.
+
+228. **`putZeroThreshold`'s exponent is `Frexp`'s, which is one MORE than the IEEE 754 exponent, and the bias
+    is 243.** `Frexp` normalises the fraction to `[0.5, 1)`, so `2^-243` is `0.5 * 2^-242` and the exponent
+    stored is -242. Adding 243 maps the representable range `-242 … 11` onto the bytes `1 … 254`, leaving 0
+    for "the threshold is zero" and 255 for the nine-byte escape. The default zero threshold, `2^-128`, is
+    therefore the single byte 116. Four controls sit on the two range ends and the bias; all four break.
+
+229. **A chunk written at a RESERVED schema keeps it, and the reduction happens in `At*`.** Schemas 9 through
+    52 (`ExponentialSchemaMax` … `ExponentialSchemaMaxReserved`) are accepted by `IsKnownSchema` and written
+    into the layout header verbatim; `Next()` does not reduce them and neither does the appender. It is
+    `AtHistogram` and `AtFloatHistogram` that notice `Schema > ExponentialSchemaMax`, copy, and
+    `ReduceResolution(ExponentialSchemaMax)` on the way out — upstream calls it "a very slow path" and panics
+    if the reduction fails, on the grounds that only invalid chunk data could get there.
+
+    So the same chunk's bytes say schema 9 and every sample read out of it says schema 8 with merged buckets.
+    The NEGATIVE reserved range (-9 … -5) is symmetric in `IsKnownSchema` and **not** symmetric here: the
+    condition is one-sided, so a schema of -9 is returned as -9. Both halves are in the corpus
+    (`schema/9`, `schema/20`, `schema/52`, `schema/-5`, `schema/-9`), and without the negative ones a port
+    that reduced both ends would pass.
+
 
 ## Not ported
 
