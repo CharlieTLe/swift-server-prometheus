@@ -3848,6 +3848,330 @@ slice reuse actually runs), a step smaller than the range (overlapping windows),
 than the range (no overlap), samples exactly on `mint` and `maxt`, `anchored` and `smoothed`
 ranges, and `useStartTimestamps` both ways. Sample-limit boundaries per shape, as in #34.
 
+### 7j (scoping). `db.go` — the orchestration, and the FIVE slices `Open` really splits into
+
+Written the way §5c, §6b and §7f were, because all three were executed straight out of the doc. Nothing
+below is implemented; it is the research so the next session does not repeat it. Line numbers are
+`tsdb/db.go @ v3.13.2` unless another file is named.
+
+**ROADMAP said "expect to split it: `Open` + `reloadBlocks`, then compaction scheduling, then retention."
+That is wrong in three ways, and the source says so plainly.** (1) `Open` *calls* `reload()` (db.go:1129),
+so "`Open` + `reloadBlocks`" is not a seam — the seam is a head-only DB versus a DB with blocks on disk.
+(2) "compaction scheduling" names `plan`/`selectDirs`, and **neither is in this file**: `Plan`
+(compact.go:249), `plan` (279), `selectDirs` (332) and `selectOverlappingDirs` (371) are `LeveledCompactor`
+methods and therefore §7i's. What db.go owns is the *driver* — `Compact` (1456), `compactHead` (1678),
+`compactBlocks` (1763) — which calls `db.compactor.Plan` and `db.compactor.Compact` and does not implement
+either. (3) The split omits the slice with the highest value in the file, `DB.Querier`/`ChunkQuerier`
+(2350/2504), which is what finally collects Phase 6's deferred exit-gate clause.
+
+#### The §5 question, asked honestly: `db.go` needs NO probe package, and it is the first slice for which that is true
+
+`tsdb.Open` (872) is exported and so is nearly everything reachable from it. Of the file's 31 unexported
+functions and methods, **all but two — `run` (1204) and its `exponential` backoff (2648) — are called from an
+exported entry point**; what varies is whether the default options let you *observe* the call. Taken one
+sub-slice at a time:
+
+- **`validateOpts` (893) is directly observable, because it MUTATES THE CALLER'S STRUCT.** `Open` does
+  `opts, rngs, err = validateOpts(opts, nil)` (874) and `validateOpts` normalises through the pointer it was
+  handed. So an oracle that builds an `Options` literal, calls `tsdb.Open`, and then reads its own struct back
+  sees all **eleven** normalisations (897, 906, 909, 912, 915, 918, 921, 924, 927, 930, 933) and both
+  validation error strings (901, 904) — the §7f(e) shape exactly, one level up. `DefaultOptions()` (76) is
+  exported too, so its eighteen values commit as a one-line table that catches a defaults drift on the next
+  pin bump.
+- **The whole of `open` (950) is observable through the directory.** Its prelude is `MkdirAll` (951),
+  `repairBadIndexVersion` (969), `tsdbutil.RemoveTmpDirs(…, isTmpDir)` (978) and `wlog.DeleteTempCheckpoints`
+  (982), each over both `dir` and `dir/wal`. Every one of those is a *before/after listing of a directory the
+  corpus seeded*, which is the same input shape §7b's pre-seeded WAL cases already use. `isBlockDir` (2606),
+  `isTmpDir` (2615) and `blockDirs` (2633) are unexported and need no probe: seed a `<ulid>.tmp-for-deletion`,
+  a `<ulid>.tmp`, a `chunk_snapshot.X.Y.tmp`, a plain *file* named like a ULID, and a `checkpoint.000003.tmp`,
+  and the listing after `Open` is the truth table.
+- **`reload` (1820) / `reloadBlocks` (1837) / `openBlocks` (1946) / `getBlock` (1809) are observable through
+  `db.BlockMetas()` (1195), `db.Blocks()` (2222) and the surviving directory.** One caveat found by reading:
+  the in-process *second* reload — the one that exercises `getBlock`'s "already open, reuse it" arm (1961) —
+  is only reachable through `Compact` (1456), `CompactHead` (1551) or `CleanTombstones` (2547). A corpus that
+  only opens and closes pins the cold path twice and the warm path never.
+- **Retention is the easiest thing in the file to pin, not the hardest.** `DefaultBlocksToDelete` (1976),
+  `BeyondTimeRetention` (2018) and `BeyondSizeRetention` (2042) are all **exported** and all take
+  `(db *DB, blocks []*Block)` — and `db.Blocks()` hands you the second argument. So the oracle calls them
+  directly on a real `DB` and commits the ULID set, with no probe and no end-to-end run needed to see the
+  answer. `deletableBlocks` (1983) sits one call below `DefaultBlocksToDelete` and is reached by it.
+- **The compaction driver is reachable through `Compact` (1456) and `CompactHead` (1551).** `compactHead`,
+  `compactBlocks` and `waitingForCompactionDelay` (1448) are all under them; `dbAppender` (1388) is what
+  `DB.Appender` (1275) returns.
+- **`blockChunkQuerierForRange` (2428) is reachable through `ChunkQuerier` (2504)**, which is a four-line
+  wrapper around it.
+
+**What is left unpinned, and why none of it matters:** `run` (1204) is a goroutine — but every
+*action* it takes is separately exported (see hidden cost 1); `exponential` (2648) is `run`'s backoff and has
+no other caller; `generateCompactionDelay` (2302) calls `rand.Int63n` and is gated behind
+`EnableDelayedCompaction`, false by default (93); `newDBMetrics` (379) is the registry, Phase 9;
+`compactOOO` (1632) and `compactOOOHead` (1577) are Phase 10. `rangeForTimestamp` (2516) is **already ported**
+— it went in with §7f(d) as `PromHead/MemSeries.swift:58`, quirk 184 — so "`rangeForTimestamp`'s real home" is
+a comment to write, not code.
+
+**And the probe technique does not apply here even if it were wanted.** `oracle/probe/headmemseries` works
+because the lifted file's dependencies are all *exported* packages. db.go's imports are all exported
+(`config`, `labels`, `storage`, `chunkenc`, `chunks`, `fileutil`, `tsdbutil`, `wlog`, `compression`,
+`features`, `util/runtime`) — but its *same-package* dependencies are the entire rest of `tsdb`: `Head`,
+`Block`, `RangeHead`, `LeveledCompactor`, `readMetaFile`, `OpenBlock`, `repairBadIndexVersion`. A lift would
+have to drag the whole unexported package with it. That is fine, because nothing in db.go needs it.
+
+#### The five sub-slices, each independently pinnable, each with its corpus stated
+
+A slice without a stated corpus is not scoped, so each one below names the input shape, the entry point it is
+driven through, and what gets committed.
+
+**§7j(a) — the head-only DB: `Options`, `validateOpts`, `open`'s prelude, `Close`.** `Options` (103) and
+`DefaultOptions` (76), `validateOpts` (893), `open` (950) as far as `NewHead` and `reload()` over an empty
+block list, `Dir`, `StartTime` (1179), `String` (2217), `Head` (2245), `Close` (2250), `DisableCompactions`
+(2285)/`EnableCompactions`, `isBlockDir`/`isTmpDir`/`blockDirs`/`closeAll`.
+*Corpus (`tsdb/db-open`):* a directory PROGRAM — a list of entries to pre-seed (block dirs with a `meta.json`,
+the four tmp-dir spellings, a stray file named like a ULID, a WAL with N segments, a temp checkpoint) — plus
+an `Options` patch naming only the fields `validateOpts` touches. Driven through `tsdb.Open`. Committed: the
+caller's `Options` struct read back field by field, the error string when it fails, the sorted directory
+listing after `Open`, the head accessors, and the listing again after `Close`. *~550 lines of Swift.*
+
+**§7j(b) — the block list: `reload`, `reloadBlocks`, `openBlocks`, `getBlock`, `deleteBlocks`,
+`OverlappingBlocks`, `inOrderBlocksMaxTime`, `DB.Delete`.** 1809–1974 plus 2087–2215 plus 2232 and 2521.
+*Corpus (`tsdb/db-reload`):* a list of block descriptors — ULID, mint, maxt, `Compaction.Level`, `Sources`,
+`Parents`, `Deletable`, `FromOutOfOrder` — written into a directory, one of which may have a corrupt `index`
+or a corrupt `meta.json` (**at most one per case**, see hidden cost 3). Driven through `tsdb.Open`, then a
+`Compact` to force the second, warm reload. Committed: `db.BlockMetas()`, the surviving directory listing, the
+`errors.Join` message when a block is corrupted, and `OverlappingBlocks` emitted as a **sorted list of
+`(TimeRange, [ULID])`** rather than through `Overlaps.String()`. One asymmetry the corpus exists to pin: a
+block whose `meta.json` is unreadable is **logged and skipped** (1956), while a block whose *index* is
+unreadable goes into `corrupted` and fails the whole reload (1965). *~550 lines of Swift.*
+
+**§7j(c) — retention: `DefaultBlocksToDelete`, `deletableBlocks`, `BeyondTimeRetention`,
+`BeyondSizeRetention`.** 1976–2085. Upstream's own seam makes this land cleanly after (b): `open` only
+installs the default policy when `Options.BlocksToDelete` is nil (1012), so (b) can ship with an injected
+policy and (c) fills in the real one.
+*Corpus (`tsdb/db-retention`):* block descriptors with sizes plus the three knobs (`RetentionDuration`,
+`MaxBytes`, `MaxPercentage`) and a head with samples in it, driven **directly** through the three exported
+functions and then end-to-end through `tsdb.Open`. Committed: each function's ULID set sorted, **plus a
+nil-versus-empty flag** (both return a nil map when disabled and a made map otherwise — 2022 against 2025,
+2062 against 2065 — visible to an exported caller), plus the directory listing after the open. One case
+passes the blocks **unsorted**, to pin that `BeyondTimeRetention`'s `blocks[0]` is the newest only because
+`deletableBlocks` sorted the slice in place at 1988 — a Go aliasing effect a Swift value-typed array silently
+loses. `Options.FsSizeFunc` (291)
+is upstream's own injection point, so the `MaxPercentage` arm is pinnable with a constant and no statfs.
+*~350 lines of Swift.*
+
+**§7j(d) — the compaction driver: `Compact`, `compactHead`, `compactBlocks`, `CompactHead`, `DB.Appender`,
+`dbAppender`, `waitingForCompactionDelay`.** 1275–1300, 1388–1416, 1448–1547, 1678–1704, 1763–1806.
+*Corpus (`tsdb/db-compact`):* an append program in phases (the §7f(f)/§7h(b) shape) plus a chunk range plus
+explicit `Compact(ctx)` calls, with `MaxBlockDuration > MinBlockDuration` so `rngs` has more than one entry
+(hidden cost 4). Committed: `db.BlockMetas()` after each call, each written block's `index`/`chunks`/
+`meta.json` as RLE-hex (the way §7h(c) commits checkpoint bytes), the WAL directory listing after the
+compaction so `truncateWAL`'s effect is visible, and the head accessors. The contract to state directly, as
+§7h(b) did for replay: **a sample compacted out of the head is still in the DB.** One line to look at twice:
+`Compact` truncates the WAL **twice** on the happy path — once in a `defer` registered at 1468 and once
+explicitly at 1527, both with the same `lastBlockMaxt` — so a control that deletes the defer will SURVIVE
+unless a case makes `compactBlocks` fail. *~500 lines of Swift.*
+
+**§7j(e) — the join: `DB.Querier`, `blockChunkQuerierForRange`, `DB.ChunkQuerier`.** 2350–2510, plus the
+`Querier`-conforming block querier the port does not yet have (see prerequisites).
+*Corpus (`tsdb/db-querier`):* an append program plus a compaction plan, so some samples are in blocks and
+some in the head with a deliberate overlap, plus a query program (mint/maxt/matchers/`sortSeries`/hints).
+Committed: the merged series set decoded to samples, plus `LabelNames`/`LabelValues` through the merged
+querier. **And the real prize needs no new fixture at all**: re-run `promqltest`'s 2,183 assertions against a
+`tsdb.DB`-backed `Queryable` instead of `PromTestStorage`. That is the clause ROADMAP's Phase 6 row defers
+("re-running the evals on a block querier needs the Head") and Phase 7's row calls a free gate; it is
+upstream's own testdata, already committed. *~600 lines of Swift.*
+
+**Order.** The hard dependencies are: (a) first; (b) before (c) and (d); (e) needs only (a), because
+`storage.NewMergeQuerier` returns its single primary querier **unwrapped** (merge.go:53), so a head-only
+`DB.Querier` is exactly `blockQuerierFunc(RangeHead)` and reaches none of the merge machinery. So the
+finish-the-file order is (a)(b)(c)(d)(e) and the collect-the-gate order is **(a)(e)(b)(c)(d)** — and the
+second is probably right, because from (e) onward every remaining slice runs under a 2,183-assertion gate
+instead of only under its own corpus.
+
+#### Prerequisites: what §7i must leave behind, and what is still genuinely missing
+
+Landed and directly usable: `Head` in full (§7f–§7h) including `compactable()`, `truncateMemory`,
+`truncate`, `truncateWAL`, `size()`, `appender()` and `RangeHead.withIsolationDisabled`; the block reader
+(§6m); `meta.json` + ULID (§6k); `MemTombstones` (§7h(a)) and now the tombstone FILE codec (§7i(t));
+the WAL (§7b) and checkpoints (§7h(c)).
+
+**What §7i(a) must leave behind for §7j, and the one that will be missed:**
+
+1. **A `Compactor` protocol with all THREE methods, not just `Write`.** Go's interface (compact.go:54) is
+   `Plan`/`Write`/`Compact`. The in-flight slice is "`blockwriter.go` + `LeveledCompactor`'s **write** path",
+   which gives `Write` (used by `compactHead` at 1681) but not `Plan` (1774) or `Compact(dest, dirs, open)`
+   (1788) — and §7j(d)'s `compactBlocks` needs both. If §7i lands only `Write`, §7j(d) either grows the
+   block-to-block compaction or ships with `compactBlocks` stubbed and a declared gap. **Say which in §7i's
+   write-up**; discovering it in §7j costs a session.
+2. **A `BlockReader` PROTOCOL, and a name for it.** Go's `BlockReader` (block.go:146) is an *interface*
+   — `Index`/`Chunks`/`Tombstones`/`Meta`/`Size` — implemented by both `*Block` and `*RangeHead`, and it is
+   what `compactor.Write`, `NewBlockQuerier` and `BlockQuerierFunc` (287) all take. **The port has taken that
+   name for the concrete class**: `Sources/PromBlock/BlockReader.swift` is Go's `tsdb.Block`. Whoever lands
+   §7i has to invent the protocol; if it is taken as a concrete `RangeHead` parameter instead, §7j has to
+   widen it afterwards. Pick the Swift name in §7i and record it.
+3. **`Block.Size()`.** `pb.numBytesChunks + numBytesIndex + numBytesTombstone + numBytesMeta`
+   (block.go:424). §7j(b) needs it for `blocksBytes` (1904) and §7j(c) needs it for `BeyondSizeRetention`
+   (2071). The port's block reader has no `size` at all and its `meta.json` reader does not return the file's
+   byte count — so this is a small addition to §6m/§6k, not new work, but it is not there today.
+4. **The tombstone FILE codec — LANDED as §7i(t)**, ahead of the block writer:
+   `Encode`/`Decode`/`WriteFile`/`ReadTombstones` in `Sources/PromTombstones/TombstoneFile.swift`.
+   §7j wanted it for `Tombstones()` in the protocol above, for `numBytesTombstone`, and for
+   `DB.Delete`'s block arm (2531), and it is now a prerequisite that is *met*. What is still §7i's is
+   the CALL SITE, which is all exception 16 has left: `BlockReader.open` does not call
+   `readTombstones` and there is no `Block.Delete`.
+5. **`storage/merge.go` Part A** (in flight) — `NewMergeQuerier`, `NewMergeChunkQuerier`, `ChainedSeriesMerge`
+   and `NewCompactingChunkSeriesMerger`, all four named at 2423/2509. §7j(e) is the first caller, exactly as
+   ROADMAP's "Still open" section predicted.
+
+**Still genuinely missing, and not on anyone's branch:**
+
+6. **There is no `Querier`-conforming type over a block or a Head.** §6w landed `blockSelect`,
+   `blockQuerierSelect` and `blockChunkQuerierSelect` as *free functions over narrowed protocols*
+   (`SeriesIndex & PostingsIndex`, `BlockChunkSource`); the only `Querier` conformers in the tree are
+   `MemQuerier` and `NoopQuerier`. Go's `NewBlockQuerier(b BlockReader, mint, maxt) (storage.Querier, error)`
+   is what `db.blockQuerierFunc` holds (287, defaulted at 1045), so §7j(e) must build `BlockQuerier` and
+   `BlockChunkQuerier` as types and reconcile the Head's `HeadIndexReader` (which conforms only to
+   `LabelQueryIndex` today) with them. This is the "small protocol-reconciliation slice" §7f's slice list
+   flagged after §7g, and it has not happened. **Budget it inside §7j(e); it is most of why (e) is the
+   biggest sub-slice.**
+7. **`Head.IsQuerierCollidingWithTruncation`** (2388, 2465) and `WaitForAppendersOverlapping` (1516) are not
+   ported. `Sources/PromHead/HeadGC.swift`'s header defers `WaitForPendingReadersInTimeRange` explicitly and
+   says the call sites keep *a comment rather than a no-op function, so §7j sees the seam* — this is that
+   seam. With no concurrency the collision cannot occur, so the port's answer is `(shouldClose: false,
+   getNew: false, newMint: mint)`; that is a **decision**, and one control should pin that no corpus case
+   reaches the other two arms.
+8. **`PromFS` is missing six primitives db.go uses.** Listed in hidden cost 5.
+
+#### The five hidden costs, in order of how much they will surprise you
+
+- **`Open` starts a goroutine (1173), and the thing to port is not `run` — it is `run`'s four triggers.**
+  `run` (1204) does four things on a `BlockReloadInterval` timer: `reloadBlocks`, signal `compactc`,
+  `head.mmapHeadChunks()` (1229), and the stale-series ratio check (1232); and on `compactc` it calls
+  `Compact`. `compactc` is *also* signalled from `dbAppender.Commit` (1409) whenever `head.compactable()`.
+  So in a single-threaded
+  port, `Commit` either compacts synchronously — a behaviour change, because upstream's `Commit` returns
+  before the compaction runs — or sets a flag the caller drains. **Port the predicate, not the channel:**
+  `Commit` sets `compactionPending` and the corpus calls `db.compact()` explicitly, which is what upstream's
+  own tests do after `DisableCompactions()` (2285). The determinism lever for the oracle is the same:
+  `DisableCompactions()` immediately after `Open`, and note that `validateOpts` clamps `BlockReloadInterval`
+  to **at least one second** (933) so a fast case never sees the timer — true, but do not rely on it, because
+  a slow CI box would then produce a different fixture.
+- **Time retention is ON by default and looks off.** `DefaultOptions().RetentionDuration` is **15 days**
+  (db.go:80), not 0 — while `MaxBytes` and `MaxPercentage` are absent from the literal and so are zero, i.e.
+  size retention *is* off. A `tsdb/db-*` corpus that opens with `DefaultOptions()` and writes blocks with
+  timestamps spread over months will silently lose the old ones inside `Open`'s own `reload()`. Two more
+  defaults in the same category: `EnableOverlappingCompaction` is **true** (91), so `reloadBlocks`' overlap
+  check runs and vertical compaction is permitted; and `NoLockfile` is **false** (83), so `open` takes a lock
+  file (1016, 1020) the port has no equivalent of.
+- **Three of `db.go`'s outputs range Go MAPS, and two of them are error messages.** `Overlaps.String()`
+  (2127) ranges `map[TimeRange][]BlockMeta` and joins with `"\n"`, so it is nondeterministic with two or more
+  overlap groups; `deleteBlocks` (2088) ranges its map and returns on the first failure, so with two failing
+  blocks the *error* is a coin flip; and `reloadBlocks`' `errors.Join` over `corrupted` (1881–1885, and again
+  at 752 in `DBReadOnly`) has the same problem. §4's rule applies — a fixture whose own output is
+  nondeterministic is worse than no fixture. **At most one corrupted block per case, at most one failing
+  deletion per case, and emit the overlaps as a sorted list rather than as `String()`.** Exception 11's
+  shape, and §7i(t) has just settled the house resolution for it: **exception 29** sorts
+  `MemTombstones.Iter` by ref, on the argument that upstream ranging a map means there is no order to be
+  byte-exact against, so the port picks a deterministic one and *records* the pick. Do the same here rather
+  than inventing a fourth answer — and note the difference in where the sort goes: exception 29 sorts inside
+  the port because `Encode` walks `Iter`, whereas db.go's three are pure log/error text, so the sort belongs
+  in the corpus and the port keeps Go's shape.
+- **`DefaultOptions()` cannot reach `compactBlocks`' main arm, and it takes reading two files to see why.**
+  `MinBlockDuration` and `MaxBlockDuration` are both `DefaultBlockDuration` (81, 82), so `rngs =
+  ExponentialBlockRanges(2h, 10, 3)` (940) is truncated by `open`'s `v > opts.MaxBlockDuration` loop (961–965)
+  to the single element `[2h]` — and `selectDirs` opens with `if len(c.ranges) < 2 … return nil`
+  (compact.go:333). So with the library defaults, block-to-block compaction **never happens**: only the
+  overlapping-dirs arm and the >5% tombstones arm can fire. The server does not use those defaults —
+  `cmd/prometheus/main.go:856-866` sets `MaxBlockDuration = min(31d, retention/10)`, i.e. 36h for the default
+  15-day retention, giving `rngs = [2h, 6h, 18h]`. **§7j(d)'s corpus must set `MaxBlockDuration` above
+  `MinBlockDuration` or it measures a compactor that is switched off.** `rngs[0]` is also
+  `headOpts.ChunkRange` (1088), which is otherwise unobservable from outside — but it is visible in the block
+  boundaries `db.BlockMetas()` reports, so the corpus pins it there.
+- **`db.go` reaches for six filesystem primitives `PromFS` does not have, and one of them has already cost
+  an exception.** In descending order of how much thought each needs.
+  `fileutil.Replace` — `deleteBlocks` renames `<ulid>` to `<ulid>.tmp-for-deletion` before removing it (2106),
+  which is exception 25's situation exactly (no rename in `PromFS`, so the checkpoint is COPIED; end state
+  identical, crash window not). Reuse that treatment and cite it rather than inventing a second one.
+  A **directory predicate** — `isBlockDir` (2607) and `isTmpDir` (2617) both open with `fi.IsDir()`, and
+  `PromFS` has only `exists`. A *file* named `01ARZ3NDEKTSV4RRFFQ69G5FAV` must not be loaded as a block, and
+  today the protocol cannot tell you it is a file. Add `isDirectory`.
+  `fileutil.DirSize` — used for the WBL probe (1075) and, transitively, for `Block.Size()`. There is no
+  size-of-tree in `PromFS` and `FSReadHandle.size` needs every file opened.
+  `os.Stat` distinguishing `IsNotExist` from a real error (2096) — `exists` collapses the two.
+  `tsdbutil.NewDirLocker`'s **flock** (1016, `tsdb/tsdbutil/dir_locker.go:44`) — no advisory locking, and no
+  reason to add it: force `NoLockfile` and record the divergence, noting the `createdCleanly` metric it exists
+  to feed is Phase 9's anyway.
+  `prom_runtime.FsSize` (statfs) — only `MaxPercentage` wants it, and `Options.FsSizeFunc` (291) is upstream's
+  own injection point, so the port gets the seam for free.
+
+#### What to leave out of §7j, and why each is safe to leave
+
+- **Out-of-order, all of it.** `OutOfOrderTimeWindow` is absent from `DefaultOptions()` and therefore **0**,
+  so `open` creates no WBL (1080), `oooWasEnabled` is false (1086), `compactOOOHead` returns immediately
+  (1578), and `DB.Querier`'s `overlapsOOO` is false because `MinOOOTime` is `MaxInt64`. Takes with it
+  `CompactOOOHead` (1566), `compactOOO` (1632), `lastGarbageCollectedMmapRef`, `OOOCompactionHead`,
+  `truncateOOO` and `NewHeadAndOOOQuerier`. Phase 10, as §7f already scheduled the Head's half.
+- **Stale-series compaction.** `StaleSeriesCompactionThreshold` is absent from `DefaultOptions()` and so is
+  **0.0**, and `run` gates on `> 0` (1232). `CompactStaleHead` (1706) needs `NewStaleHead`,
+  `staleSeriesRefsNoOOOData` and `truncateStaleSeries`, all three of which `HeadGC.swift` and
+  `HeadIndexReader.swift` already record as deferrals.
+- **Delayed compaction.** `EnableDelayedCompaction` false and `CompactionDelay` zero (93, 96), so
+  `waitingForCompactionDelay()` (1448) is `time.Since(<zero time>) < 0`, which is **always false**, and
+  `timeWhenCompactionDelayStarted` (1487–1495) is dead state. `generateCompactionDelay` (2302) uses
+  `rand.Int63n` and is unpinnable without seeding Go's global source. Port `waitingForCompactionDelay` as the
+  constant it computes and say so in a comment.
+- **`DBReadOnly` — 345 lines, 13% of the file.** `OpenDBReadOnly` (536), `FlushWAL` (565),
+  `loadDataAsQueryable` (624), `Blocks` (728), `LastBlockID` (800), `Block` (832), `Close` (854). Its only
+  non-test callers in the whole tree are `cmd/promtool/tsdb.go` and `cmd/promtool/backfill.go`, so it is
+  **Phase 9** by definition. It is also *cheap* then: it is a reassembly of parts §7i and §7j will have built,
+  plus `chunks.HardLinkChunkFiles` and a sandbox temp dir.
+- **`ApplyConfig` (1301).** Needs `config.Config`, which is Phase 8. Worth one consequence in the port's
+  comments: `RetentionDuration`, `MaxBytes` and `MaxPercentage` are mutable *only* through it, so
+  `getRetentionDuration` (1373) and `getRetentionSettings` (1380) collapse to field reads and `retentionMtx`
+  disappears with them.
+- **`AppenderV2` / `dbAppenderV2` (1280, 1418).** `storage.AppenderV2` is upstream's in-progress replacement
+  and `Sources/PromStorage/Appender.swift` already records it as not ported. `dbAppenderV2` is
+  `dbAppender` with one word changed.
+- **Exemplars.** `EnableExemplarStorage` false; `ExemplarQuerier` (2512) is one line onto `head.exemplars`,
+  which §7f left out.
+- **`dbMetrics` / `newDBMetrics` (358–507), 150 lines.** Phase 9, as everywhere. One caution: two of them are
+  not purely decorative. `db.metrics.blocksBytes.Set` (1904) is the only consumer of the `blocksSize` sum
+  `reloadBlocks` computes, and `m.startTime` duplicates `StartTime()`. Dropping the registry drops the sum —
+  which is correct — but **do not "optimise" it into `BeyondSizeRetention`'s accumulator** (2069), which
+  starts from `db.Head().Size()` and stops early; they are different numbers.
+- **`Snapshot` (2313)** and **`CleanTombstones` (2547).** Both are the admin HTTP API's, i.e. Phase 9, and
+  both need one more §7i/§6 piece (`compactor.Write` for the first, `Block.CleanTombstones` for the second).
+  `DB.Delete` (2521) is the exception in this group and belongs in §7j(b): `Head.Delete` is landed and the
+  block arm now has its codec (§7i(t)), so what it waits on is §7i's `Block.Delete` call site.
+- **`SetWriteNotified` (2600)** — remote write's WAL watcher hook, Phase 10.
+- **`features.Collector` (879–887)** — nine lines registering feature flags for the status endpoint, Phase 9.
+  Note `Open` runs it *before* `open`, so skipping it changes nothing else.
+- **The `goversion` blank import (44)** — a build-tag guard that fails compilation on an old Go. No analogue.
+- **`UseUncachedIO`, `EnableSharding`, `EnableFastStartup`, `EnableMemorySnapshotOnShutdown`,
+  `WALReplayConcurrency`, `EnableSTAsZeroSample`, `EnableMetadataWALRecords`, `PostingsDecoderFactory`,
+  `NewCompactorFunc`, `BlockCompactionExcludeFunc`, `SeriesLifecycleCallback`** — every one either defaults
+  off or is an external-importer hook, and §7f already made the same call for the Head's copies of them.
+
+**Two things that look leave-out-able and are not.** `EnableSTStorage` is documented "currently it's noop"
+(246) and quirk 36 already rests on that comment — but `validateOpts` still *validates* it against the float
+encoding (903–905), and that error string is a contract even though the flag does nothing. And
+`FloatChunkEncoding` is quirk 36's other half: `DefaultOptions()` says `EncXOR` (94) while the **zero value
+of the field is `EncNone`**, which `validateOpts` promotes to `EncXOR` (897) — upstream's own field comment
+(264–265) warns about exactly this. A Swift `Options` struct with default member values gets `EncXOR` for
+free and thereby *loses* the promotion, so it is one of the two normalisations most worth a negative control.
+
+#### Scale, so it is not rediscovered
+
+Five sub-slices at the §7f–§7h rate — one session each, 350–600 lines of Swift plus a corpus plus an argued
+control sweep — so **§7j is five sessions, and four would be optimistic.** The comparison that makes this
+more than a guess: `head.go` is 2,829 lines of Go of which roughly 2,000 were portable, and it took **six**
+sub-slices (§7f(a)–(f)) plus three more for `head_wal.go`. `db.go` is 2,666 lines of which roughly 1,700 are
+portable once `DBReadOnly` (345), the metrics (150), OOO (170), stale-series (57) and `ApplyConfig` (72) come
+out. Comparable file, same fidelity bar, one fewer slice.
+
+**So ROADMAP's "§7i and §7j are at least two or three further sessions" is low by a factor of two.** The
+honest number for the rest of Phase 7 is **six to eight sessions**: one or two for §7i, five for §7j. That is
+not scope creep either — it is the same arithmetic that made §7f "five slices, not one", and that estimate
+held.
+
 
 ## 6. Open decisions and risks
 
