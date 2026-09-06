@@ -3,18 +3,23 @@
 Full-server port of Prometheus v3.13.2 to Swift. See `PORTING.md` for the fidelity contract,
 `DECISIONS.md` for ADRs, `HANDOFF.md` for the current state in detail.
 
-**Where things stand: phases 0–6 are done, phase 7 is nine slices in.** 58,700 lines of Swift across
-28 targets, 20,539 lines of tests, 30,597 lines of Go oracle. 639 tests in 150 suites, green on Swift
+**Where things stand: phases 0–6 are done, phase 7 is nine slices in.** 67,456 lines of Swift across
+29 targets, 25,936 lines of tests, 36,262 lines of Go oracle. 732 tests in 165 suites, green on Swift
 6.4 and the 6.1 floor. The query engine passes all 2,183 of upstream's `eval` assertions; the TSDB
 read path is closed; the Head ingests, is queried, forgets and survives a restart, and §7i(a) can turn it into
 a **byte-identical block**. What is missing is `db.go` — the orchestration that decides when.
 
+The counts above are plain `wc -l` over `Sources/`, `Tests/` and `oracle/`, and the sum of the
+`Test run with N tests in M suites` lines — stated so they stay reproducible rather than folkloric,
+for the same reason HANDOFF §1 states its method. They had drifted by a whole batch of slices
+because five parallel PRs each updated their own section and none owned this paragraph.
+
 **One budget correction, because it is the largest miss in this plan.** The original estimate was
-"≈85k lines of Swift plus **~3k** lines of Go test-oracle harness". The oracle is at **30,597 lines**
-with three phases still to go — off by a factor of ten. That is not scope creep; it is what the
+"≈85k lines of Swift plus **~3k** lines of Go test-oracle harness". The oracle is at **36,262 lines**
+with three phases still to go — off by a factor of twelve. That is not scope creep; it is what the
 fidelity bar costs, and it is the number to use when estimating phases 8–10. The Swift estimate is
-holding better: 58.7k spent against ≈85k projected, with the remaining phases the ones the estimate
-understands worst.
+holding worse than it was: 67.5k spent against ≈85k projected with phases 8–10 untouched, so ≈85k is
+now clearly low, and the remaining phases are the ones the estimate understands worst.
 
 ## Why PromQL before TSDB — settled, and it was right
 
